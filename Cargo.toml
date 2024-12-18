@@ -1,0 +1,9 @@
+[package]
+name = "operator-bot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anchor-client = "0.30.1"
+tokio = { version = "1.42.0", features = ["full"] }
+rand = "0.8.5"
