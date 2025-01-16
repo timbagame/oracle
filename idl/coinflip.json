@@ -1,0 +1,1356 @@
+{
+  "address": "2CnFDP6E2QNzD1QEcrNaZ29NArtrFWURQm4GmudXnZ9o",
+  "metadata": {
+    "name": "coinflip",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Created with Anchor"
+  },
+  "instructions": [
+    {
+      "name": "cancel_game",
+      "discriminator": [
+        121,
+        194,
+        154,
+        118,
+        103,
+        235,
+        149,
+        52
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "player",
+          "signer": true
+        },
+        {
+          "name": "player_balance",
+          "writable": true
+        },
+        {
+          "name": "oracle"
+        },
+        {
+          "name": "game_token"
+        },
+        {
+          "name": "game_vault"
+        },
+        {
+          "name": "player_token_account",
+          "writable": true
+        },
+        {
+          "name": "game_token_account",
+          "writable": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_fee",
+      "discriminator": [
+        169,
+        32,
+        79,
+        137,
+        136,
+        232,
+        70,
+        137
+      ],
+      "accounts": [
+        {
+          "name": "game_token",
+          "writable": true
+        },
+        {
+          "name": "game_vault"
+        },
+        {
+          "name": "oracle",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "authority_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "authority"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game_token.token_mint",
+                "account": "GameToken"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "game_token_account",
+          "writable": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_win",
+      "discriminator": [
+        163,
+        215,
+        101,
+        246,
+        25,
+        134,
+        110,
+        194
+      ],
+      "accounts": [
+        {
+          "name": "player_balance",
+          "writable": true
+        },
+        {
+          "name": "player",
+          "signer": true
+        },
+        {
+          "name": "game_token"
+        },
+        {
+          "name": "player_token_account",
+          "writable": true
+        },
+        {
+          "name": "game_token_account",
+          "writable": true
+        },
+        {
+          "name": "game_vault"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "complete_game",
+      "discriminator": [
+        105,
+        69,
+        184,
+        5,
+        143,
+        182,
+        92,
+        132
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "oracle"
+        },
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "player_balance",
+          "writable": true
+        },
+        {
+          "name": "game_token"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "_secret_key",
+          "type": {
+            "array": [
+              "u8",
+              64
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "initialize_game",
+      "discriminator": [
+        44,
+        62,
+        102,
+        247,
+        126,
+        208,
+        130,
+        215
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "random_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "player_balance",
+          "writable": true
+        },
+        {
+          "name": "oracle",
+          "writable": true
+        },
+        {
+          "name": "game_token"
+        },
+        {
+          "name": "player_token_account",
+          "writable": true
+        },
+        {
+          "name": "game_token_account",
+          "writable": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "game_type",
+          "type": {
+            "defined": {
+              "name": "GameType"
+            }
+          }
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "max_players",
+          "type": "u16"
+        },
+        {
+          "name": "min_players",
+          "type": "u16"
+        },
+        {
+          "name": "timeout",
+          "type": "u32"
+        },
+        {
+          "name": "is_private",
+          "type": "bool"
+        },
+        {
+          "name": "_random_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "initialize_oracle",
+      "discriminator": [
+        144,
+        223,
+        131,
+        120,
+        196,
+        253,
+        181,
+        99
+      ],
+      "accounts": [
+        {
+          "name": "oracle",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "fee_percentage",
+          "type": "u8"
+        },
+        {
+          "name": "oracle_buffer_time",
+          "type": "u16"
+        },
+        {
+          "name": "max_players",
+          "type": "u16"
+        },
+        {
+          "name": "max_timeout",
+          "type": "u32"
+        },
+        {
+          "name": "min_timeout",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "initialize_player_balance",
+      "discriminator": [
+        193,
+        86,
+        175,
+        197,
+        130,
+        49,
+        234,
+        91
+      ],
+      "accounts": [
+        {
+          "name": "player_balance",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114,
+                  95,
+                  98,
+                  97,
+                  108,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              },
+              {
+                "kind": "account",
+                "path": "game_token.token_mint",
+                "account": "GameToken"
+              }
+            ]
+          }
+        },
+        {
+          "name": "game_token"
+        },
+        {
+          "name": "player_token_account",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "player"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game_token.token_mint",
+                "account": "GameToken"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initialize_token",
+      "discriminator": [
+        38,
+        209,
+        150,
+        50,
+        190,
+        117,
+        16,
+        54
+      ],
+      "accounts": [
+        {
+          "name": "game_token",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_mint"
+        },
+        {
+          "name": "game_vault",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "game_token_account",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "game_vault"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "token_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "oracle"
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        }
+      ],
+      "args": [
+        {
+          "name": "ticker",
+          "type": "string"
+        },
+        {
+          "name": "min_amount",
+          "type": "u64"
+        },
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "join_game",
+      "discriminator": [
+        107,
+        112,
+        18,
+        38,
+        56,
+        173,
+        60,
+        128
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "player",
+          "signer": true
+        },
+        {
+          "name": "player_balance",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "optional": true
+        },
+        {
+          "name": "game_token"
+        },
+        {
+          "name": "player_token_account",
+          "writable": true
+        },
+        {
+          "name": "game_token_account",
+          "writable": true
+        },
+        {
+          "name": "oracle"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "unjoin_game",
+      "discriminator": [
+        105,
+        123,
+        174,
+        143,
+        207,
+        2,
+        17,
+        206
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "player",
+          "signer": true
+        },
+        {
+          "name": "game_token"
+        },
+        {
+          "name": "player_balance",
+          "writable": true
+        },
+        {
+          "name": "game_vault"
+        },
+        {
+          "name": "player_token_account",
+          "writable": true
+        },
+        {
+          "name": "game_token_account",
+          "writable": true
+        },
+        {
+          "name": "oracle"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "update_oracle",
+      "discriminator": [
+        112,
+        41,
+        209,
+        18,
+        248,
+        226,
+        252,
+        188
+      ],
+      "accounts": [
+        {
+          "name": "oracle",
+          "writable": true
+        },
+        {
+          "name": "old_authority",
+          "signer": true
+        },
+        {
+          "name": "new_authority",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "fee_percentage",
+          "type": "u8"
+        },
+        {
+          "name": "oracle_buffer_time",
+          "type": "u16"
+        },
+        {
+          "name": "max_players",
+          "type": "u16"
+        },
+        {
+          "name": "max_timeout",
+          "type": "u32"
+        },
+        {
+          "name": "min_timeout",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "update_token",
+      "discriminator": [
+        92,
+        200,
+        25,
+        239,
+        138,
+        254,
+        58,
+        102
+      ],
+      "accounts": [
+        {
+          "name": "game_token",
+          "writable": true
+        },
+        {
+          "name": "oracle"
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "ticker",
+          "type": "string"
+        },
+        {
+          "name": "min_amount",
+          "type": "u64"
+        },
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Game",
+      "discriminator": [
+        27,
+        90,
+        166,
+        125,
+        74,
+        100,
+        121,
+        18
+      ]
+    },
+    {
+      "name": "GameToken",
+      "discriminator": [
+        146,
+        160,
+        167,
+        120,
+        232,
+        217,
+        240,
+        63
+      ]
+    },
+    {
+      "name": "Oracle",
+      "discriminator": [
+        139,
+        194,
+        131,
+        179,
+        140,
+        179,
+        229,
+        244
+      ]
+    },
+    {
+      "name": "PlayerBalance",
+      "discriminator": [
+        244,
+        128,
+        24,
+        93,
+        212,
+        190,
+        202,
+        111
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "GameFull",
+      "msg": "Game already full"
+    },
+    {
+      "code": 6001,
+      "name": "AlreadyJoined",
+      "msg": "Player already joined"
+    },
+    {
+      "code": 6002,
+      "name": "GameReadyForOracle",
+      "msg": "Game ready for oracle"
+    },
+    {
+      "code": 6003,
+      "name": "GameNotReadyForOracle",
+      "msg": "Game not ready for oracle"
+    },
+    {
+      "code": 6004,
+      "name": "InvalidSecretKey",
+      "msg": "Invalid secret key"
+    },
+    {
+      "code": 6005,
+      "name": "InvalidVault",
+      "msg": "Invalid vault"
+    },
+    {
+      "code": 6006,
+      "name": "InvalidPlayersCount",
+      "msg": "Invalid players count"
+    },
+    {
+      "code": 6007,
+      "name": "GameNotActive",
+      "msg": "Game not active"
+    },
+    {
+      "code": 6008,
+      "name": "GameCompleted",
+      "msg": "Game completed"
+    },
+    {
+      "code": 6009,
+      "name": "InvalidTimeout",
+      "msg": "Invalid timeout"
+    },
+    {
+      "code": 6010,
+      "name": "InvalidToken",
+      "msg": "Invalid token"
+    },
+    {
+      "code": 6011,
+      "name": "InsufficientBalance",
+      "msg": "Insufficient balance"
+    },
+    {
+      "code": 6012,
+      "name": "UnauthorizedPlayer",
+      "msg": "Unauthorized player"
+    },
+    {
+      "code": 6013,
+      "name": "UnauthorizedAuthority",
+      "msg": "Unauthorized authority"
+    },
+    {
+      "code": 6014,
+      "name": "TokenNotEnabled",
+      "msg": "Token not enabled"
+    },
+    {
+      "code": 6015,
+      "name": "InvalidAmount",
+      "msg": "Invalid amount"
+    }
+  ],
+  "types": [
+    {
+      "name": "Game",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "game_type",
+            "type": {
+              "defined": {
+                "name": "GameType"
+              }
+            }
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "max_players",
+            "type": "u16"
+          },
+          {
+            "name": "min_players",
+            "type": "u16"
+          },
+          {
+            "name": "players",
+            "type": {
+              "vec": "pubkey"
+            }
+          },
+          {
+            "name": "winner",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "GameStatus"
+              }
+            }
+          },
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "created_at",
+            "type": "u64"
+          },
+          {
+            "name": "timeout",
+            "type": "u32"
+          },
+          {
+            "name": "is_private",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GameStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Active"
+          },
+          {
+            "name": "Completed"
+          },
+          {
+            "name": "Cancelled"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GameToken",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "ticker",
+            "type": "string"
+          },
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "game_token_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "game_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "min_amount",
+            "type": "u64"
+          },
+          {
+            "name": "fee_amount",
+            "type": "u64"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GameType",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Coinflip"
+          },
+          {
+            "name": "Giveaway"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Oracle",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_percentage",
+            "type": "u8"
+          },
+          {
+            "name": "oracle_buffer_time",
+            "type": "u16"
+          },
+          {
+            "name": "max_players",
+            "type": "u16"
+          },
+          {
+            "name": "max_timeout",
+            "type": "u32"
+          },
+          {
+            "name": "min_timeout",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PlayerBalance",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "player_token_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}

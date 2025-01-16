@@ -13,18 +13,23 @@ use tokio::time;
 use rand::Rng;
 
 // Program ID from your Anchor.toml
-const PROGRAM_ID: &str = "BzU9WwzqMoDSTTdTurweMLp2tAciFpZaNL2bPUitwNyy";
+const PROGRAM_ID: &str = "2CnFDP6E2QNzD1QEcrNaZ29NArtrFWURQm4GmudXnZ9o";
 
 #[derive(Debug)]
 struct Game {
     address: Pubkey,
+    creator: Pubkey,
+    game_type: u8,
+    amount: u64,
+    max_players: u16,
+    min_players: u16,
+    players: Vec<Pubkey>,
+    winner: Pubkey,
     status: u8,
-    participants: Vec<Pubkey>,
-    max_participants: u8,
-    min_participants: u8,
-    created_at: i64,
-    timeout_duration: i64,
-    oracle_hash: Option<[u8; 32]>,
+    token_mint: Pubkey,
+    created_at: u64,
+    timeout: u32,
+    is_private: bool,
 }
 
 #[tokio::main]
@@ -46,6 +51,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting operator bot...");
     println!("Operator pubkey: {}", operator.pubkey());
 
+    // Generate a secret key for games
+    let mut rng = rand::thread_rng();
+    let mut secret_key = [0u8; 64];
+    rng.fill(&mut secret_key);
+
     loop {
         // Fetch all games
         match program.accounts::<Game>(vec![]) {
@@ -53,27 +63,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for game in games {
                     let game_data = game.1;
                     
-                    // Check if game is ready for oracle hash
-                    if is_ready_for_oracle(&game_data) && game_data.oracle_hash.is_none() {
-                        println!("Found game ready for oracle hash: {}", game.0);
+                    // Check if game is ready for completion
+                    if is_ready_for_oracle(&game_data) {
+                        println!("Found game ready for completion: {}", game.0);
                         
-                        // Generate random hash
-                        let mut rng = rand::thread_rng();
-                        let mut hash_value = [0u8; 32];
-                        rng.fill(&mut hash_value);
-
-                        // Set oracle hash
+                        // Complete game with secret key
                         match program
                             .request()
-                            .accounts(set_oracle_hash_accounts(
+                            .accounts(complete_game_accounts(
                                 game.0,
                                 operator.pubkey(),
                             ))
-                            .args("set_oracle_hash".to_string(), hash_value)
+                            .args("complete_game", secret_key)
                             .signer(&operator)
                             .send() {
-                                Ok(_) => println!("Successfully set oracle hash for game {}", game.0),
-                                Err(e) => println!("Error setting oracle hash: {}", e),
+                                Ok(_) => println!("Successfully completed game {}", game.0),
+                                Err(e) => println!("Error completing game: {}", e),
                             }
                     }
                 }
@@ -90,24 +95,37 @@ fn is_ready_for_oracle(game: &Game) -> bool {
     let current_time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs() as i64;
+        .as_secs() as u64;
 
-    game.participants.len() == game.max_participants as usize
-        || (game.participants.len() >= game.min_participants as usize
-            && current_time >= game.created_at + game.timeout_duration)
+    game.status == 0 && // Active status
+        (game.players.len() == game.max_players as usize
+        || (game.players.len() >= game.min_players as usize
+            && current_time >= game.created_at + game.timeout as u64))
 }
 
-fn set_oracle_hash_accounts(game: Pubkey, operator: Pubkey) -> Vec<(&'static str, Pubkey)> {
+fn complete_game_accounts(game: Pubkey, operator: Pubkey) -> Vec<(&'static str, Pubkey)> {
     vec![
         ("game", game),
-        ("config", get_config_address()),
         ("oracle", operator),
-        ("recentBlockhash", system_program::ID),
+        ("authority", operator),
+        ("player_balance", get_player_balance_address()),
+        ("game_token", get_game_token_address()),
+        ("system_program", system_program::ID),
+        ("token_program", get_token_program_address()),
     ]
 }
 
-fn get_config_address() -> Pubkey {
-    // You'll need to replace this with your actual config address
-    // This is just a placeholder
-    Pubkey::from_str("Config111111111111111111111111111111111111111").unwrap()
+fn get_player_balance_address() -> Pubkey {
+    // Replace with actual PDA derivation
+    Pubkey::from_str("Balance111111111111111111111111111111111111111").unwrap()
+}
+
+fn get_game_token_address() -> Pubkey {
+    // Replace with actual PDA derivation
+    Pubkey::from_str("Token1111111111111111111111111111111111111111").unwrap()
+}
+
+fn get_token_program_address() -> Pubkey {
+    // Replace with actual token program ID
+    Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap()
 } 
