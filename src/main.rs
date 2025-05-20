@@ -13,7 +13,7 @@ use tokio::time;
 use rand::Rng;
 
 // Program ID from your Anchor.toml
-const PROGRAM_ID: &str = "2CnFDP6E2QNzD1QEcrNaZ29NArtrFWURQm4GmudXnZ9o";
+const PROGRAM_ID: &str = "DNAGhpeMXvdCkwTYKmuJfcwpu4sJpegcnHnHih1Y3Gzi";
 
 #[derive(Debug)]
 struct Game {
@@ -36,7 +36,7 @@ struct Game {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load operator keypair from file
     let operator = read_keypair_file("operator.json")?;
-    
+
     // Initialize Solana client
     let url = "https://api.devnet.solana.com".to_string();
     let client = Client::new_with_options(
@@ -62,11 +62,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(games) => {
                 for game in games {
                     let game_data = game.1;
-                    
+
                     // Check if game is ready for completion
                     if is_ready_for_oracle(&game_data) {
                         println!("Found game ready for completion: {}", game.0);
-                        
+
                         // Complete game with secret key
                         match program
                             .request()
@@ -128,4 +128,4 @@ fn get_game_token_address() -> Pubkey {
 fn get_token_program_address() -> Pubkey {
     // Replace with actual token program ID
     Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap()
-} 
+}
