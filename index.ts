@@ -1,5 +1,4 @@
 import { OracleService } from "./oracle-service.ts";
-import { PublicKey } from "@solana/web3.js";
 
 /**
  * Oracle API Server with enhanced features
@@ -56,31 +55,6 @@ const server = Bun.serve({
         });
       }
 
-      // Complete game manually
-      if (path === '/complete-game' && method === 'POST') {
-        const body = await request.json();
-        const { gameAddress } = body;
-
-        if (!gameAddress) {
-          return createResponse({
-            success: false,
-            error: 'gameAddress is required'
-          }, 400);
-        }
-
-        try {
-          new PublicKey(gameAddress);
-        } catch (error) {
-          return createResponse({
-            success: false,
-            error: 'Invalid gameAddress'
-          }, 400);
-        }
-
-        const result = await oracle.completeGame(gameAddress);
-        return createResponse(result);
-      }
-
       // Basic stats
       if (path === '/stats' && method === 'GET') {
         const stats = oracle.getStats();
@@ -101,7 +75,6 @@ const server = Bun.serve({
               <ul>
                 <li>GET /health - Health check</li>
                 <li>POST /generate-hash - Generate game secrets</li>
-                <li>POST /complete-game - Complete a game</li>
                 <li>GET /stats - Basic statistics</li>
               </ul>
             </body>
