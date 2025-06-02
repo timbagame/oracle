@@ -17,6 +17,7 @@ const DEFAULT_DELAY_MS = 1000;
 // Types
 interface GameCompletionResult {
   success: boolean;
+  notReady?: boolean;
   error?: string;
   txHash?: string;
 }
@@ -29,6 +30,7 @@ interface GameSecrets {
 interface CompletionStats {
   completed: number;
   errors: number;
+  notReady: number;
 }
 
 export class OracleService {
@@ -123,7 +125,7 @@ export class OracleService {
       if (this.db.isGameReadyForCompletion(gameAddress)) {
         console.log(`🎯 Auto-completing game ${gameAddress}`);
         const result = await this.completeGame(gameAddress);
-        if (!result.success) {
+        if (!result.success && !result.notReady) {
           console.error(`❌ Auto-completion failed: ${result.error}`);
         }
       }
@@ -217,7 +219,7 @@ export class OracleService {
       }
 
       if (!(await this.isGameReadyForCompletion(gamePda))) {
-        return { success: false, error: "Game not ready" };
+        return { success: false, notReady: true };
       }
 
       const gameAccount = await this.program.account.game.fetch(gamePda);
@@ -261,7 +263,7 @@ export class OracleService {
   }
 
   public async scanAndCompleteActiveGames(): Promise<CompletionStats> {
-    const stats: CompletionStats = { completed: 0, errors: 0 };
+    const stats: CompletionStats = { completed: 0, errors: 0, notReady: 0 };
     const pendingGames = this.db.getPendingGames();
 
     if (pendingGames.length === 0) return stats;
@@ -273,6 +275,8 @@ export class OracleService {
         const result = await this.completeGame(game.game_address);
         if (result.success) {
           stats.completed++;
+        } else if (result.notReady) {
+          stats.notReady++;
         } else {
           stats.errors++;
         }
@@ -282,8 +286,12 @@ export class OracleService {
       }
     }
 
-    if (stats.completed > 0 || stats.errors > 0) {
-      console.log(`Scan: ${stats.completed} completed, ${stats.errors} errors`);
+    if (stats.completed > 0 || stats.errors > 0 || stats.notReady > 0) {
+      const parts = [];
+      if (stats.completed > 0) parts.push(`${stats.completed} completed`);
+      if (stats.errors > 0) parts.push(`${stats.errors} errors`);
+      if (stats.notReady > 0) parts.push(`${stats.notReady} not ready`);
+      console.log(`📊 Scan: ${parts.join(', ')}`);
     }
 
     return stats;

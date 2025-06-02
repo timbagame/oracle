@@ -187,7 +187,18 @@ If events are missed due to network issues, the Oracle:
 
 - Scans pending games every 5 minutes
 - Attempts completion for ready games
+- Distinguishes between actual errors and games that are simply not ready yet
 - Skips games that have failed too many times
+
+### Smart Error Handling
+
+The Oracle intelligently categorizes completion attempts:
+
+- **Completed**: Games successfully completed
+- **Not Ready**: Games that aren't ready yet (normal state)
+- **Errors**: Actual failures (network issues, invalid secrets, etc.)
+
+This prevents normal "not ready" states from being reported as errors in logs and statistics.
 
 ## 🛠 Development
 
@@ -274,13 +285,3 @@ The Oracle works with any Solana program that:
 1. Uses the provided hash for game creation
 2. Emits the required events (`GameInitialized`, `PlayerJoined`, `GameCompleted`)
 3. Accepts the secret key for winner determination
-
-## 🔗 Support
-
-- **Issues**: Please report bugs via GitHub issues
-- **Documentation**: Full API docs available at `http://localhost:3001/`
-- **Logs**: All operations are logged with clear indicators (✅ ❌ ⚠️ 🔍)
-
----
-
-**Built with TypeScript, Bun, and ❤️ for the Solana ecosystem**
