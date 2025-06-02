@@ -41,7 +41,9 @@ const server = Bun.serve({
           status: 'healthy',
           timestamp: new Date().toISOString(),
           pendingGames: stats.pendingGames,
-          completedGames: stats.completedGames
+          completedGames: stats.completedGames,
+          eventListening: stats.eventListening,
+          activeListeners: stats.activeListeners
         });
       }
 
@@ -73,9 +75,15 @@ const server = Bun.serve({
               <h1>Oracle API</h1>
               <h2>Endpoints:</h2>
               <ul>
-                <li>GET /health - Health check</li>
+                <li>GET /health - Health check with event listening status</li>
                 <li>POST /generate-hash - Generate game secrets</li>
                 <li>GET /stats - Basic statistics</li>
+              </ul>
+              <h2>Features:</h2>
+              <ul>
+                <li>🎧 Event-driven game completion</li>
+                <li>🔄 Fallback periodic scanning</li>
+                <li>📊 Real-time game tracking</li>
               </ul>
             </body>
           </html>
@@ -103,20 +111,35 @@ const server = Bun.serve({
 
 console.log(`🔮 Oracle API running on http://localhost:${PORT}`);
 
-// Simple background scanning every 30 seconds
+// Start event listeners
+oracle.startEventListening().catch(error => {
+  console.error('Failed to start event listeners:', error);
+  console.log('⚠️ Continuing with periodic scanning only');
+});
+
+// Reduced frequency periodic scanning as fallback (every 5 minutes instead of 30 seconds)
+// This serves as a backup in case events are missed
 setInterval(async () => {
   try {
     await oracle.scanAndCompleteActiveGames();
   } catch (error) {
     console.error('Error in background scan:', error);
   }
-}, 30000);
+}, 300000); // 5 minutes
 
 // Graceful shutdown
-process.once("SIGINT", () => {
+process.once("SIGINT", async () => {
   console.log('Shutting down...');
+  await oracle.stopEventListening();
   server.stop();
   process.exit(0);
 });
 
-console.log('✅ Oracle API is running!');
+process.once("SIGTERM", async () => {
+  console.log('Shutting down...');
+  await oracle.stopEventListening();
+  server.stop();
+  process.exit(0);
+});
+
+console.log('✅ Oracle API is running with event-driven game completion!');

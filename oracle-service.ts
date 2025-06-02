@@ -19,6 +19,8 @@ export class OracleService {
   private connection: Connection;
   private adminKeypair: Keypair;
   private db: OracleDatabase;
+  private eventListeners: number[] = [];
+  private isListening: boolean = false;
 
   private constructor() {
     this.db = OracleDatabase.getInstance();
@@ -52,6 +54,98 @@ export class OracleService {
     const provider = new anchor.AnchorProvider(this.connection, adminWallet, { commitment: "confirmed" });
     anchor.setProvider(provider);
     return new anchor.Program(idl as Coinflip, provider) as anchor.Program<Coinflip>;
+  }
+
+  public async startEventListening(): Promise<void> {
+    if (this.isListening) {
+      console.log("Event listening already started");
+      return;
+    }
+
+    console.log("🎧 Starting event listeners...");
+
+    try {
+      // Listen for PlayerJoined events
+      const playerJoinedListener = this.program.addEventListener("playerJoined", async (event, _slot) => {
+        console.log(`👤 Player joined event: ${event.gameKey.toBase58()}`);
+        await this.handlePlayerJoinedEvent(event);
+      });
+
+      // Listen for GameInitialized events
+      const gameInitializedListener = this.program.addEventListener("gameInitialized", async (event, _slot) => {
+        console.log(`🎮 Game initialized event: ${event.gameKey.toBase58()}`);
+        await this.handleGameInitializedEvent(event);
+      });
+
+      // Listen for GameCompleted events (for cleanup)
+      const gameCompletedListener = this.program.addEventListener("gameCompleted", async (event, _slot) => {
+        console.log(`✅ Game completed event: ${event.gameKey.toBase58()}`);
+        this.db.markGameCompleted(event.gameKey.toBase58());
+      });
+
+      this.eventListeners.push(playerJoinedListener, gameInitializedListener, gameCompletedListener);
+      this.isListening = true;
+
+      console.log("✅ Event listeners started successfully");
+    } catch (error) {
+      console.error("❌ Failed to start event listeners:", error);
+      throw error;
+    }
+  }
+
+  public async stopEventListening(): Promise<void> {
+    if (!this.isListening) return;
+
+    console.log("🔇 Stopping event listeners...");
+
+    for (const listenerId of this.eventListeners) {
+      try {
+        await this.program.removeEventListener(listenerId);
+      } catch (error) {
+        console.error("Error removing event listener:", error);
+      }
+    }
+
+    this.eventListeners = [];
+    this.isListening = false;
+    console.log("✅ Event listeners stopped");
+  }
+
+  private async handlePlayerJoinedEvent(event: any): Promise<void> {
+    try {
+      const gameAddress = event.gameKey.toBase58();
+
+      // Check if game is ready for completion
+      const gamePda = new PublicKey(gameAddress);
+      const isReady = await this.isGameReadyForCompletion(gamePda);
+
+      if (isReady) {
+        console.log(`🎯 Game ${gameAddress} is ready for completion, processing...`);
+        const result = await this.completeGame(gameAddress);
+
+        if (result.success) {
+          console.log(`✅ Auto-completed game ${gameAddress} via event trigger`);
+        } else {
+          console.error(`❌ Failed to auto-complete game ${gameAddress}:`, result.error);
+        }
+      } else {
+        console.log(`⏳ Game ${gameAddress} not yet ready for completion`);
+      }
+    } catch (error) {
+      console.error("Error handling PlayerJoined event:", error);
+    }
+  }
+
+  private async handleGameInitializedEvent(event: any): Promise<void> {
+    try {
+      const gameAddress = event.gameKey.toBase58();
+      console.log(`📝 Tracking new game: ${gameAddress}`);
+
+      // Make sure we're tracking this game
+      this.db.trackGame(gameAddress);
+    } catch (error) {
+      console.error("Error handling GameInitialized event:", error);
+    }
   }
 
   public generateGameSecrets(): { randomHash: string; gameAddress: string } {
@@ -147,7 +241,7 @@ export class OracleService {
   }
 
   public async scanAndCompleteActiveGames(): Promise<{ completed: number; errors: number }> {
-    console.log('🔍 Scanning for active games...');
+    console.log('🔍 Scanning for active games (fallback check)...');
 
     let completed = 0;
     let errors = 0;
@@ -178,7 +272,7 @@ export class OracleService {
         }
       }
 
-      console.log(`Scan complete: ${completed} completed, ${errors} errors`);
+      console.log(`Fallback scan complete: ${completed} completed, ${errors} errors`);
       return { completed, errors };
 
     } catch (error) {
@@ -225,6 +319,10 @@ export class OracleService {
   }
 
   public getStats() {
-    return this.db.getStats();
+    return {
+      ...this.db.getStats(),
+      eventListening: this.isListening,
+      activeListeners: this.eventListeners.length
+    };
   }
 }
