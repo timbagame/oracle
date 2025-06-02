@@ -15,6 +15,15 @@ interface PendingGame {
   completion_attempts: number;
 }
 
+interface GameMetadata {
+  game_address: string;
+  min_players: number;
+  max_players: number;
+  created_at: number;
+  timeout: number;
+  current_players: number;
+}
+
 interface DatabaseStats {
   totalSecrets: number;
   usedSecrets: number;
@@ -45,6 +54,7 @@ export class OracleDatabase {
     try {
       this.createSecretKeysTable();
       this.createGameTrackingTable();
+      this.createGameMetadataTable();
       console.log("✅ Oracle database initialized");
     } catch (error) {
       console.error("❌ Error initializing oracle database:", error);
@@ -72,6 +82,19 @@ export class OracleDatabase {
         last_checked INTEGER NOT NULL,
         completion_attempts INTEGER DEFAULT 0,
         completed_at INTEGER
+      )
+    `);
+  }
+
+  private createGameMetadataTable(): void {
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS game_metadata (
+        game_address TEXT PRIMARY KEY,
+        min_players INTEGER NOT NULL,
+        max_players INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        timeout INTEGER NOT NULL,
+        current_players INTEGER DEFAULT 0
       )
     `);
   }
@@ -120,6 +143,77 @@ export class OracleDatabase {
       }
     } catch (error) {
       console.error("❌ Error marking secret key as used:", error);
+    }
+  }
+
+  // Game metadata management
+  public saveGameMetadata(gameAddress: string, minPlayers: number, maxPlayers: number, createdAt: number, timeout: number): void {
+    try {
+      const stmt = this.db.prepare(
+        'INSERT OR REPLACE INTO game_metadata (game_address, min_players, max_players, created_at, timeout, current_players) VALUES (?, ?, ?, ?, ?, 0)'
+      );
+      stmt.run(gameAddress, minPlayers, maxPlayers, createdAt, timeout);
+    } catch (error) {
+      console.error("❌ Error saving game metadata:", error);
+    }
+  }
+
+  public getGameMetadata(gameAddress: string): GameMetadata | null {
+    try {
+      const stmt = this.db.prepare(
+        'SELECT * FROM game_metadata WHERE game_address = ?'
+      );
+      const result = stmt.get(gameAddress) as GameMetadata | undefined;
+      return result || null;
+    } catch (error) {
+      console.error("❌ Error getting game metadata:", error);
+      return null;
+    }
+  }
+
+  public updatePlayerCount(gameAddress: string, playerCount: number): void {
+    try {
+      const stmt = this.db.prepare(
+        'UPDATE game_metadata SET current_players = ? WHERE game_address = ?'
+      );
+      const result = stmt.run(playerCount, gameAddress);
+
+      if (result.changes === 0) {
+        console.warn(`⚠️ No game metadata found to update players for ${gameAddress}`);
+      }
+    } catch (error) {
+      console.error("❌ Error updating player count:", error);
+    }
+  }
+
+  public isGameReadyForCompletion(gameAddress: string): boolean {
+    try {
+      const metadata = this.getGameMetadata(gameAddress);
+      if (!metadata) {
+        console.warn(`⚠️ No metadata found for game ${gameAddress}`);
+        return false;
+      }
+
+      const currentTime = Math.floor(Date.now() / 1000);
+      const expiresAt = metadata.created_at + metadata.timeout;
+      const isExpired = currentTime > expiresAt;
+      const isFull = metadata.current_players >= metadata.max_players;
+      const hasMinPlayers = metadata.current_players >= metadata.min_players;
+
+      console.log(`🔍 Game ${gameAddress} readiness check:`, {
+        currentPlayers: metadata.current_players,
+        minPlayers: metadata.min_players,
+        maxPlayers: metadata.max_players,
+        isFull,
+        isExpired,
+        hasMinPlayers,
+        ready: isFull || (isExpired && hasMinPlayers)
+      });
+
+      return isFull || (isExpired && hasMinPlayers);
+    } catch (error) {
+      console.error("❌ Error checking game readiness:", error);
+      return false;
     }
   }
 

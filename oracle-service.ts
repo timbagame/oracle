@@ -149,13 +149,17 @@ export class OracleService {
   private async handlePlayerJoinedEvent(event: any): Promise<void> {
     try {
       const gameAddress = event.gameKey.toBase58();
-      console.log(`👤 Player joined: ${gameAddress}`);
+      const currentPlayers = Number(event.currentPlayers);
+      const maxPlayers = Number(event.maxPlayers);
 
-      const gamePda = new PublicKey(gameAddress);
-      const isReady = await this.isGameReadyForCompletion(gamePda);
+      console.log(`👤 Player joined: ${gameAddress} (${currentPlayers}/${maxPlayers})`);
+
+      // Update local player count with actual blockchain count
+      this.db.updatePlayerCount(gameAddress, currentPlayers);
+      const isReady = this.db.isGameReadyForCompletion(gameAddress);
 
       if (isReady) {
-        console.log(`🎯 Game ${gameAddress} ready for completion`);
+        console.log(`🎯 Game ${gameAddress} ready for completion (${currentPlayers} players)`);
         const result = await this.completeGame(gameAddress);
 
         if (result.success) {
@@ -164,7 +168,7 @@ export class OracleService {
           console.error(`❌ Failed to auto-complete game ${gameAddress}:`, result.error);
         }
       } else {
-        console.log(`⏳ Game ${gameAddress} not yet ready for completion`);
+        console.log(`⏳ Game ${gameAddress} not yet ready (${currentPlayers} players)`);
       }
     } catch (error) {
       console.error("❌ Error handling PlayerJoined event:", error);
@@ -174,7 +178,18 @@ export class OracleService {
   private async handleGameInitializedEvent(event: any): Promise<void> {
     try {
       const gameAddress = event.gameKey.toBase58();
-      console.log(`📝 Tracking new game: ${gameAddress}`);
+      console.log(`📝 Tracking new game: ${gameAddress} (${event.minPlayers}-${event.maxPlayers} players, ${event.timeout}s timeout)`);
+
+      // Store game metadata for local readiness checks
+      this.db.saveGameMetadata(
+        gameAddress,
+        event.minPlayers,
+        event.maxPlayers,
+        Number(event.createdAt),
+        event.timeout
+      );
+
+      // Track the game
       this.db.trackGame(gameAddress);
     } catch (error) {
       console.error("❌ Error handling GameInitialized event:", error);
@@ -213,6 +228,15 @@ export class OracleService {
   }
 
   public async isGameReadyForCompletion(gamePda: PublicKey): Promise<boolean> {
+    const gameAddress = gamePda.toBase58();
+
+    // First try to check using cached metadata (much faster)
+    const cachedResult = this.db.isGameReadyForCompletion(gameAddress);
+    if (cachedResult) {
+      return true;
+    }
+
+    // Fallback to blockchain check (for games we might not have cached metadata for)
     try {
       const gameAccount = await this.program.account.game.fetch(gamePda);
       const blockTime = await this.getBlockchainTime();
@@ -225,11 +249,20 @@ export class OracleService {
       const isFull = gameAccount.players.length >= gameAccount.maxPlayers;
       const hasMinPlayers = gameAccount.players.length >= gameAccount.minPlayers;
 
+      // Update our cache with current blockchain data
+      this.db.saveGameMetadata(
+        gameAddress,
+        gameAccount.minPlayers,
+        gameAccount.maxPlayers,
+        createdAt,
+        timeout
+      );
+
       return isFull || (isExpired && hasMinPlayers);
     } catch (error: any) {
       if (this.isAccountNotFoundError(error)) {
-        console.log(`Game ${gamePda.toBase58()} completed or closed`);
-        this.db.markGameCompleted(gamePda.toBase58());
+        console.log(`Game ${gameAddress} completed or closed`);
+        this.db.markGameCompleted(gameAddress);
         return false;
       }
       throw error;
@@ -251,7 +284,7 @@ export class OracleService {
         return { success: false, error: "Game is not ready for completion" };
       }
 
-      // Get game data and calculate winner
+      // Get fresh game data from blockchain for completion
       const gameAccount = await this.program.account.game.fetch(gamePda);
       const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
       const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.players.length);

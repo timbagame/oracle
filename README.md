@@ -10,14 +10,23 @@ A robust Oracle service for Solana Coinflip games that generates cryptographic s
 - **📊 Real-Time Monitoring**: Health checks and comprehensive statistics
 - **🛡️ Error Resilience**: Robust error handling and retry mechanisms
 - **💾 Persistent Storage**: SQLite database for secret and game tracking
+- **⚡ Optimized Performance**: Cached game metadata to minimize blockchain calls
 
 ## 🚀 Architecture
 
-The Oracle service uses a hybrid approach:
+The Oracle service uses a hybrid approach with performance optimizations:
 
 1. **Primary**: Event listeners for immediate game completion
 2. **Fallback**: Periodic scanning every 5 minutes for missed events
 3. **Database**: Persistent tracking of secrets and game states
+4. **Caching**: Local game metadata cache to avoid unnecessary blockchain calls
+
+### Performance Optimizations
+
+- **Cached Readiness Checks**: Game metadata (min/max players, timeout) is cached locally
+- **Local Player Tracking**: Player count incremented locally on `PlayerJoined` events
+- **Minimal Blockchain Calls**: Only fetch from blockchain when actually completing games
+- **Smart Fallbacks**: Blockchain queries only when cached data is unavailable
 
 ## 📡 API Endpoints
 
@@ -217,6 +226,15 @@ If events are missed due to network issues, the Oracle:
 - `last_checked` (timestamp)
 - `completion_attempts` (retry counter)
 - `completed_at` (completion timestamp)
+
+**game_metadata table:** _(Performance optimization)_
+
+- `game_address` (PRIMARY KEY)
+- `min_players` (minimum players required)
+- `max_players` (maximum players allowed)
+- `created_at` (game creation timestamp)
+- `timeout` (game timeout in seconds)
+- `current_players` (cached player count)
 
 ## 🔒 Security Features
 
