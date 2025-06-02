@@ -1177,8 +1177,52 @@
   ],
   "events": [
     {
+      "name": "GameCancelled",
+      "discriminator": [113, 20, 200, 104, 76, 35, 9, 241]
+    },
+    {
       "name": "GameCompleted",
       "discriminator": [103, 26, 106, 108, 240, 191, 179, 120]
+    },
+    {
+      "name": "GameInitialized",
+      "discriminator": [82, 221, 11, 2, 244, 52, 240, 250]
+    },
+    {
+      "name": "OracleInitialized",
+      "discriminator": [42, 87, 109, 208, 1, 105, 101, 142]
+    },
+    {
+      "name": "OracleUpdated",
+      "discriminator": [138, 9, 51, 219, 228, 198, 11, 147]
+    },
+    {
+      "name": "PlayerBalanceInitialized",
+      "discriminator": [6, 216, 18, 111, 129, 151, 89, 26]
+    },
+    {
+      "name": "PlayerBalanceWithdrawn",
+      "discriminator": [83, 4, 18, 120, 59, 95, 140, 134]
+    },
+    {
+      "name": "PlayerJoined",
+      "discriminator": [39, 144, 49, 106, 108, 210, 183, 38]
+    },
+    {
+      "name": "PlayerUnjoined",
+      "discriminator": [191, 34, 140, 22, 253, 20, 237, 73]
+    },
+    {
+      "name": "TokenFeeWithdrawn",
+      "discriminator": [92, 98, 195, 90, 108, 129, 244, 119]
+    },
+    {
+      "name": "TokenInitialized",
+      "discriminator": [77, 70, 233, 124, 236, 92, 204, 0]
+    },
+    {
+      "name": "TokenUpdated",
+      "discriminator": [75, 194, 205, 144, 160, 56, 53, 139]
     }
   ],
   "errors": [
@@ -1314,6 +1358,38 @@
       }
     },
     {
+      "name": "GameCancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "game_key",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "game_type",
+            "type": {
+              "defined": {
+                "name": "GameType"
+              }
+            }
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "GameCompleted",
       "type": {
         "kind": "struct",
@@ -1343,10 +1419,8 @@
             "type": "u64"
           },
           {
-            "name": "players",
-            "type": {
-              "vec": "pubkey"
-            }
+            "name": "players_count",
+            "type": "u8"
           },
           {
             "name": "token_mint",
@@ -1395,6 +1469,58 @@
           {
             "name": "is_private",
             "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GameInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "game_key",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "game_type",
+            "type": {
+              "defined": {
+                "name": "GameType"
+              }
+            }
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "max_players",
+            "type": "u8"
+          },
+          {
+            "name": "min_players",
+            "type": "u8"
+          },
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "timeout",
+            "type": "u32"
+          },
+          {
+            "name": "is_private",
+            "type": "bool"
+          },
+          {
+            "name": "created_at",
+            "type": "u64"
           }
         ]
       }
@@ -1498,6 +1624,74 @@
       }
     },
     {
+      "name": "OracleInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_percentage",
+            "type": "u8"
+          },
+          {
+            "name": "oracle_buffer_time",
+            "type": "u16"
+          },
+          {
+            "name": "max_players",
+            "type": "u8"
+          },
+          {
+            "name": "max_timeout",
+            "type": "u32"
+          },
+          {
+            "name": "min_timeout",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OracleUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_percentage",
+            "type": "u8"
+          },
+          {
+            "name": "oracle_buffer_time",
+            "type": "u16"
+          },
+          {
+            "name": "max_players",
+            "type": "u8"
+          },
+          {
+            "name": "max_timeout",
+            "type": "u32"
+          },
+          {
+            "name": "min_timeout",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
       "name": "PlayerBalance",
       "type": {
         "kind": "struct",
@@ -1518,10 +1712,174 @@
       }
     },
     {
+      "name": "PlayerBalanceInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PlayerBalanceWithdrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PlayerJoined",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "game_key",
+            "type": "pubkey"
+          },
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "game_type",
+            "type": {
+              "defined": {
+                "name": "GameType"
+              }
+            }
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "current_players",
+            "type": "u8"
+          },
+          {
+            "name": "max_players",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PlayerUnjoined",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "game_key",
+            "type": "pubkey"
+          },
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "game_type",
+            "type": {
+              "defined": {
+                "name": "GameType"
+              }
+            }
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "current_players",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "TokenConfig",
       "type": {
         "kind": "struct",
         "fields": [
+          {
+            "name": "min_amount",
+            "type": "u64"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TokenFeeWithdrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TokenInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "min_amount",
+            "type": "u64"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TokenUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
           {
             "name": "min_amount",
             "type": "u64"

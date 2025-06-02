@@ -2222,6 +2222,19 @@ export type Coinflip = {
   ],
   "events": [
     {
+      "name": "gameCancelled",
+      "discriminator": [
+        113,
+        20,
+        200,
+        104,
+        76,
+        35,
+        9,
+        241
+      ]
+    },
+    {
       "name": "gameCompleted",
       "discriminator": [
         103,
@@ -2232,6 +2245,136 @@ export type Coinflip = {
         191,
         179,
         120
+      ]
+    },
+    {
+      "name": "gameInitialized",
+      "discriminator": [
+        82,
+        221,
+        11,
+        2,
+        244,
+        52,
+        240,
+        250
+      ]
+    },
+    {
+      "name": "oracleInitialized",
+      "discriminator": [
+        42,
+        87,
+        109,
+        208,
+        1,
+        105,
+        101,
+        142
+      ]
+    },
+    {
+      "name": "oracleUpdated",
+      "discriminator": [
+        138,
+        9,
+        51,
+        219,
+        228,
+        198,
+        11,
+        147
+      ]
+    },
+    {
+      "name": "playerBalanceInitialized",
+      "discriminator": [
+        6,
+        216,
+        18,
+        111,
+        129,
+        151,
+        89,
+        26
+      ]
+    },
+    {
+      "name": "playerBalanceWithdrawn",
+      "discriminator": [
+        83,
+        4,
+        18,
+        120,
+        59,
+        95,
+        140,
+        134
+      ]
+    },
+    {
+      "name": "playerJoined",
+      "discriminator": [
+        39,
+        144,
+        49,
+        106,
+        108,
+        210,
+        183,
+        38
+      ]
+    },
+    {
+      "name": "playerUnjoined",
+      "discriminator": [
+        191,
+        34,
+        140,
+        22,
+        253,
+        20,
+        237,
+        73
+      ]
+    },
+    {
+      "name": "tokenFeeWithdrawn",
+      "discriminator": [
+        92,
+        98,
+        195,
+        90,
+        108,
+        129,
+        244,
+        119
+      ]
+    },
+    {
+      "name": "tokenInitialized",
+      "discriminator": [
+        77,
+        70,
+        233,
+        124,
+        236,
+        92,
+        204,
+        0
+      ]
+    },
+    {
+      "name": "tokenUpdated",
+      "discriminator": [
+        75,
+        194,
+        205,
+        144,
+        160,
+        56,
+        53,
+        139
       ]
     }
   ],
@@ -2368,6 +2511,38 @@ export type Coinflip = {
       }
     },
     {
+      "name": "gameCancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "gameKey",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "gameType",
+            "type": {
+              "defined": {
+                "name": "gameType"
+              }
+            }
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "tokenMint",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "gameCompleted",
       "type": {
         "kind": "struct",
@@ -2397,10 +2572,8 @@ export type Coinflip = {
             "type": "u64"
           },
           {
-            "name": "players",
-            "type": {
-              "vec": "pubkey"
-            }
+            "name": "playersCount",
+            "type": "u8"
           },
           {
             "name": "tokenMint",
@@ -2449,6 +2622,58 @@ export type Coinflip = {
           {
             "name": "isPrivate",
             "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "gameInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "gameKey",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "gameType",
+            "type": {
+              "defined": {
+                "name": "gameType"
+              }
+            }
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "maxPlayers",
+            "type": "u8"
+          },
+          {
+            "name": "minPlayers",
+            "type": "u8"
+          },
+          {
+            "name": "tokenMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "timeout",
+            "type": "u32"
+          },
+          {
+            "name": "isPrivate",
+            "type": "bool"
+          },
+          {
+            "name": "createdAt",
+            "type": "u64"
           }
         ]
       }
@@ -2552,6 +2777,74 @@ export type Coinflip = {
       }
     },
     {
+      "name": "oracleInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "feePercentage",
+            "type": "u8"
+          },
+          {
+            "name": "oracleBufferTime",
+            "type": "u16"
+          },
+          {
+            "name": "maxPlayers",
+            "type": "u8"
+          },
+          {
+            "name": "maxTimeout",
+            "type": "u32"
+          },
+          {
+            "name": "minTimeout",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "oracleUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "oldAuthority",
+            "type": "pubkey"
+          },
+          {
+            "name": "newAuthority",
+            "type": "pubkey"
+          },
+          {
+            "name": "feePercentage",
+            "type": "u8"
+          },
+          {
+            "name": "oracleBufferTime",
+            "type": "u16"
+          },
+          {
+            "name": "maxPlayers",
+            "type": "u8"
+          },
+          {
+            "name": "maxTimeout",
+            "type": "u32"
+          },
+          {
+            "name": "minTimeout",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
       "name": "playerBalance",
       "type": {
         "kind": "struct",
@@ -2572,10 +2865,174 @@ export type Coinflip = {
       }
     },
     {
+      "name": "playerBalanceInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "tokenMint",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "playerBalanceWithdrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "tokenMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "playerJoined",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "gameKey",
+            "type": "pubkey"
+          },
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "gameType",
+            "type": {
+              "defined": {
+                "name": "gameType"
+              }
+            }
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "currentPlayers",
+            "type": "u8"
+          },
+          {
+            "name": "maxPlayers",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "playerUnjoined",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "gameKey",
+            "type": "pubkey"
+          },
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "gameType",
+            "type": {
+              "defined": {
+                "name": "gameType"
+              }
+            }
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "currentPlayers",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "tokenConfig",
       "type": {
         "kind": "struct",
         "fields": [
+          {
+            "name": "minAmount",
+            "type": "u64"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "tokenFeeWithdrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "tokenMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "tokenInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "tokenMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "minAmount",
+            "type": "u64"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "tokenUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "tokenMint",
+            "type": "pubkey"
+          },
           {
             "name": "minAmount",
             "type": "u64"
