@@ -52,17 +52,16 @@ export class OracleDatabase {
 
   private initializeDatabase(): void {
     try {
-      this.createSecretKeysTable();
-      this.createGameTrackingTable();
-      this.createGameMetadataTable();
+      this.createTables();
       console.log("✅ Oracle database initialized");
     } catch (error) {
-      console.error("❌ Error initializing oracle database:", error);
+      console.error("❌ Database initialization failed:", error);
       throw error;
     }
   }
 
-  private createSecretKeysTable(): void {
+  private createTables(): void {
+    // Secret keys table
     this.db.run(`
       CREATE TABLE IF NOT EXISTS secret_keys (
         game_address TEXT PRIMARY KEY,
@@ -72,9 +71,8 @@ export class OracleDatabase {
         used BOOLEAN DEFAULT FALSE
       )
     `);
-  }
 
-  private createGameTrackingTable(): void {
+    // Game tracking table
     this.db.run(`
       CREATE TABLE IF NOT EXISTS game_tracking (
         game_address TEXT PRIMARY KEY,
@@ -84,9 +82,8 @@ export class OracleDatabase {
         completed_at INTEGER
       )
     `);
-  }
 
-  private createGameMetadataTable(): void {
+    // Game metadata table
     this.db.run(`
       CREATE TABLE IF NOT EXISTS game_metadata (
         game_address TEXT PRIMARY KEY,
@@ -107,7 +104,7 @@ export class OracleDatabase {
       );
       stmt.run(gameAddress, secretKey, randomHash, Date.now());
     } catch (error) {
-      console.error("❌ Error saving secret key:", error);
+      console.error("❌ Failed to save secret key:", error);
       throw new Error(`Failed to save secret key for game ${gameAddress}`);
     }
   }
@@ -119,16 +116,12 @@ export class OracleDatabase {
       );
       const result = stmt.get(gameAddress) as { secret_key: string; random_hash: string } | undefined;
 
-      if (!result) {
-        return null;
-      }
-
-      return {
+      return result ? {
         secretKey: result.secret_key,
         randomHash: result.random_hash
-      };
+      } : null;
     } catch (error) {
-      console.error("❌ Error getting secret key:", error);
+      console.error("❌ Failed to get secret key:", error);
       return null;
     }
   }
@@ -136,13 +129,9 @@ export class OracleDatabase {
   public markSecretKeyUsed(gameAddress: string): void {
     try {
       const stmt = this.db.prepare('UPDATE secret_keys SET used = TRUE WHERE game_address = ?');
-      const result = stmt.run(gameAddress);
-
-      if (result.changes === 0) {
-        console.warn(`⚠️ No secret key found to mark as used for game ${gameAddress}`);
-      }
+      stmt.run(gameAddress);
     } catch (error) {
-      console.error("❌ Error marking secret key as used:", error);
+      console.error("❌ Failed to mark secret key as used:", error);
     }
   }
 
@@ -154,65 +143,42 @@ export class OracleDatabase {
       );
       stmt.run(gameAddress, minPlayers, maxPlayers, createdAt, timeout);
     } catch (error) {
-      console.error("❌ Error saving game metadata:", error);
+      console.error("❌ Failed to save game metadata:", error);
     }
   }
 
   public getGameMetadata(gameAddress: string): GameMetadata | null {
     try {
-      const stmt = this.db.prepare(
-        'SELECT * FROM game_metadata WHERE game_address = ?'
-      );
-      const result = stmt.get(gameAddress) as GameMetadata | undefined;
-      return result || null;
+      const stmt = this.db.prepare('SELECT * FROM game_metadata WHERE game_address = ?');
+      return stmt.get(gameAddress) as GameMetadata | null;
     } catch (error) {
-      console.error("❌ Error getting game metadata:", error);
+      console.error("❌ Failed to get game metadata:", error);
       return null;
     }
   }
 
   public updatePlayerCount(gameAddress: string, playerCount: number): void {
     try {
-      const stmt = this.db.prepare(
-        'UPDATE game_metadata SET current_players = ? WHERE game_address = ?'
-      );
-      const result = stmt.run(playerCount, gameAddress);
-
-      if (result.changes === 0) {
-        console.warn(`⚠️ No game metadata found to update players for ${gameAddress}`);
-      }
+      const stmt = this.db.prepare('UPDATE game_metadata SET current_players = ? WHERE game_address = ?');
+      stmt.run(playerCount, gameAddress);
     } catch (error) {
-      console.error("❌ Error updating player count:", error);
+      console.error("❌ Failed to update player count:", error);
     }
   }
 
   public isGameReadyForCompletion(gameAddress: string): boolean {
     try {
       const metadata = this.getGameMetadata(gameAddress);
-      if (!metadata) {
-        console.warn(`⚠️ No metadata found for game ${gameAddress}`);
-        return false;
-      }
+      if (!metadata) return false;
 
       const currentTime = Math.floor(Date.now() / 1000);
-      const expiresAt = metadata.created_at + metadata.timeout;
-      const isExpired = currentTime > expiresAt;
+      const isExpired = currentTime > (metadata.created_at + metadata.timeout);
       const isFull = metadata.current_players >= metadata.max_players;
       const hasMinPlayers = metadata.current_players >= metadata.min_players;
 
-      console.log(`🔍 Game ${gameAddress} readiness check:`, {
-        currentPlayers: metadata.current_players,
-        minPlayers: metadata.min_players,
-        maxPlayers: metadata.max_players,
-        isFull,
-        isExpired,
-        hasMinPlayers,
-        ready: isFull || (isExpired && hasMinPlayers)
-      });
-
       return isFull || (isExpired && hasMinPlayers);
     } catch (error) {
-      console.error("❌ Error checking game readiness:", error);
+      console.error("❌ Failed to check game readiness:", error);
       return false;
     }
   }
@@ -220,13 +186,12 @@ export class OracleDatabase {
   // Game tracking
   public trackGame(gameAddress: string): void {
     try {
-      const now = Date.now();
       const stmt = this.db.prepare(
         'INSERT OR REPLACE INTO game_tracking (game_address, status, last_checked) VALUES (?, ?, ?)'
       );
-      stmt.run(gameAddress, DEFAULT_STATUS, now);
+      stmt.run(gameAddress, DEFAULT_STATUS, Date.now());
     } catch (error) {
-      console.error("❌ Error tracking game:", error);
+      console.error("❌ Failed to track game:", error);
     }
   }
 
@@ -236,13 +201,9 @@ export class OracleDatabase {
       const stmt = this.db.prepare(
         'UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?'
       );
-      const result = stmt.run('completed', now, now, gameAddress);
-
-      if (result.changes === 0) {
-        console.warn(`⚠️ No game found to mark as completed: ${gameAddress}`);
-      }
+      stmt.run('completed', now, now, gameAddress);
     } catch (error) {
-      console.error("❌ Error marking game as completed:", error);
+      console.error("❌ Failed to mark game as completed:", error);
     }
   }
 
@@ -251,13 +212,9 @@ export class OracleDatabase {
       const stmt = this.db.prepare(
         'UPDATE game_tracking SET completion_attempts = completion_attempts + 1, last_checked = ? WHERE game_address = ?'
       );
-      const result = stmt.run(Date.now(), gameAddress);
-
-      if (result.changes === 0) {
-        console.warn(`⚠️ No game found to increment attempts: ${gameAddress}`);
-      }
+      stmt.run(Date.now(), gameAddress);
     } catch (error) {
-      console.error("❌ Error incrementing completion attempts:", error);
+      console.error("❌ Failed to increment completion attempts:", error);
     }
   }
 
@@ -268,12 +225,12 @@ export class OracleDatabase {
       );
       return stmt.all(DEFAULT_STATUS) as PendingGame[];
     } catch (error) {
-      console.error("❌ Error getting pending games:", error);
+      console.error("❌ Failed to get pending games:", error);
       return [];
     }
   }
 
-  // Statistics and analytics
+  // Statistics
   public getStats(): DatabaseStats {
     try {
       const secretsStats = this.getSecretsStats();
@@ -286,13 +243,8 @@ export class OracleDatabase {
         completedGames: gamesStats.completed || 0
       };
     } catch (error) {
-      console.error("❌ Error getting stats:", error);
-      return {
-        totalSecrets: 0,
-        usedSecrets: 0,
-        pendingGames: 0,
-        completedGames: 0
-      };
+      console.error("❌ Failed to get stats:", error);
+      return { totalSecrets: 0, usedSecrets: 0, pendingGames: 0, completedGames: 0 };
     }
   }
 
@@ -317,9 +269,8 @@ export class OracleDatabase {
   public close(): void {
     try {
       this.db.close();
-      console.log("✅ Database connection closed");
     } catch (error) {
-      console.error("❌ Error closing database:", error);
+      console.error("❌ Failed to close database:", error);
     }
   }
 

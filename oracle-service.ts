@@ -70,35 +70,25 @@ export class OracleService {
       console.log(`✅ Loaded admin keypair: ${keypair.publicKey.toBase58()}`);
       return keypair;
     } catch (error) {
-      console.error("❌ Failed to load admin keypair:", error);
       throw new Error(`Failed to load admin keypair from ${KEYPAIR_FILE}`);
     }
   }
 
   private initializeProgram(): anchor.Program<Coinflip> {
     const adminWallet = new anchor.Wallet(this.adminKeypair);
-    const provider = new anchor.AnchorProvider(
-      this.connection,
-      adminWallet,
-      { commitment: "confirmed" }
-    );
+    const provider = new anchor.AnchorProvider(this.connection, adminWallet, { commitment: "confirmed" });
     anchor.setProvider(provider);
     return new anchor.Program(idl as Coinflip, provider) as anchor.Program<Coinflip>;
   }
 
   public async startEventListening(): Promise<void> {
-    if (this.isListening) {
-      console.log("⚠️ Event listening already started");
-      return;
-    }
+    if (this.isListening) return;
 
     console.log("🎧 Starting event listeners...");
-
     try {
       const listeners = await this.setupEventListeners();
       this.eventListeners.push(...listeners);
       this.isListening = true;
-      console.log("✅ Event listeners started successfully");
     } catch (error) {
       console.error("❌ Failed to start event listeners:", error);
       throw error;
@@ -106,81 +96,46 @@ export class OracleService {
   }
 
   private async setupEventListeners(): Promise<number[]> {
-    const listeners: number[] = [];
-
-    // Player joined events
-    const playerJoinedListener = this.program.addEventListener(
-      "playerJoined",
-      this.handlePlayerJoinedEvent.bind(this)
-    );
-
-    // Game initialized events
-    const gameInitializedListener = this.program.addEventListener(
-      "gameInitialized",
-      this.handleGameInitializedEvent.bind(this)
-    );
-
-    // Game completed events (for cleanup)
-    const gameCompletedListener = this.program.addEventListener(
-      "gameCompleted",
-      this.handleGameCompletedEvent.bind(this)
-    );
-
-    listeners.push(playerJoinedListener, gameInitializedListener, gameCompletedListener);
-    return listeners;
+    return [
+      this.program.addEventListener("playerJoined", this.handlePlayerJoinedEvent.bind(this)),
+      this.program.addEventListener("gameInitialized", this.handleGameInitializedEvent.bind(this)),
+      this.program.addEventListener("gameCompleted", this.handleGameCompletedEvent.bind(this))
+    ];
   }
 
   public async stopEventListening(): Promise<void> {
     if (!this.isListening) return;
 
-    console.log("🔇 Stopping event listeners...");
-
     await Promise.allSettled(
-      this.eventListeners.map(listenerId =>
-        this.program.removeEventListener(listenerId)
-      )
+      this.eventListeners.map(listenerId => this.program.removeEventListener(listenerId))
     );
-
     this.eventListeners = [];
     this.isListening = false;
-    console.log("✅ Event listeners stopped");
   }
 
   private async handlePlayerJoinedEvent(event: any): Promise<void> {
     try {
       const gameAddress = event.gameKey.toBase58();
       const currentPlayers = Number(event.currentPlayers);
-      const maxPlayers = Number(event.maxPlayers);
 
-      console.log(`👤 Player joined: ${gameAddress} (${currentPlayers}/${maxPlayers})`);
-
-      // Update local player count with actual blockchain count
       this.db.updatePlayerCount(gameAddress, currentPlayers);
-      const isReady = this.db.isGameReadyForCompletion(gameAddress);
 
-      if (isReady) {
-        console.log(`🎯 Game ${gameAddress} ready for completion (${currentPlayers} players)`);
+      if (this.db.isGameReadyForCompletion(gameAddress)) {
+        console.log(`🎯 Auto-completing game ${gameAddress}`);
         const result = await this.completeGame(gameAddress);
-
-        if (result.success) {
-          console.log(`✅ Auto-completed game ${gameAddress}`);
-        } else {
-          console.error(`❌ Failed to auto-complete game ${gameAddress}:`, result.error);
+        if (!result.success) {
+          console.error(`❌ Auto-completion failed: ${result.error}`);
         }
-      } else {
-        console.log(`⏳ Game ${gameAddress} not yet ready (${currentPlayers} players)`);
       }
     } catch (error) {
-      console.error("❌ Error handling PlayerJoined event:", error);
+      console.error("❌ Error in PlayerJoined event:", error);
     }
   }
 
   private async handleGameInitializedEvent(event: any): Promise<void> {
     try {
       const gameAddress = event.gameKey.toBase58();
-      console.log(`📝 Tracking new game: ${gameAddress} (${event.minPlayers}-${event.maxPlayers} players, ${event.timeout}s timeout)`);
 
-      // Store game metadata for local readiness checks
       this.db.saveGameMetadata(
         gameAddress,
         event.minPlayers,
@@ -188,22 +143,15 @@ export class OracleService {
         Number(event.createdAt),
         event.timeout
       );
-
-      // Track the game
       this.db.trackGame(gameAddress);
     } catch (error) {
-      console.error("❌ Error handling GameInitialized event:", error);
+      console.error("❌ Error in GameInitialized event:", error);
     }
   }
 
   private handleGameCompletedEvent(event: any): void {
-    try {
-      const gameAddress = event.gameKey.toBase58();
-      console.log(`✅ Game completed: ${gameAddress}`);
-      this.db.markGameCompleted(gameAddress);
-    } catch (error) {
-      console.error("❌ Error handling GameCompleted event:", error);
-    }
+    const gameAddress = event.gameKey.toBase58();
+    this.db.markGameCompleted(gameAddress);
   }
 
   public generateGameSecrets(): GameSecrets {
@@ -212,14 +160,8 @@ export class OracleService {
     const gamePda = this.getGamePDA(randomHash);
     const gameAddress = gamePda.toBase58();
 
-    this.db.saveSecretKey(
-      gameAddress,
-      secretKey.toString('hex'),
-      randomHash.toString('hex')
-    );
+    this.db.saveSecretKey(gameAddress, secretKey.toString('hex'), randomHash.toString('hex'));
     this.db.trackGame(gameAddress);
-
-    console.log(`🔑 Generated secrets for game: ${gameAddress}`);
 
     return {
       randomHash: randomHash.toString('hex'),
@@ -230,26 +172,23 @@ export class OracleService {
   public async isGameReadyForCompletion(gamePda: PublicKey): Promise<boolean> {
     const gameAddress = gamePda.toBase58();
 
-    // First try to check using cached metadata (much faster)
-    const cachedResult = this.db.isGameReadyForCompletion(gameAddress);
-    if (cachedResult) {
+    // Try cached check first
+    if (this.db.isGameReadyForCompletion(gameAddress)) {
       return true;
     }
 
-    // Fallback to blockchain check (for games we might not have cached metadata for)
+    // Fallback to blockchain check
     try {
       const gameAccount = await this.program.account.game.fetch(gamePda);
       const blockTime = await this.getBlockchainTime();
 
       const createdAt = Number(gameAccount.createdAt);
       const timeout = Number(gameAccount.timeout);
-      const expiresAt = createdAt + timeout;
-      const isExpired = blockTime > expiresAt;
-
+      const isExpired = blockTime > (createdAt + timeout);
       const isFull = gameAccount.players.length >= gameAccount.maxPlayers;
       const hasMinPlayers = gameAccount.players.length >= gameAccount.minPlayers;
 
-      // Update our cache with current blockchain data
+      // Update cache
       this.db.saveGameMetadata(
         gameAddress,
         gameAccount.minPlayers,
@@ -261,7 +200,6 @@ export class OracleService {
       return isFull || (isExpired && hasMinPlayers);
     } catch (error: any) {
       if (this.isAccountNotFoundError(error)) {
-        console.log(`Game ${gameAddress} completed or closed`);
         this.db.markGameCompleted(gameAddress);
         return false;
       }
@@ -272,19 +210,16 @@ export class OracleService {
   public async completeGame(gameAddress: string): Promise<GameCompletionResult> {
     try {
       const gamePda = new PublicKey(gameAddress);
-
-      // Validate game and get secret
       const secretData = this.db.getSecretKey(gameAddress);
+
       if (!secretData) {
-        return { success: false, error: "No secret key found for game" };
+        return { success: false, error: "No secret key found" };
       }
 
-      const isReady = await this.isGameReadyForCompletion(gamePda);
-      if (!isReady) {
-        return { success: false, error: "Game is not ready for completion" };
+      if (!(await this.isGameReadyForCompletion(gamePda))) {
+        return { success: false, error: "Game not ready" };
       }
 
-      // Get fresh game data from blockchain for completion
       const gameAccount = await this.program.account.game.fetch(gamePda);
       const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
       const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.players.length);
@@ -294,21 +229,14 @@ export class OracleService {
         return { success: false, error: "Unable to determine winner" };
       }
 
-      console.log(`🎲 Completing game ${gameAddress}, winner: ${winnerAddress.toBase58()}`);
-
-      // Execute completion transaction
       const tx = await this.executeGameCompletion(gamePda, winnerAddress, gameAccount.creator, secretKeyBuffer);
       await this.confirmTransaction(tx);
 
-      // Update database
       this.db.markSecretKeyUsed(gameAddress);
       this.db.markGameCompleted(gameAddress);
 
-      console.log(`✅ Successfully completed game ${gameAddress}, tx: ${tx}`);
       return { success: true, txHash: tx };
-
     } catch (error: any) {
-      console.error(`❌ Error completing game ${gameAddress}:`, error);
       this.db.incrementCompletionAttempts(gameAddress);
       return { success: false, error: error.message };
     }
@@ -333,41 +261,32 @@ export class OracleService {
   }
 
   public async scanAndCompleteActiveGames(): Promise<CompletionStats> {
-    console.log('🔍 Scanning for active games (fallback check)...');
-
     const stats: CompletionStats = { completed: 0, errors: 0 };
+    const pendingGames = this.db.getPendingGames();
 
-    try {
-      const pendingGames = this.db.getPendingGames();
-      console.log(`Found ${pendingGames.length} pending games`);
+    if (pendingGames.length === 0) return stats;
 
-      for (const pendingGame of pendingGames) {
-        if (pendingGame.completion_attempts > MAX_COMPLETION_ATTEMPTS) {
-          continue;
-        }
+    for (const game of pendingGames) {
+      if (game.completion_attempts >= MAX_COMPLETION_ATTEMPTS) continue;
 
-        try {
-          const result = await this.completeGame(pendingGame.game_address);
-          if (result.success) {
-            stats.completed++;
-          } else {
-            stats.errors++;
-          }
-
-          await this.delay(DEFAULT_DELAY_MS);
-        } catch (error) {
+      try {
+        const result = await this.completeGame(game.game_address);
+        if (result.success) {
+          stats.completed++;
+        } else {
           stats.errors++;
-          console.error(`❌ Error processing game ${pendingGame.game_address}:`, error);
         }
+        await this.delay(DEFAULT_DELAY_MS);
+      } catch (error) {
+        stats.errors++;
       }
-
-      console.log(`Fallback scan complete: ${stats.completed} completed, ${stats.errors} errors`);
-      return stats;
-
-    } catch (error) {
-      console.error('❌ Error in scan process:', error);
-      return { completed: stats.completed, errors: stats.errors + 1 };
     }
+
+    if (stats.completed > 0 || stats.errors > 0) {
+      console.log(`Scan: ${stats.completed} completed, ${stats.errors} errors`);
+    }
+
+    return stats;
   }
 
   private getGamePDA(randomHash: Buffer): PublicKey {
@@ -393,8 +312,7 @@ export class OracleService {
       const slot = await this.connection.getSlot();
       const blockTime = await this.connection.getBlockTime(slot);
       return blockTime || Math.floor(Date.now() / 1000);
-    } catch (error) {
-      console.warn("⚠️ Failed to get blockchain time, using local time");
+    } catch {
       return Math.floor(Date.now() / 1000);
     }
   }
