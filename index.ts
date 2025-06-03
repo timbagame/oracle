@@ -195,6 +195,12 @@ async function initialize(): Promise<void> {
 setInterval(async () => {
   try {
     await oracle.scanAndCompleteActiveGames();
+
+    // Clean up old records periodically (every scan cycle)
+    const cleanupResult = oracle.cleanupOldRecords(48);
+    if (cleanupResult.deletedSecrets > 0 || cleanupResult.deletedGames > 0 || cleanupResult.deletedMetadata > 0) {
+      console.log('🧹 Background cleanup completed');
+    }
   } catch (error) {
     console.error('❌ Background scan error:', error);
   }

@@ -349,6 +349,10 @@ export class OracleService {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  public cleanupOldRecords(hoursOld: number = 48) {
+    return this.db.cleanupOldRecords(hoursOld);
+  }
+
   public getStats() {
     return {
       ...this.db.getStats(),

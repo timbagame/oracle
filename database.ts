@@ -281,6 +281,39 @@ export class OracleDatabase {
   }
 
   // Utility methods
+  public cleanupOldRecords(hoursOld: number = 48): { deletedSecrets: number; deletedGames: number; deletedMetadata: number } {
+    try {
+      const cutoffTime = Date.now() - (hoursOld * 60 * 60 * 1000);
+
+      // Clean up old secret keys
+      const secretsStmt = this.db.prepare('DELETE FROM secret_keys WHERE created_at < ?');
+      const secretsResult = secretsStmt.run(cutoffTime);
+
+      // Clean up old game tracking records (completed/cancelled games older than cutoff)
+      const trackingStmt = this.db.prepare(
+        'DELETE FROM game_tracking WHERE (status != ? AND completed_at IS NOT NULL AND completed_at < ?) OR (status = ? AND last_checked < ?)'
+      );
+      const trackingResult = trackingStmt.run('pending', cutoffTime, 'pending', cutoffTime);
+
+      // Clean up old game metadata
+      const metadataStmt = this.db.prepare('DELETE FROM game_metadata WHERE created_at < ?');
+      const metadataResult = metadataStmt.run(cutoffTime);
+
+      const deletedCounts = {
+        deletedSecrets: secretsResult.changes,
+        deletedGames: trackingResult.changes,
+        deletedMetadata: metadataResult.changes
+      };
+
+      console.log(`🧹 Cleanup completed - Secrets: ${deletedCounts.deletedSecrets}, Games: ${deletedCounts.deletedGames}, Metadata: ${deletedCounts.deletedMetadata}`);
+
+      return deletedCounts;
+    } catch (error) {
+      console.error("❌ Failed to cleanup old records:", error);
+      return { deletedSecrets: 0, deletedGames: 0, deletedMetadata: 0 };
+    }
+  }
+
   public close(): void {
     try {
       this.db.close();
