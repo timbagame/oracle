@@ -24,7 +24,7 @@
           "signer": true
         },
         {
-          "name": "player_balance",
+          "name": "creator_balance",
           "writable": true,
           "pda": {
             "seeds": [
@@ -1774,10 +1774,6 @@
           },
           {
             "name": "current_players",
-            "type": "u8"
-          },
-          {
-            "name": "max_players",
             "type": "u8"
           }
         ]

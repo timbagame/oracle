@@ -39,7 +39,7 @@ export type Coinflip = {
           "signer": true
         },
         {
-          "name": "playerBalance",
+          "name": "creatorBalance",
           "writable": true,
           "pda": {
             "seeds": [
@@ -2927,10 +2927,6 @@ export type Coinflip = {
           },
           {
             "name": "currentPlayers",
-            "type": "u8"
-          },
-          {
-            "name": "maxPlayers",
             "type": "u8"
           }
         ]
