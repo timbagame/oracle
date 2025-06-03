@@ -14,24 +14,82 @@ const CORS_HEADERS = {
 
 // Simplified API documentation
 const API_DOCUMENTATION = `
+  <!DOCTYPE html>
   <html>
     <head>
-      <title>🔮 Oracle API</title>
+      <title>Oracle API Documentation</title>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <style>
-        body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
-        h1 { color: #333; }
-        code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; }
-        ul { line-height: 1.6; }
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          max-width: 800px;
+          margin: 50px auto;
+          padding: 20px;
+          line-height: 1.6;
+          color: #333;
+        }
+        h1 {
+          color: #2c3e50;
+          border-bottom: 3px solid #3498db;
+          padding-bottom: 10px;
+        }
+        h2 {
+          color: #34495e;
+          margin-top: 30px;
+        }
+        code {
+          background: #f8f9fa;
+          padding: 4px 8px;
+          border-radius: 4px;
+          font-family: 'Monaco', 'Consolas', monospace;
+          border: 1px solid #e9ecef;
+        }
+        .endpoint {
+          background: #ffffff;
+          border: 1px solid #dee2e6;
+          border-radius: 8px;
+          padding: 15px;
+          margin: 10px 0;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .method {
+          font-weight: bold;
+          padding: 2px 6px;
+          border-radius: 3px;
+          color: white;
+          font-size: 12px;
+        }
+        .get { background-color: #28a745; }
+        .post { background-color: #007bff; }
+        .description {
+          margin-top: 8px;
+          color: #6c757d;
+        }
       </style>
     </head>
     <body>
-      <h1>🔮 Oracle API</h1>
-      <h2>Endpoints:</h2>
-      <ul>
-        <li><code>GET /health</code> - Health check</li>
-        <li><code>POST /generate-hash</code> - Generate game secrets</li>
-        <li><code>GET /stats</code> - Statistics</li>
-      </ul>
+      <h1>🔮 Oracle API Documentation</h1>
+
+      <h2>Available Endpoints</h2>
+
+      <div class="endpoint">
+        <span class="method get">GET</span> <code>/health</code>
+        <div class="description">Simple health check - returns basic service status</div>
+      </div>
+
+      <div class="endpoint">
+        <span class="method post">POST</span> <code>/generate-hash</code>
+        <div class="description">Generate new game secrets (random hash and game address)</div>
+      </div>
+
+      <div class="endpoint">
+        <span class="method get">GET</span> <code>/stats</code>
+        <div class="description">Detailed statistics and metrics about the oracle service</div>
+      </div>
+
+      <h2>Service Information</h2>
+      <p>This Oracle API provides game completion services for Solana-based coinflip games.</p>
     </body>
   </html>
 `;
@@ -59,11 +117,11 @@ function createErrorResponse(error: string, status: number = 500): Response {
 
 // Route handlers
 async function handleHealth(): Promise<Response> {
-  const stats = oracle.getStats();
   return createResponse({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    ...stats
+    uptime: process.uptime(),
+    service: 'oracle-api'
   });
 }
 
@@ -77,7 +135,18 @@ async function handleGenerateHash(): Promise<Response> {
 }
 
 async function handleStats(): Promise<Response> {
-  return createResponse({ success: true, stats: oracle.getStats() });
+  const stats = oracle.getStats();
+  return createResponse({
+    success: true,
+    timestamp: new Date().toISOString(),
+    stats,
+    service: {
+      name: 'oracle-api',
+      version: '1.0.0',
+      uptime: process.uptime(),
+      environment: process.env.NODE_ENV || 'development'
+    }
+  });
 }
 
 // Main server
