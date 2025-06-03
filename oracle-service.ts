@@ -101,7 +101,8 @@ export class OracleService {
     return [
       this.program.addEventListener("playerJoined", this.handlePlayerJoinedEvent.bind(this)),
       this.program.addEventListener("gameInitialized", this.handleGameInitializedEvent.bind(this)),
-      this.program.addEventListener("gameCompleted", this.handleGameCompletedEvent.bind(this))
+      this.program.addEventListener("gameCompleted", this.handleGameCompletedEvent.bind(this)),
+      this.program.addEventListener("gameCancelled", this.handleGameCancelledEvent.bind(this))
     ];
   }
 
@@ -154,6 +155,12 @@ export class OracleService {
   private handleGameCompletedEvent(event: any): void {
     const gameAddress = event.gameKey.toBase58();
     this.db.markGameCompleted(gameAddress);
+  }
+
+  private handleGameCancelledEvent(event: any): void {
+    const gameAddress = event.gameKey.toBase58();
+    this.db.markGameCancelled(gameAddress);
+    console.log(`🚫 Game cancelled: ${gameAddress}`);
   }
 
   public generateGameSecrets(): GameSecrets {

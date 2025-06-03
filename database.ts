@@ -29,6 +29,7 @@ interface DatabaseStats {
   usedSecrets: number;
   pendingGames: number;
   completedGames: number;
+  cancelledGames: number;
 }
 
 /**
@@ -207,6 +208,18 @@ export class OracleDatabase {
     }
   }
 
+  public markGameCancelled(gameAddress: string): void {
+    try {
+      const now = Date.now();
+      const stmt = this.db.prepare(
+        'UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?'
+      );
+      stmt.run('cancelled', now, now, gameAddress);
+    } catch (error) {
+      console.error("❌ Failed to mark game as cancelled:", error);
+    }
+  }
+
   public incrementCompletionAttempts(gameAddress: string): void {
     try {
       const stmt = this.db.prepare(
@@ -240,11 +253,12 @@ export class OracleDatabase {
         totalSecrets: secretsStats.total || 0,
         usedSecrets: secretsStats.used || 0,
         pendingGames: gamesStats.pending || 0,
-        completedGames: gamesStats.completed || 0
+        completedGames: gamesStats.completed || 0,
+        cancelledGames: gamesStats.cancelled || 0
       };
     } catch (error) {
       console.error("❌ Failed to get stats:", error);
-      return { totalSecrets: 0, usedSecrets: 0, pendingGames: 0, completedGames: 0 };
+      return { totalSecrets: 0, usedSecrets: 0, pendingGames: 0, completedGames: 0, cancelledGames: 0 };
     }
   }
 
@@ -255,14 +269,15 @@ export class OracleDatabase {
     return stmt.get() as { total: number; used: number };
   }
 
-  private getGamesStats(): { pending: number; completed: number } {
+  private getGamesStats(): { pending: number; completed: number; cancelled: number } {
     const stmt = this.db.prepare(`
       SELECT
         SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as pending,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled
       FROM game_tracking
     `);
-    return stmt.get(DEFAULT_STATUS) as { pending: number; completed: number };
+    return stmt.get(DEFAULT_STATUS) as { pending: number; completed: number; cancelled: number };
   }
 
   // Utility methods
