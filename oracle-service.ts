@@ -99,6 +99,7 @@ export class OracleService {
   private async setupEventListeners(): Promise<number[]> {
     return [
       this.program.addEventListener("playerJoined", this.handlePlayerJoinedEvent.bind(this)),
+      this.program.addEventListener("playerUnjoined", this.handlePlayerUnjoinedEvent.bind(this)),
       this.program.addEventListener("gameInitialized", this.handleGameInitializedEvent.bind(this)),
       this.program.addEventListener("gameCompleted", this.handleGameCompletedEvent.bind(this)),
       this.program.addEventListener("gameCancelled", this.handleGameCancelledEvent.bind(this))
@@ -133,6 +134,27 @@ export class OracleService {
       }
     } catch (error) {
       console.error("❌ Error in PlayerJoined event:", error);
+    }
+  }
+
+  private async handlePlayerUnjoinedEvent(event: any): Promise<void> {
+    try {
+      const gameAddress = event.gameKey.toBase58();
+      const playerAddress = event.player.toBase58();
+      const currentPlayers = Number(event.currentPlayers);
+
+      this.db.updatePlayerCount(gameAddress, currentPlayers);
+      this.db.removePlayerFromGame(gameAddress, playerAddress);
+
+      if (this.db.isGameReadyForCompletion(gameAddress)) {
+        console.log(`🎯 Auto-completing game ${gameAddress}`);
+        const result = await this.completeGame(gameAddress);
+        if (!result.success && !result.notReady) {
+          console.error(`❌ Auto-completion failed: ${result.error}`);
+        }
+      }
+    } catch (error) {
+      console.error("❌ Error in PlayerUnjoined event:", error);
     }
   }
 
@@ -248,6 +270,14 @@ export class OracleService {
       }
 
       const winnerAddress = new PublicKey(winnerPlayerAddress);
+
+      // Check if this player participation PDA exists to verify they're actually in the game
+      if (!(await this.verifyPlayerInGame(gamePda, winnerAddress))) {
+        console.log(`⚠️ Selected winner ${winnerPlayerAddress} not found in game, clearing stale player data`);
+        // Clear stale player data and try again
+        this.db.clearStalePlayersForGame(gameAddress);
+        return { success: false, notReady: true };
+      }
 
       const tx = await this.executeGameCompletion(
         gamePda,
@@ -398,5 +428,22 @@ export class OracleService {
       this.program.programId
     );
     return pda;
+  }
+
+  private async verifyPlayerInGame(gamePda: PublicKey, playerAddress: PublicKey): Promise<boolean> {
+    try {
+      // Check if PlayerParticipation PDA exists for this game and player
+      const [playerParticipationPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("player_participation", 'utf8'), gamePda.toBuffer(), playerAddress.toBuffer()],
+        this.program.programId
+      );
+
+      // Try to fetch the PlayerParticipation account
+      await this.program.account.playerParticipation.fetch(playerParticipationPda);
+      return true;
+    } catch (error) {
+      // If account doesn't exist, player is not in the game
+      return false;
+    }
   }
 }

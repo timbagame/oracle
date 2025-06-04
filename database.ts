@@ -352,6 +352,29 @@ export class OracleDatabase {
     }
   }
 
+  public removePlayerFromGame(gameAddress: string, playerAddress: string): void {
+    try {
+      const stmt = this.db.prepare(
+        'DELETE FROM game_players WHERE game_address = ? AND player_address = ?'
+      );
+      stmt.run(gameAddress, playerAddress);
+    } catch (error) {
+      console.error("❌ Failed to remove player from game:", error);
+    }
+  }
+
+  public clearStalePlayersForGame(gameAddress: string): void {
+    try {
+      const stmt = this.db.prepare(
+        'DELETE FROM game_players WHERE game_address = ?'
+      );
+      stmt.run(gameAddress);
+      console.log(`🧹 Cleared stale player data for game ${gameAddress}`);
+    } catch (error) {
+      console.error("❌ Failed to clear stale players for game:", error);
+    }
+  }
+
   public getGamePlayers(gameAddress: string): string[] {
     try {
       const stmt = this.db.prepare(
