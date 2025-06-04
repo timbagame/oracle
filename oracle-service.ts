@@ -9,7 +9,7 @@ import * as path from "path";
 
 // Constants
 const KEYPAIR_FILE = "admin-keypair.json";
-const SECRET_KEY_LENGTH = 64;
+const SECRET_KEY_LENGTH = 32;
 const MAX_COMPLETION_ATTEMPTS = 5;
 const DEFAULT_DELAY_MS = 1000;
 
