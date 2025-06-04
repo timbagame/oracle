@@ -10,7 +10,6 @@ import * as path from "path";
 // Constants
 const KEYPAIR_FILE = "admin-keypair.json";
 const SECRET_KEY_LENGTH = 64;
-const RANDOM_BYTES_LENGTH = 8;
 const MAX_COMPLETION_ATTEMPTS = 5;
 const DEFAULT_DELAY_MS = 1000;
 
@@ -287,13 +286,36 @@ export class OracleService {
   }
 
   private calculateWinnerIndex(secretKeyBuffer: Buffer, nPlayers: number): number {
-    if (nPlayers <= 1) return 0;
+    if (nPlayers <= 1) {
+      return 0;
+    }
 
-    const randomBytes = secretKeyBuffer.subarray(0, RANDOM_BYTES_LENGTH);
-    const randomNumber = BigInt('0x' + Buffer.from(randomBytes).reverse().toString('hex'));
-    const maxValid = BigInt('0xFFFFFFFFFFFFFFFF') - (BigInt('0xFFFFFFFFFFFFFFFF') % BigInt(nPlayers));
-    const finalNumber = randomNumber % maxValid;
-    return Number(finalNumber % BigInt(nPlayers));
+    const maxU64 = BigInt('0xFFFFFFFFFFFFFFFF');
+    const nPlayersBig = BigInt(nPlayers);
+    const maxValid = maxU64 - (maxU64 % nPlayersBig);
+
+    // Try sliding 8-byte windows through the 32-byte secret key
+    for (let startPos = 0; startPos <= (32 - 8); startPos++) {
+      // Extract 8 bytes and convert to u64 using little-endian
+      const window = secretKeyBuffer.subarray(startPos, startPos + 8);
+
+      // Convert to BigInt using little-endian format
+      let randomU64 = BigInt(0);
+      for (let i = 0; i < 8; i++) {
+        const byte = window[i];
+        if (byte === undefined) {
+          throw new Error("Invalid secret key buffer size");
+        }
+        randomU64 |= BigInt(byte) << (BigInt(i) * BigInt(8));
+      }
+
+      // Use this value if it's in the unbiased range
+      if (randomU64 < maxValid) {
+        return Number(randomU64 % nPlayersBig);
+      }
+    }
+
+    throw new Error("Unable to generate unbiased random number - game must be cancelled");
   }
 
   private async getBlockchainTime(): Promise<number> {
