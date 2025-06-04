@@ -119,9 +119,11 @@ export class OracleService {
   private async handlePlayerJoinedEvent(event: any): Promise<void> {
     try {
       const gameAddress = event.gameKey.toBase58();
+      const playerAddress = event.player.toBase58();
       const currentPlayers = Number(event.currentPlayers);
 
       this.db.updatePlayerCount(gameAddress, currentPlayers);
+      this.db.addPlayerToGame(gameAddress, playerAddress);
 
       if (this.db.isGameReadyForCompletion(gameAddress)) {
         console.log(`🎯 Auto-completing game ${gameAddress}`);
@@ -194,8 +196,8 @@ export class OracleService {
       const createdAt = Number(gameAccount.createdAt);
       const timeout = Number(gameAccount.timeout);
       const isExpired = blockTime > (createdAt + timeout);
-      const isFull = gameAccount.players.length >= gameAccount.maxPlayers;
-      const hasMinPlayers = gameAccount.players.length >= gameAccount.minPlayers;
+      const isFull = gameAccount.playerCount >= gameAccount.maxPlayers;
+      const hasMinPlayers = gameAccount.playerCount >= gameAccount.minPlayers;
 
       // Update cache
       this.db.saveGameMetadata(
@@ -230,15 +232,30 @@ export class OracleService {
       }
 
       const gameAccount = await this.program.account.game.fetch(gamePda);
-      const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
-      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.players.length);
-      const winnerAddress = gameAccount.players[winnerIndex];
 
-      if (!winnerAddress) {
+      // Get players for this game from database
+      const players = this.db.getGamePlayers(gameAddress);
+
+      if (players.length === 0) {
+        return { success: false, error: "No players found for game" };
+      }
+
+      const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
+      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, players.length);
+      const winnerPlayerAddress = players[winnerIndex];
+
+      if (!winnerPlayerAddress) {
         return { success: false, error: "Unable to determine winner" };
       }
 
-      const tx = await this.executeGameCompletion(gamePda, winnerAddress, gameAccount.creator, secretKeyBuffer);
+      const winnerAddress = new PublicKey(winnerPlayerAddress);
+
+      const tx = await this.executeGameCompletion(
+        gamePda,
+        winnerAddress,
+        gameAccount.creator,
+        secretKeyBuffer,
+      );
       await this.confirmTransaction(tx);
 
       this.db.markSecretKeyUsed(gameAddress);
@@ -261,55 +278,12 @@ export class OracleService {
       .completeGame([...secretKeyBuffer])
       .accounts({
         game: gamePda,
+        authority: this.adminKeypair.publicKey,
         player: winnerAddress,
         creator: creatorAddress,
-        authority: this.adminKeypair.publicKey,
       })
       .signers([this.adminKeypair])
       .rpc();
-  }
-
-  public async scanAndCompleteActiveGames(): Promise<CompletionStats> {
-    const stats: CompletionStats = { completed: 0, errors: 0, notReady: 0 };
-    const pendingGames = this.db.getPendingGames();
-
-    if (pendingGames.length === 0) return stats;
-
-    for (const game of pendingGames) {
-      if (game.completion_attempts >= MAX_COMPLETION_ATTEMPTS) continue;
-
-      try {
-        const result = await this.completeGame(game.game_address);
-        if (result.success) {
-          stats.completed++;
-        } else if (result.notReady) {
-          stats.notReady++;
-        } else {
-          stats.errors++;
-        }
-        await this.delay(DEFAULT_DELAY_MS);
-      } catch (error) {
-        stats.errors++;
-      }
-    }
-
-    if (stats.completed > 0 || stats.errors > 0 || stats.notReady > 0) {
-      const parts = [];
-      if (stats.completed > 0) parts.push(`${stats.completed} completed`);
-      if (stats.errors > 0) parts.push(`${stats.errors} errors`);
-      if (stats.notReady > 0) parts.push(`${stats.notReady} not ready`);
-      console.log(`📊 Scan: ${parts.join(', ')}`);
-    }
-
-    return stats;
-  }
-
-  private getGamePDA(randomHash: Buffer): PublicKey {
-    const [pda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("game", 'utf8'), randomHash],
-      this.program.programId
-    );
-    return pda;
   }
 
   private calculateWinnerIndex(secretKeyBuffer: Buffer, nPlayers: number): number {
@@ -359,5 +333,48 @@ export class OracleService {
       eventListening: this.isListening,
       activeListeners: this.eventListeners.length
     };
+  }
+
+  public async scanAndCompleteActiveGames(): Promise<CompletionStats> {
+    const stats: CompletionStats = { completed: 0, errors: 0, notReady: 0 };
+    const pendingGames = this.db.getPendingGames();
+
+    if (pendingGames.length === 0) return stats;
+
+    for (const game of pendingGames) {
+      if (game.completion_attempts >= MAX_COMPLETION_ATTEMPTS) continue;
+
+      try {
+        const result = await this.completeGame(game.game_address);
+        if (result.success) {
+          stats.completed++;
+        } else if (result.notReady) {
+          stats.notReady++;
+        } else {
+          stats.errors++;
+        }
+        await this.delay(DEFAULT_DELAY_MS);
+      } catch (error) {
+        stats.errors++;
+      }
+    }
+
+    if (stats.completed > 0 || stats.errors > 0 || stats.notReady > 0) {
+      const parts = [];
+      if (stats.completed > 0) parts.push(`${stats.completed} completed`);
+      if (stats.errors > 0) parts.push(`${stats.errors} errors`);
+      if (stats.notReady > 0) parts.push(`${stats.notReady} not ready`);
+      console.log(`📊 Scan: ${parts.join(', ')}`);
+    }
+
+    return stats;
+  }
+
+  private getGamePDA(randomHash: Buffer): PublicKey {
+    const [pda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("game", 'utf8'), randomHash],
+      this.program.programId
+    );
+    return pda;
   }
 }

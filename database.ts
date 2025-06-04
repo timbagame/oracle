@@ -95,6 +95,18 @@ export class OracleDatabase {
         current_players INTEGER DEFAULT 0
       )
     `);
+
+    // Game players table
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS game_players (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_address TEXT NOT NULL,
+        player_address TEXT NOT NULL,
+        joined_at INTEGER NOT NULL,
+        FOREIGN KEY (game_address) REFERENCES game_metadata (game_address),
+        UNIQUE(game_address, player_address)
+      )
+    `);
   }
 
   // Secret key management
@@ -327,5 +339,29 @@ export class OracleDatabase {
       file: DATABASE_FILE,
       isOpen: this.db !== null
     };
+  }
+
+  public addPlayerToGame(gameAddress: string, playerAddress: string): void {
+    try {
+      const stmt = this.db.prepare(
+        'INSERT OR IGNORE INTO game_players (game_address, player_address, joined_at) VALUES (?, ?, ?)'
+      );
+      stmt.run(gameAddress, playerAddress, Date.now());
+    } catch (error) {
+      console.error("❌ Failed to add player to game:", error);
+    }
+  }
+
+  public getGamePlayers(gameAddress: string): string[] {
+    try {
+      const stmt = this.db.prepare(
+        'SELECT player_address FROM game_players WHERE game_address = ? ORDER BY joined_at ASC'
+      );
+      const results = stmt.all(gameAddress) as { player_address: string }[];
+      return results.map(row => row.player_address);
+    } catch (error) {
+      console.error("❌ Failed to get game players:", error);
+      return [];
+    }
   }
 }
