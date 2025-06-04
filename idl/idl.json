@@ -65,6 +65,47 @@
       "args": []
     },
     {
+      "name": "cleanup_player_participation",
+      "discriminator": [237, 76, 84, 92, 145, 99, 242, 160],
+      "accounts": [
+        {
+          "name": "game"
+        },
+        {
+          "name": "player_participation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112, 108, 97, 121, 101, 114, 95, 112, 97, 114, 116, 105, 99,
+                  105, 112, 97, 116, 105, 111, 110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "complete_game",
       "discriminator": [105, 69, 184, 5, 143, 182, 92, 132],
       "accounts": [
@@ -88,7 +129,31 @@
           "signer": true
         },
         {
-          "name": "player"
+          "name": "player_participation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112, 108, 97, 121, 101, 114, 95, 112, 97, 114, 116, 105, 99,
+                  105, 112, 97, 116, 105, 111, 110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true
         },
         {
           "name": "creator",
@@ -142,7 +207,7 @@
         {
           "name": "_secret_key",
           "type": {
-            "array": ["u8", 64]
+            "array": ["u8", 32]
           }
         }
       ]
@@ -584,7 +649,31 @@
           "writable": true
         },
         {
+          "name": "player_participation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112, 108, 97, 121, 101, 114, 95, 112, 97, 114, 116, 105, 99,
+                  105, 112, 97, 116, 105, 111, 110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        },
+        {
           "name": "player",
+          "writable": true,
           "signer": true
         },
         {
@@ -748,7 +837,31 @@
           "writable": true
         },
         {
-          "name": "player"
+          "name": "player_participation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112, 108, 97, 121, 101, 114, 95, 112, 97, 114, 116, 105, 99,
+                  105, 112, 97, 116, 105, 111, 110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true
         },
         {
           "name": "authority",
@@ -1173,6 +1286,10 @@
     {
       "name": "PlayerBalance",
       "discriminator": [244, 128, 24, 93, 212, 190, 202, 111]
+    },
+    {
+      "name": "PlayerParticipation",
+      "discriminator": [193, 220, 110, 11, 204, 119, 191, 216]
     }
   ],
   "events": [
@@ -1239,32 +1356,32 @@
     {
       "code": 7002,
       "name": "InvalidCreator",
-      "msg": "Invalid creator address"
+      "msg": "Invalid creator"
     },
     {
       "code": 7100,
-      "name": "GameNotActive",
-      "msg": "Game not active"
-    },
-    {
-      "code": 7101,
       "name": "GameFull",
       "msg": "Game already full"
     },
     {
-      "code": 7102,
+      "code": 7101,
       "name": "GameReadyForOracle",
       "msg": "Game ready for oracle"
     },
     {
-      "code": 7103,
+      "code": 7102,
       "name": "GameNotReadyForOracle",
       "msg": "Game not ready for oracle"
     },
     {
-      "code": 7104,
+      "code": 7103,
       "name": "CoinflipHasActivePlayers",
       "msg": "Cannot cancel coinflip game with active players"
+    },
+    {
+      "code": 7104,
+      "name": "GameNotCompleted",
+      "msg": "Game not completed"
     },
     {
       "code": 7200,
@@ -1326,17 +1443,15 @@
           },
           {
             "name": "max_players",
-            "type": "u8"
+            "type": "u16"
           },
           {
             "name": "min_players",
-            "type": "u8"
+            "type": "u16"
           },
           {
-            "name": "players",
-            "type": {
-              "vec": "pubkey"
-            }
+            "name": "player_count",
+            "type": "u16"
           },
           {
             "name": "token_mint",
@@ -1420,7 +1535,7 @@
           },
           {
             "name": "players_count",
-            "type": "u8"
+            "type": "u16"
           },
           {
             "name": "token_mint",
@@ -1456,11 +1571,11 @@
           },
           {
             "name": "max_players",
-            "type": "u8"
+            "type": "u16"
           },
           {
             "name": "min_players",
-            "type": "u8"
+            "type": "u16"
           },
           {
             "name": "timeout",
@@ -1500,11 +1615,11 @@
           },
           {
             "name": "max_players",
-            "type": "u8"
+            "type": "u16"
           },
           {
             "name": "min_players",
-            "type": "u8"
+            "type": "u16"
           },
           {
             "name": "token_mint",
@@ -1530,10 +1645,6 @@
       "type": {
         "kind": "struct",
         "fields": [
-          {
-            "name": "token_mint",
-            "type": "pubkey"
-          },
           {
             "name": "min_amount",
             "type": "u64"
@@ -1582,7 +1693,7 @@
           },
           {
             "name": "max_players",
-            "type": "u8"
+            "type": "u16"
           },
           {
             "name": "max_timeout",
@@ -1610,7 +1721,7 @@
           },
           {
             "name": "max_players",
-            "type": "u8"
+            "type": "u16"
           },
           {
             "name": "max_timeout",
@@ -1642,7 +1753,7 @@
           },
           {
             "name": "max_players",
-            "type": "u8"
+            "type": "u16"
           },
           {
             "name": "max_timeout",
@@ -1678,7 +1789,7 @@
           },
           {
             "name": "max_players",
-            "type": "u8"
+            "type": "u16"
           },
           {
             "name": "max_timeout",
@@ -1696,14 +1807,6 @@
       "type": {
         "kind": "struct",
         "fields": [
-          {
-            "name": "player",
-            "type": "pubkey"
-          },
-          {
-            "name": "token_mint",
-            "type": "pubkey"
-          },
           {
             "name": "amount",
             "type": "u64"
@@ -1774,7 +1877,19 @@
           },
           {
             "name": "current_players",
-            "type": "u8"
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PlayerParticipation",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "player_index",
+            "type": "u16"
           }
         ]
       }
@@ -1806,7 +1921,7 @@
           },
           {
             "name": "current_players",
-            "type": "u8"
+            "type": "u16"
           }
         ]
       }
