@@ -1574,10 +1574,7 @@ export type Coinflip = {
         },
         {
           "name": "player",
-          "writable": true
-        },
-        {
-          "name": "authority",
+          "writable": true,
           "signer": true
         },
         {
