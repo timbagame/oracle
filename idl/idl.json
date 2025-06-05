@@ -93,7 +93,8 @@
         },
         {
           "name": "player",
-          "writable": true
+          "writable": true,
+          "signer": true
         },
         {
           "name": "system_program",

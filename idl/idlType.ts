@@ -155,7 +155,8 @@ export type Coinflip = {
         },
         {
           "name": "player",
-          "writable": true
+          "writable": true,
+          "signer": true
         },
         {
           "name": "systemProgram",
