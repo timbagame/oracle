@@ -32,10 +32,7 @@ export type Coinflip = {
         },
         {
           "name": "creator",
-          "writable": true
-        },
-        {
-          "name": "authority",
+          "writable": true,
           "signer": true
         },
         {
