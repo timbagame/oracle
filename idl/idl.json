@@ -62,8 +62,8 @@
       "args": []
     },
     {
-      "name": "cleanup_player_participation",
-      "discriminator": [237, 76, 84, 92, 145, 99, 242, 160],
+      "name": "clean_player_participation",
+      "discriminator": [166, 212, 44, 185, 199, 105, 199, 79],
       "accounts": [
         {
           "name": "game"
@@ -93,8 +93,7 @@
         },
         {
           "name": "player",
-          "writable": true,
-          "signer": true
+          "writable": true
         },
         {
           "name": "system_program",
@@ -109,7 +108,19 @@
       "accounts": [
         {
           "name": "game",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [103, 97, 109, 101]
+              },
+              {
+                "kind": "arg",
+                "path": "random_hash"
+              }
+            ]
+          }
         },
         {
           "name": "oracle",
@@ -202,6 +213,12 @@
         }
       ],
       "args": [
+        {
+          "name": "_random_hash",
+          "type": {
+            "array": ["u8", 32]
+          }
+        },
         {
           "name": "_secret_key",
           "type": {
@@ -1360,8 +1377,8 @@
     },
     {
       "code": 7101,
-      "name": "GameReadyForOracle",
-      "msg": "Game ready for oracle"
+      "name": "GameWaitingForOracle",
+      "msg": "Game waiting for oracle"
     },
     {
       "code": 7102,
@@ -1453,12 +1470,12 @@
             "type": "pubkey"
           },
           {
-            "name": "created_at",
+            "name": "expires_at",
             "type": "u64"
           },
           {
-            "name": "timeout",
-            "type": "u32"
+            "name": "last_slot",
+            "type": "u64"
           },
           {
             "name": "is_private",
@@ -1621,15 +1638,11 @@
             "type": "pubkey"
           },
           {
-            "name": "timeout",
-            "type": "u32"
-          },
-          {
             "name": "is_private",
             "type": "bool"
           },
           {
-            "name": "created_at",
+            "name": "expires_at",
             "type": "u64"
           }
         ]

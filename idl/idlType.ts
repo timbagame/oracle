@@ -97,16 +97,16 @@ export type Coinflip = {
       "args": []
     },
     {
-      "name": "cleanupPlayerParticipation",
+      "name": "cleanPlayerParticipation",
       "discriminator": [
-        237,
-        76,
-        84,
-        92,
-        145,
-        99,
-        242,
-        160
+        166,
+        212,
+        44,
+        185,
+        199,
+        105,
+        199,
+        79
       ],
       "accounts": [
         {
@@ -155,8 +155,7 @@ export type Coinflip = {
         },
         {
           "name": "player",
-          "writable": true,
-          "signer": true
+          "writable": true
         },
         {
           "name": "systemProgram",
@@ -180,7 +179,24 @@ export type Coinflip = {
       "accounts": [
         {
           "name": "game",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "randomHash"
+              }
+            ]
+          }
         },
         {
           "name": "oracle",
@@ -322,6 +338,15 @@ export type Coinflip = {
         }
       ],
       "args": [
+        {
+          "name": "randomHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
         {
           "name": "secretKey",
           "type": {
@@ -2603,8 +2628,8 @@ export type Coinflip = {
     },
     {
       "code": 7101,
-      "name": "gameReadyForOracle",
-      "msg": "Game ready for oracle"
+      "name": "gameWaitingForOracle",
+      "msg": "Game waiting for oracle"
     },
     {
       "code": 7102,
@@ -2696,12 +2721,12 @@ export type Coinflip = {
             "type": "pubkey"
           },
           {
-            "name": "createdAt",
+            "name": "expiresAt",
             "type": "u64"
           },
           {
-            "name": "timeout",
-            "type": "u32"
+            "name": "lastSlot",
+            "type": "u64"
           },
           {
             "name": "isPrivate",
@@ -2864,15 +2889,11 @@ export type Coinflip = {
             "type": "pubkey"
           },
           {
-            "name": "timeout",
-            "type": "u32"
-          },
-          {
             "name": "isPrivate",
             "type": "bool"
           },
           {
-            "name": "createdAt",
+            "name": "expiresAt",
             "type": "u64"
           }
         ]
