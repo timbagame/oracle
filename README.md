@@ -243,8 +243,7 @@ This prevents normal "not ready" states from being reported as errors in logs an
 - `game_address` (PRIMARY KEY)
 - `min_players` (minimum players required)
 - `max_players` (maximum players allowed)
-- `created_at` (game creation timestamp)
-- `timeout` (game timeout in seconds)
+- `expires_at` (game expiration timestamp)
 - `current_players` (cached player count)
 
 ## 🔒 Security Features

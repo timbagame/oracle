@@ -166,8 +166,7 @@ export class OracleService {
         gameAddress,
         event.minPlayers,
         event.maxPlayers,
-        Number(event.createdAt),
-        event.timeout
+        Number(event.expiresAt)
       );
       this.db.trackGame(gameAddress);
     } catch (error) {
@@ -214,9 +213,8 @@ export class OracleService {
       const gameAccount = await this.program.account.game.fetch(gamePda);
       const blockTime = await this.getBlockchainTime();
 
-      const createdAt = Number(gameAccount.createdAt);
-      const timeout = Number(gameAccount.timeout);
-      const isExpired = blockTime > (createdAt + timeout);
+      const expiresAt = Number(gameAccount.expiresAt);
+      const isExpired = blockTime > expiresAt;
       const isFull = gameAccount.playerCount >= gameAccount.maxPlayers;
       const hasMinPlayers = gameAccount.playerCount >= gameAccount.minPlayers;
 
@@ -225,8 +223,7 @@ export class OracleService {
         gameAddress,
         gameAccount.minPlayers,
         gameAccount.maxPlayers,
-        createdAt,
-        timeout
+        expiresAt
       );
 
       return isFull || (isExpired && hasMinPlayers);
@@ -262,7 +259,8 @@ export class OracleService {
       }
 
       const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
-      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, players.length);
+      const randomHashBuffer = Buffer.from(secretData.randomHash, "hex");
+      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.lastSlot, players.length);
       const winnerPlayerAddress = players[winnerIndex];
 
       if (!winnerPlayerAddress) {
@@ -280,9 +278,9 @@ export class OracleService {
       }
 
       const tx = await this.executeGameCompletion(
-        gamePda,
         winnerAddress,
         gameAccount.creator,
+        randomHashBuffer,
         secretKeyBuffer,
       );
       await this.confirmTransaction(tx);
@@ -298,15 +296,14 @@ export class OracleService {
   }
 
   private async executeGameCompletion(
-    gamePda: PublicKey,
     winnerAddress: PublicKey,
     creatorAddress: PublicKey,
+    randomHashBuffer: Buffer,
     secretKeyBuffer: Buffer
   ): Promise<string> {
     return await this.program.methods
-      .completeGame([...secretKeyBuffer])
+      .completeGame([...randomHashBuffer], [...secretKeyBuffer])
       .accounts({
-        game: gamePda,
         authority: this.adminKeypair.publicKey,
         player: winnerAddress,
         creator: creatorAddress,
@@ -315,26 +312,40 @@ export class OracleService {
       .rpc();
   }
 
-  private calculateWinnerIndex(secretKeyBuffer: Buffer, nPlayers: number): number {
+  private calculateWinnerIndex(secretKeyBuffer: Buffer, lastSlot: bigint, nPlayers: number): number {
     if (nPlayers <= 1) {
       return 0;
     }
+
+    // Hash combination of secret key and last_slot for additional entropy (matching contract logic)
+    const combinedData = Buffer.alloc(40); // 32 bytes secret + 8 bytes last_slot
+    secretKeyBuffer.copy(combinedData, 0, 0, 32);
+
+    // Convert bigint to little-endian bytes (matching contract's to_le_bytes())
+    const lastSlotBytes = Buffer.alloc(8);
+    const lastSlotNum = Number(lastSlot);
+    lastSlotBytes.writeUInt32LE(lastSlotNum & 0xffffffff, 0);
+    lastSlotBytes.writeUInt32LE(Math.floor(lastSlotNum / 0x100000000), 4);
+    lastSlotBytes.copy(combinedData, 32);
+
+    // Hash the combined data (matching contract's hash() function)
+    const entropyHash = createHash('sha256').update(combinedData).digest();
 
     const maxU64 = BigInt('0xFFFFFFFFFFFFFFFF');
     const nPlayersBig = BigInt(nPlayers);
     const maxValid = maxU64 - (maxU64 % nPlayersBig);
 
-    // Try sliding 8-byte windows through the 32-byte secret key
+    // Try sliding 8-byte windows through the hashed entropy
     for (let startPos = 0; startPos <= (32 - 8); startPos++) {
-      // Extract 8 bytes and convert to u64 using little-endian
-      const window = secretKeyBuffer.subarray(startPos, startPos + 8);
+      // Extract 8 bytes and convert to u64 using little-endian (matching contract)
+      const window = entropyHash.subarray(startPos, startPos + 8);
 
       // Convert to BigInt using little-endian format
       let randomU64 = BigInt(0);
       for (let i = 0; i < 8; i++) {
         const byte = window[i];
         if (byte === undefined) {
-          throw new Error("Invalid secret key buffer size");
+          throw new Error("Invalid entropy hash buffer size");
         }
         randomU64 |= BigInt(byte) << (BigInt(i) * BigInt(8));
       }
