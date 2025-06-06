@@ -352,21 +352,21 @@ export class OracleService {
       .rpc();
   }
 
-  private calculateWinnerIndex(secretKeyBuffer: Buffer, lastSlot: bigint, nPlayers: number): number {
+  private calculateWinnerIndex(secretKeyBuffer: Buffer, slotEntropy: bigint, nPlayers: number): number {
     if (nPlayers <= 1) {
       return 0;
     }
 
-    // Hash combination of secret key and last_slot for additional entropy (matching contract logic)
-    const combinedData = Buffer.alloc(40); // 32 bytes secret + 8 bytes last_slot
+    // Hash combination of secret key and slot_entropy for additional entropy (matching contract logic)
+    const combinedData = Buffer.alloc(40); // 32 bytes secret + 8 bytes slot_entropy
     secretKeyBuffer.copy(combinedData, 0, 0, 32);
 
     // Convert bigint to little-endian bytes (matching contract's to_le_bytes())
-    const lastSlotBytes = Buffer.alloc(8);
-    const lastSlotNum = Number(lastSlot);
-    lastSlotBytes.writeUInt32LE(lastSlotNum & 0xffffffff, 0);
-    lastSlotBytes.writeUInt32LE(Math.floor(lastSlotNum / 0x100000000), 4);
-    lastSlotBytes.copy(combinedData, 32);
+    const slotEntropyBytes = Buffer.alloc(8);
+    const slotEntropyNum = Number(slotEntropy);
+    slotEntropyBytes.writeUInt32LE(slotEntropyNum & 0xffffffff, 0);
+    slotEntropyBytes.writeUInt32LE(Math.floor(slotEntropyNum / 0x100000000), 4);
+    slotEntropyBytes.copy(combinedData, 32);
 
     // Hash the combined data (matching contract's hash() function)
     const entropyHash = createHash('sha256').update(combinedData).digest();
