@@ -294,6 +294,7 @@ export class OracleDatabase {
   public cleanupOldRecords(hoursOld: number = 48): { deletedSecrets: number; deletedGames: number; deletedMetadata: number } {
     try {
       const cutoffTime = Date.now() - (hoursOld * 60 * 60 * 1000);
+      const cutoffTimeSeconds = Math.floor(cutoffTime / 1000); // Convert to seconds for expires_at comparison
 
       // Clean up old secret keys
       const secretsStmt = this.db.prepare('DELETE FROM secret_keys WHERE created_at < ?');
@@ -305,9 +306,9 @@ export class OracleDatabase {
       );
       const trackingResult = trackingStmt.run('pending', cutoffTime, 'pending', cutoffTime);
 
-      // Clean up old game metadata
-      const metadataStmt = this.db.prepare('DELETE FROM game_metadata WHERE created_at < ?');
-      const metadataResult = metadataStmt.run(cutoffTime);
+      // Clean up old game metadata - use expires_at since there's no created_at column
+      const metadataStmt = this.db.prepare('DELETE FROM game_metadata WHERE expires_at < ?');
+      const metadataResult = metadataStmt.run(cutoffTimeSeconds);
 
       const deletedCounts = {
         deletedSecrets: secretsResult.changes,
