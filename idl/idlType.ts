@@ -3527,6 +3527,10 @@ export type Coinflip = {
           {
             "name": "currentPlayers",
             "type": "u16"
+          },
+          {
+            "name": "lastSlot",
+            "type": "u64"
           }
         ]
       }
@@ -3569,8 +3573,16 @@ export type Coinflip = {
             "type": "u64"
           },
           {
+            "name": "totalPot",
+            "type": "u64"
+          },
+          {
             "name": "currentPlayers",
             "type": "u16"
+          },
+          {
+            "name": "lastSlot",
+            "type": "u64"
           }
         ]
       }

@@ -2091,6 +2091,10 @@
           {
             "name": "current_players",
             "type": "u16"
+          },
+          {
+            "name": "last_slot",
+            "type": "u64"
           }
         ]
       }
@@ -2133,8 +2137,16 @@
             "type": "u64"
           },
           {
+            "name": "total_pot",
+            "type": "u64"
+          },
+          {
             "name": "current_players",
             "type": "u16"
+          },
+          {
+            "name": "last_slot",
+            "type": "u64"
           }
         ]
       }
