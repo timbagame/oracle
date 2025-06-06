@@ -101,6 +101,7 @@ export class OracleService {
     return [
       this.program.addEventListener("playerJoined", this.handlePlayerJoinedEvent.bind(this)),
       this.program.addEventListener("playerUnjoined", this.handlePlayerUnjoinedEvent.bind(this)),
+      this.program.addEventListener("playerRolled", this.handlePlayerRolledEvent.bind(this)),
       this.program.addEventListener("gameInitialized", this.handleGameInitializedEvent.bind(this)),
       this.program.addEventListener("gameCompleted", this.handleGameCompletedEvent.bind(this)),
       this.program.addEventListener("gameCancelled", this.handleGameCancelledEvent.bind(this))
@@ -156,6 +157,27 @@ export class OracleService {
       }
     } catch (error) {
       console.error("❌ Error in PlayerUnjoined event:", error);
+    }
+  }
+
+  private async handlePlayerRolledEvent(event: any): Promise<void> {
+    try {
+      const gameAddress = event.gameKey.toBase58();
+      const playerAddress = event.player.toBase58();
+
+      console.log(`🎲 Player ${playerAddress} rolled in game ${gameAddress}`);
+
+      // The PlayerRolled event updates slot entropy which affects winner calculation
+      // We should trigger completion check since rolling might make the game ready
+      if (this.db.isGameReadyForCompletion(gameAddress)) {
+        console.log(`🎯 Auto-completing game ${gameAddress} after roll`);
+        const result = await this.completeGame(gameAddress);
+        if (!result.success && !result.notReady) {
+          console.error(`❌ Auto-completion failed: ${result.error}`);
+        }
+      }
+    } catch (error) {
+      console.error("❌ Error in PlayerRolled event:", error);
     }
   }
 
