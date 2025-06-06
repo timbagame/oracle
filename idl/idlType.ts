@@ -1560,16 +1560,16 @@ export type Coinflip = {
       "args": []
     },
     {
-      "name": "rollSnowballGame",
+      "name": "rollGame",
       "discriminator": [
-        173,
-        230,
-        142,
-        146,
-        15,
-        106,
-        20,
-        63
+        176,
+        152,
+        195,
+        115,
+        32,
+        211,
+        176,
+        209
       ],
       "accounts": [
         {
@@ -2946,6 +2946,19 @@ export type Coinflip = {
       ]
     },
     {
+      "name": "playerRolled",
+      "discriminator": [
+        140,
+        47,
+        89,
+        123,
+        203,
+        204,
+        244,
+        6
+      ]
+    },
+    {
       "name": "playerUnjoined",
       "discriminator": [
         191,
@@ -3055,6 +3068,16 @@ export type Coinflip = {
       "msg": "Insufficient balance"
     },
     {
+      "code": 7202,
+      "name": "onlyLastPlayerCanUnjoin",
+      "msg": "Only the last player can unjoin to prevent index gaps"
+    },
+    {
+      "code": 7203,
+      "name": "snowballMultiPlayerUnjoin",
+      "msg": "Cannot unjoin Snowball game with multiple players"
+    },
+    {
       "code": 7300,
       "name": "invalidPlayersCount",
       "msg": "Invalid players count"
@@ -3099,31 +3122,35 @@ export type Coinflip = {
             }
           },
           {
-            "name": "amount",
+            "name": "ticketAmount",
             "type": "u64"
           },
           {
             "name": "maxPlayers",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "minPlayers",
-            "type": "u16"
+            "type": "u32"
           },
           {
-            "name": "playerCount",
-            "type": "u16"
+            "name": "playersCount",
+            "type": "u32"
           },
           {
             "name": "tokenMint",
             "type": "pubkey"
           },
           {
-            "name": "expiresAt",
+            "name": "createdAt",
             "type": "u64"
           },
           {
-            "name": "lastSlot",
+            "name": "timeout",
+            "type": "u32"
+          },
+          {
+            "name": "slotEntropy",
             "type": "u64"
           },
           {
@@ -3131,7 +3158,7 @@ export type Coinflip = {
             "type": "bool"
           },
           {
-            "name": "totalPot",
+            "name": "totalAmount",
             "type": "u64"
           }
         ]
@@ -3147,24 +3174,8 @@ export type Coinflip = {
             "type": "pubkey"
           },
           {
-            "name": "creator",
-            "type": "pubkey"
-          },
-          {
-            "name": "gameType",
-            "type": {
-              "defined": {
-                "name": "gameType"
-              }
-            }
-          },
-          {
-            "name": "amount",
+            "name": "timestamp",
             "type": "u64"
-          },
-          {
-            "name": "tokenMint",
-            "type": "pubkey"
           }
         ]
       }
@@ -3179,32 +3190,16 @@ export type Coinflip = {
             "type": "pubkey"
           },
           {
-            "name": "creator",
-            "type": "pubkey"
-          },
-          {
             "name": "winner",
             "type": "pubkey"
           },
           {
-            "name": "gameType",
-            "type": {
-              "defined": {
-                "name": "gameType"
-              }
-            }
-          },
-          {
-            "name": "amount",
+            "name": "totalAmount",
             "type": "u64"
           },
           {
             "name": "playersCount",
-            "type": "u16"
-          },
-          {
-            "name": "tokenMint",
-            "type": "pubkey"
+            "type": "u32"
           },
           {
             "name": "winnerAmount",
@@ -3212,6 +3207,10 @@ export type Coinflip = {
           },
           {
             "name": "feeAmount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
             "type": "u64"
           }
         ]
@@ -3236,11 +3235,11 @@ export type Coinflip = {
           },
           {
             "name": "maxPlayers",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "minPlayers",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "timeout",
@@ -3275,16 +3274,20 @@ export type Coinflip = {
             }
           },
           {
-            "name": "amount",
+            "name": "ticketAmount",
+            "type": "u64"
+          },
+          {
+            "name": "totalAmount",
             "type": "u64"
           },
           {
             "name": "maxPlayers",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "minPlayers",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "tokenMint",
@@ -3295,8 +3298,12 @@ export type Coinflip = {
             "type": "bool"
           },
           {
-            "name": "expiresAt",
+            "name": "createdAt",
             "type": "u64"
+          },
+          {
+            "name": "timeout",
+            "type": "u32"
           }
         ]
       }
@@ -3364,7 +3371,7 @@ export type Coinflip = {
           },
           {
             "name": "maxPlayers",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "maxTimeout",
@@ -3392,7 +3399,7 @@ export type Coinflip = {
           },
           {
             "name": "maxPlayers",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "maxTimeout",
@@ -3424,7 +3431,7 @@ export type Coinflip = {
           },
           {
             "name": "maxPlayers",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "maxTimeout",
@@ -3460,7 +3467,7 @@ export type Coinflip = {
           },
           {
             "name": "maxPlayers",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "maxTimeout",
@@ -3535,27 +3542,23 @@ export type Coinflip = {
             "type": "pubkey"
           },
           {
-            "name": "gameType",
-            "type": {
-              "defined": {
-                "name": "gameType"
-              }
-            }
-          },
-          {
-            "name": "amount",
+            "name": "totalAmount",
             "type": "u64"
           },
           {
-            "name": "totalPot",
+            "name": "playersCount",
+            "type": "u32"
+          },
+          {
+            "name": "playerIndex",
+            "type": "u32"
+          },
+          {
+            "name": "slotEntropy",
             "type": "u64"
           },
           {
-            "name": "currentPlayers",
-            "type": "u16"
-          },
-          {
-            "name": "lastSlot",
+            "name": "timestamp",
             "type": "u64"
           }
         ]
@@ -3568,7 +3571,39 @@ export type Coinflip = {
         "fields": [
           {
             "name": "playerIndex",
-            "type": "u16"
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "playerRolled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "gameKey",
+            "type": "pubkey"
+          },
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "totalAmount",
+            "type": "u64"
+          },
+          {
+            "name": "playerIndex",
+            "type": "u32"
+          },
+          {
+            "name": "slotEntropy",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64"
           }
         ]
       }
@@ -3587,27 +3622,23 @@ export type Coinflip = {
             "type": "pubkey"
           },
           {
-            "name": "gameType",
-            "type": {
-              "defined": {
-                "name": "gameType"
-              }
-            }
-          },
-          {
-            "name": "amount",
+            "name": "totalAmount",
             "type": "u64"
           },
           {
-            "name": "totalPot",
+            "name": "playersCount",
+            "type": "u32"
+          },
+          {
+            "name": "playerIndex",
+            "type": "u32"
+          },
+          {
+            "name": "slotEntropy",
             "type": "u64"
           },
           {
-            "name": "currentPlayers",
-            "type": "u16"
-          },
-          {
-            "name": "lastSlot",
+            "name": "timestamp",
             "type": "u64"
           }
         ]

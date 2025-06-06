@@ -866,8 +866,8 @@
       "args": []
     },
     {
-      "name": "roll_snowball_game",
-      "discriminator": [173, 230, 142, 146, 15, 106, 20, 63],
+      "name": "roll_game",
+      "discriminator": [176, 152, 195, 115, 32, 211, 176, 209],
       "accounts": [
         {
           "name": "game",
@@ -1546,6 +1546,10 @@
       "discriminator": [39, 144, 49, 106, 108, 210, 183, 38]
     },
     {
+      "name": "PlayerRolled",
+      "discriminator": [140, 47, 89, 123, 203, 204, 244, 6]
+    },
+    {
       "name": "PlayerUnjoined",
       "discriminator": [191, 34, 140, 22, 253, 20, 237, 73]
     },
@@ -1619,6 +1623,16 @@
       "msg": "Insufficient balance"
     },
     {
+      "code": 7202,
+      "name": "OnlyLastPlayerCanUnjoin",
+      "msg": "Only the last player can unjoin to prevent index gaps"
+    },
+    {
+      "code": 7203,
+      "name": "SnowballMultiPlayerUnjoin",
+      "msg": "Cannot unjoin Snowball game with multiple players"
+    },
+    {
       "code": 7300,
       "name": "InvalidPlayersCount",
       "msg": "Invalid players count"
@@ -1663,31 +1677,35 @@
             }
           },
           {
-            "name": "amount",
+            "name": "ticket_amount",
             "type": "u64"
           },
           {
             "name": "max_players",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "min_players",
-            "type": "u16"
+            "type": "u32"
           },
           {
-            "name": "player_count",
-            "type": "u16"
+            "name": "players_count",
+            "type": "u32"
           },
           {
             "name": "token_mint",
             "type": "pubkey"
           },
           {
-            "name": "expires_at",
+            "name": "created_at",
             "type": "u64"
           },
           {
-            "name": "last_slot",
+            "name": "timeout",
+            "type": "u32"
+          },
+          {
+            "name": "slot_entropy",
             "type": "u64"
           },
           {
@@ -1695,7 +1713,7 @@
             "type": "bool"
           },
           {
-            "name": "total_pot",
+            "name": "total_amount",
             "type": "u64"
           }
         ]
@@ -1711,24 +1729,8 @@
             "type": "pubkey"
           },
           {
-            "name": "creator",
-            "type": "pubkey"
-          },
-          {
-            "name": "game_type",
-            "type": {
-              "defined": {
-                "name": "GameType"
-              }
-            }
-          },
-          {
-            "name": "amount",
+            "name": "timestamp",
             "type": "u64"
-          },
-          {
-            "name": "token_mint",
-            "type": "pubkey"
           }
         ]
       }
@@ -1743,32 +1745,16 @@
             "type": "pubkey"
           },
           {
-            "name": "creator",
-            "type": "pubkey"
-          },
-          {
             "name": "winner",
             "type": "pubkey"
           },
           {
-            "name": "game_type",
-            "type": {
-              "defined": {
-                "name": "GameType"
-              }
-            }
-          },
-          {
-            "name": "amount",
+            "name": "total_amount",
             "type": "u64"
           },
           {
             "name": "players_count",
-            "type": "u16"
-          },
-          {
-            "name": "token_mint",
-            "type": "pubkey"
+            "type": "u32"
           },
           {
             "name": "winner_amount",
@@ -1776,6 +1762,10 @@
           },
           {
             "name": "fee_amount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
             "type": "u64"
           }
         ]
@@ -1800,11 +1790,11 @@
           },
           {
             "name": "max_players",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "min_players",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "timeout",
@@ -1839,16 +1829,20 @@
             }
           },
           {
-            "name": "amount",
+            "name": "ticket_amount",
+            "type": "u64"
+          },
+          {
+            "name": "total_amount",
             "type": "u64"
           },
           {
             "name": "max_players",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "min_players",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "token_mint",
@@ -1859,8 +1853,12 @@
             "type": "bool"
           },
           {
-            "name": "expires_at",
+            "name": "created_at",
             "type": "u64"
+          },
+          {
+            "name": "timeout",
+            "type": "u32"
           }
         ]
       }
@@ -1928,7 +1926,7 @@
           },
           {
             "name": "max_players",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "max_timeout",
@@ -1956,7 +1954,7 @@
           },
           {
             "name": "max_players",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "max_timeout",
@@ -1988,7 +1986,7 @@
           },
           {
             "name": "max_players",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "max_timeout",
@@ -2024,7 +2022,7 @@
           },
           {
             "name": "max_players",
-            "type": "u16"
+            "type": "u32"
           },
           {
             "name": "max_timeout",
@@ -2099,27 +2097,23 @@
             "type": "pubkey"
           },
           {
-            "name": "game_type",
-            "type": {
-              "defined": {
-                "name": "GameType"
-              }
-            }
-          },
-          {
-            "name": "amount",
+            "name": "total_amount",
             "type": "u64"
           },
           {
-            "name": "total_pot",
+            "name": "players_count",
+            "type": "u32"
+          },
+          {
+            "name": "player_index",
+            "type": "u32"
+          },
+          {
+            "name": "slot_entropy",
             "type": "u64"
           },
           {
-            "name": "current_players",
-            "type": "u16"
-          },
-          {
-            "name": "last_slot",
+            "name": "timestamp",
             "type": "u64"
           }
         ]
@@ -2132,7 +2126,39 @@
         "fields": [
           {
             "name": "player_index",
-            "type": "u16"
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PlayerRolled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "game_key",
+            "type": "pubkey"
+          },
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "total_amount",
+            "type": "u64"
+          },
+          {
+            "name": "player_index",
+            "type": "u32"
+          },
+          {
+            "name": "slot_entropy",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64"
           }
         ]
       }
@@ -2151,27 +2177,23 @@
             "type": "pubkey"
           },
           {
-            "name": "game_type",
-            "type": {
-              "defined": {
-                "name": "GameType"
-              }
-            }
-          },
-          {
-            "name": "amount",
+            "name": "total_amount",
             "type": "u64"
           },
           {
-            "name": "total_pot",
+            "name": "players_count",
+            "type": "u32"
+          },
+          {
+            "name": "player_index",
+            "type": "u32"
+          },
+          {
+            "name": "slot_entropy",
             "type": "u64"
           },
           {
-            "name": "current_players",
-            "type": "u16"
-          },
-          {
-            "name": "last_slot",
+            "name": "timestamp",
             "type": "u64"
           }
         ]
