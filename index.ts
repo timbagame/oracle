@@ -80,7 +80,11 @@ const API_DOCUMENTATION = `
 
       <div class="endpoint">
         <span class="method post">POST</span> <code>/generate-hash</code>
-        <div class="description">Generate new game secrets (random hash and game address)</div>
+        <div class="description">
+          Generate new game secrets (random hash and game address)<br>
+          <strong>Body:</strong> <code>{ "gameType": "coinflip" | "giveaway" | "dumbflip" | "snowball" }</code><br>
+          <strong>Note:</strong> For dumbflip and snowball games, also returns the secret key
+        </div>
       </div>
 
       <div class="endpoint">
@@ -125,13 +129,34 @@ async function handleHealth(): Promise<Response> {
   });
 }
 
-async function handleGenerateHash(): Promise<Response> {
-  const secrets = oracle.generateGameSecrets();
-  return createResponse({
-    success: true,
-    randomHash: secrets.randomHash,
-    gameAddress: secrets.gameAddress
-  });
+async function handleGenerateHash(request: Request): Promise<Response> {
+  try {
+    // Parse request body to get game type if provided
+    let gameType: string | undefined;
+    try {
+      const body = await request.json() as { gameType?: string };
+      gameType = body?.gameType?.toLowerCase();
+    } catch {
+      // No body or invalid JSON, use default behavior
+    }
+
+    const secrets = oracle.generateGameSecrets(gameType);
+    const response: any = {
+      success: true,
+      randomHash: secrets.randomHash,
+      gameAddress: secrets.gameAddress
+    };
+
+    // Include secret key for dumbflip and snowball games
+    if (secrets.secretKey) {
+      response.secretKey = secrets.secretKey;
+    }
+
+    return createResponse(response);
+  } catch (error: any) {
+    console.error('❌ Error generating hash:', error);
+    return createErrorResponse('Failed to generate hash', 500);
+  }
 }
 
 async function handleStats(): Promise<Response> {
@@ -164,7 +189,7 @@ const server = Bun.serve({
         case path === '/health' && method === 'GET':
           return await handleHealth();
         case path === '/generate-hash' && method === 'POST':
-          return await handleGenerateHash();
+          return await handleGenerateHash(request);
         case path === '/stats' && method === 'GET':
           return await handleStats();
         case path === '/' && method === 'GET':

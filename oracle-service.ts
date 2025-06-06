@@ -24,6 +24,7 @@ interface GameCompletionResult {
 interface GameSecrets {
   randomHash: string;
   gameAddress: string;
+  secretKey?: string; // Only for dumbflip and snowball games
 }
 
 interface CompletionStats {
@@ -185,7 +186,7 @@ export class OracleService {
     console.log(`🚫 Game cancelled: ${gameAddress}`);
   }
 
-  public generateGameSecrets(): GameSecrets {
+  public generateGameSecrets(gameType?: string): GameSecrets {
     const secretKey = randomBytes(SECRET_KEY_LENGTH);
     const randomHash = createHash('sha256').update(secretKey).digest();
     const gamePda = this.getGamePDA(randomHash);
@@ -194,10 +195,17 @@ export class OracleService {
     this.db.saveSecretKey(gameAddress, secretKey.toString('hex'), randomHash.toString('hex'));
     this.db.trackGame(gameAddress);
 
-    return {
+    const result: GameSecrets = {
       randomHash: randomHash.toString('hex'),
       gameAddress
     };
+
+    // For dumbflip and snowball games, also return the secret key
+    if (gameType === 'dumbflip' || gameType === 'snowball') {
+      result.secretKey = secretKey.toString('hex');
+    }
+
+    return result;
   }
 
   public async isGameReadyForCompletion(gamePda: PublicKey): Promise<boolean> {
