@@ -1859,6 +1859,10 @@
           {
             "name": "timeout",
             "type": "u32"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
           }
         ]
       }

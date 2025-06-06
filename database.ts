@@ -21,6 +21,7 @@ interface GameMetadata {
   max_players: number;
   expires_at: number;
   current_players: number;
+  nonce?: number;
 }
 
 interface DatabaseStats {
@@ -90,7 +91,8 @@ export class OracleDatabase {
         min_players INTEGER NOT NULL,
         max_players INTEGER NOT NULL,
         expires_at INTEGER NOT NULL,
-        current_players INTEGER DEFAULT 0
+        current_players INTEGER DEFAULT 0,
+        nonce INTEGER
       )
     `);
 
@@ -147,12 +149,19 @@ export class OracleDatabase {
   }
 
   // Game metadata management
-  public saveGameMetadata(gameAddress: string, minPlayers: number, maxPlayers: number, expiresAt: number): void {
+  public saveGameMetadata(gameAddress: string, minPlayers: number, maxPlayers: number, expiresAt: number, nonce?: number): void {
     try {
-      const stmt = this.db.prepare(
-        'INSERT OR REPLACE INTO game_metadata (game_address, min_players, max_players, expires_at, current_players) VALUES (?, ?, ?, ?, 0)'
-      );
-      stmt.run(gameAddress, minPlayers, maxPlayers, expiresAt);
+      if (nonce !== undefined) {
+        const stmt = this.db.prepare(
+          'INSERT OR REPLACE INTO game_metadata (game_address, min_players, max_players, expires_at, current_players, nonce) VALUES (?, ?, ?, ?, 0, ?)'
+        );
+        stmt.run(gameAddress, minPlayers, maxPlayers, expiresAt, nonce);
+      } else {
+        const stmt = this.db.prepare(
+          'INSERT OR REPLACE INTO game_metadata (game_address, min_players, max_players, expires_at, current_players) VALUES (?, ?, ?, ?, 0)'
+        );
+        stmt.run(gameAddress, minPlayers, maxPlayers, expiresAt);
+      }
     } catch (error) {
       console.error("❌ Failed to save game metadata:", error);
     }

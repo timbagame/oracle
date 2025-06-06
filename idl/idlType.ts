@@ -3304,6 +3304,10 @@ export type Coinflip = {
           {
             "name": "timeout",
             "type": "u32"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
           }
         ]
       }

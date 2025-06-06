@@ -121,7 +121,7 @@ export class OracleService {
     try {
       const gameAddress = event.gameKey.toBase58();
       const playerAddress = event.player.toBase58();
-      const currentPlayers = Number(event.currentPlayers);
+      const currentPlayers = Number(event.playersCount);
 
       this.db.updatePlayerCount(gameAddress, currentPlayers);
       this.db.addPlayerToGame(gameAddress, playerAddress);
@@ -142,7 +142,7 @@ export class OracleService {
     try {
       const gameAddress = event.gameKey.toBase58();
       const playerAddress = event.player.toBase58();
-      const currentPlayers = Number(event.currentPlayers);
+      const currentPlayers = Number(event.playersCount);
 
       this.db.updatePlayerCount(gameAddress, currentPlayers);
       this.db.removePlayerFromGame(gameAddress, playerAddress);
@@ -162,12 +162,14 @@ export class OracleService {
   private async handleGameInitializedEvent(event: any): Promise<void> {
     try {
       const gameAddress = event.gameKey.toBase58();
+      const expiresAt = Number(event.createdAt) + Number(event.timeout);
 
       this.db.saveGameMetadata(
         gameAddress,
         event.minPlayers,
         event.maxPlayers,
-        Number(event.expiresAt)
+        expiresAt,
+        Number(event.nonce)
       );
       this.db.trackGame(gameAddress);
     } catch (error) {
@@ -221,10 +223,10 @@ export class OracleService {
       const gameAccount = await this.program.account.game.fetch(gamePda);
       const blockTime = await this.getBlockchainTime();
 
-      const expiresAt = Number(gameAccount.expiresAt);
+      const expiresAt = Number(gameAccount.createdAt) + Number(gameAccount.timeout);
       const isExpired = blockTime > expiresAt;
-      const isFull = gameAccount.playerCount >= gameAccount.maxPlayers;
-      const hasMinPlayers = gameAccount.playerCount >= gameAccount.minPlayers;
+      const isFull = gameAccount.playersCount >= gameAccount.maxPlayers;
+      const hasMinPlayers = gameAccount.playersCount >= gameAccount.minPlayers;
 
       // Update cache
       this.db.saveGameMetadata(
@@ -268,7 +270,7 @@ export class OracleService {
 
       const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
       const randomHashBuffer = Buffer.from(secretData.randomHash, "hex");
-      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.lastSlot, players.length);
+      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.slotEntropy, players.length);
       const winnerPlayerAddress = players[winnerIndex];
 
       if (!winnerPlayerAddress) {
@@ -285,11 +287,18 @@ export class OracleService {
         return { success: false, notReady: true };
       }
 
+      // Get the nonce from metadata
+      const metadata = this.db.getGameMetadata(gameAddress);
+      if (!metadata?.nonce) {
+        return { success: false, error: "No nonce found for game" };
+      }
+
       const tx = await this.executeGameCompletion(
         winnerAddress,
         gameAccount.creator,
         randomHashBuffer,
         secretKeyBuffer,
+        metadata.nonce
       );
       await this.confirmTransaction(tx);
 
@@ -303,17 +312,18 @@ export class OracleService {
     }
   }
 
-  private async executeGameCompletion(
+    private async executeGameCompletion(
     winnerAddress: PublicKey,
     creatorAddress: PublicKey,
     randomHashBuffer: Buffer,
-    secretKeyBuffer: Buffer
+    secretKeyBuffer: Buffer,
+    nonce: number
   ): Promise<string> {
     return await this.program.methods
-      .completeGame([...randomHashBuffer], [...secretKeyBuffer])
+      .completeGame([...randomHashBuffer], [...secretKeyBuffer], nonce)
       .accounts({
         authority: this.adminKeypair.publicKey,
-        player: winnerAddress,
+        winner: winnerAddress,
         creator: creatorAddress,
       })
       .signers([this.adminKeypair])
