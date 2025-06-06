@@ -192,8 +192,17 @@ export type Coinflip = {
                 ]
               },
               {
+                "kind": "account",
+                "path": "game.token_mint",
+                "account": "game"
+              },
+              {
                 "kind": "arg",
                 "path": "randomHash"
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
               }
             ]
           }
@@ -221,7 +230,7 @@ export type Coinflip = {
           "signer": true
         },
         {
-          "name": "playerParticipation",
+          "name": "winnerParticipation",
           "writable": true,
           "pda": {
             "seeds": [
@@ -256,13 +265,13 @@ export type Coinflip = {
               },
               {
                 "kind": "account",
-                "path": "player"
+                "path": "winner"
               }
             ]
           }
         },
         {
-          "name": "player",
+          "name": "winner",
           "writable": true
         },
         {
@@ -270,7 +279,7 @@ export type Coinflip = {
           "writable": true
         },
         {
-          "name": "playerBalance",
+          "name": "winnerBalance",
           "writable": true,
           "pda": {
             "seeds": [
@@ -295,7 +304,7 @@ export type Coinflip = {
               },
               {
                 "kind": "account",
-                "path": "player"
+                "path": "winner"
               },
               {
                 "kind": "account",
@@ -355,6 +364,10 @@ export type Coinflip = {
               32
             ]
           }
+        },
+        {
+          "name": "nonce",
+          "type": "u64"
         }
       ]
     },
@@ -386,19 +399,28 @@ export type Coinflip = {
                 ]
               },
               {
+                "kind": "account",
+                "path": "tokenMint"
+              },
+              {
                 "kind": "arg",
                 "path": "randomHash"
+              },
+              {
+                "kind": "account",
+                "path": "game_token.nonce",
+                "account": "gameToken"
               }
             ]
           }
         },
         {
-          "name": "player",
+          "name": "creator",
           "writable": true,
           "signer": true
         },
         {
-          "name": "playerBalance",
+          "name": "creatorBalance",
           "writable": true,
           "pda": {
             "seeds": [
@@ -423,7 +445,7 @@ export type Coinflip = {
               },
               {
                 "kind": "account",
-                "path": "player"
+                "path": "creator"
               },
               {
                 "kind": "account",
@@ -507,13 +529,13 @@ export type Coinflip = {
           }
         },
         {
-          "name": "playerTokenAccount",
+          "name": "creatorTokenAccount",
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "account",
-                "path": "player"
+                "path": "creator"
               },
               {
                 "kind": "const",
@@ -3295,6 +3317,10 @@ export type Coinflip = {
           {
             "name": "enabled",
             "type": "bool"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
           }
         ]
       }

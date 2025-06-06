@@ -116,8 +116,17 @@
                 "value": [103, 97, 109, 101]
               },
               {
+                "kind": "account",
+                "path": "game.token_mint",
+                "account": "Game"
+              },
+              {
                 "kind": "arg",
                 "path": "random_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
               }
             ]
           }
@@ -138,7 +147,7 @@
           "signer": true
         },
         {
-          "name": "player_participation",
+          "name": "winner_participation",
           "writable": true,
           "pda": {
             "seeds": [
@@ -155,13 +164,13 @@
               },
               {
                 "kind": "account",
-                "path": "player"
+                "path": "winner"
               }
             ]
           }
         },
         {
-          "name": "player",
+          "name": "winner",
           "writable": true
         },
         {
@@ -169,7 +178,7 @@
           "writable": true
         },
         {
-          "name": "player_balance",
+          "name": "winner_balance",
           "writable": true,
           "pda": {
             "seeds": [
@@ -181,7 +190,7 @@
               },
               {
                 "kind": "account",
-                "path": "player"
+                "path": "winner"
               },
               {
                 "kind": "account",
@@ -224,6 +233,10 @@
           "type": {
             "array": ["u8", 32]
           }
+        },
+        {
+          "name": "_nonce",
+          "type": "u64"
         }
       ]
     },
@@ -241,19 +254,28 @@
                 "value": [103, 97, 109, 101]
               },
               {
+                "kind": "account",
+                "path": "token_mint"
+              },
+              {
                 "kind": "arg",
                 "path": "random_hash"
+              },
+              {
+                "kind": "account",
+                "path": "game_token.nonce",
+                "account": "GameToken"
               }
             ]
           }
         },
         {
-          "name": "player",
+          "name": "creator",
           "writable": true,
           "signer": true
         },
         {
-          "name": "player_balance",
+          "name": "creator_balance",
           "writable": true,
           "pda": {
             "seeds": [
@@ -265,7 +287,7 @@
               },
               {
                 "kind": "account",
-                "path": "player"
+                "path": "creator"
               },
               {
                 "kind": "account",
@@ -320,13 +342,13 @@
           }
         },
         {
-          "name": "player_token_account",
+          "name": "creator_token_account",
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "account",
-                "path": "player"
+                "path": "creator"
               },
               {
                 "kind": "const",
@@ -1859,6 +1881,10 @@
           {
             "name": "enabled",
             "type": "bool"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
           }
         ]
       }
