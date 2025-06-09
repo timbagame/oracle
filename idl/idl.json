@@ -1613,6 +1613,11 @@
       "msg": "Invalid game type"
     },
     {
+      "code": 7106,
+      "name": "GameExpired",
+      "msg": "Game expired"
+    },
+    {
       "code": 7200,
       "name": "AlreadyJoined",
       "msg": "Player already joined"
@@ -2131,6 +2136,10 @@
           {
             "name": "player_index",
             "type": "u32"
+          },
+          {
+            "name": "player_amount",
+            "type": "u64"
           }
         ]
       }

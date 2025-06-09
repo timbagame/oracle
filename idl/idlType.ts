@@ -3058,6 +3058,11 @@ export type Coinflip = {
       "msg": "Invalid game type"
     },
     {
+      "code": 7106,
+      "name": "gameExpired",
+      "msg": "Game expired"
+    },
+    {
       "code": 7200,
       "name": "alreadyJoined",
       "msg": "Player already joined"
@@ -3576,6 +3581,10 @@ export type Coinflip = {
           {
             "name": "playerIndex",
             "type": "u32"
+          },
+          {
+            "name": "playerAmount",
+            "type": "u64"
           }
         ]
       }
