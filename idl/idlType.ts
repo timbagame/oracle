@@ -14,16 +14,16 @@ export type Coinflip = {
   },
   "instructions": [
     {
-      "name": "cancelGame",
+      "name": "closeGame",
       "discriminator": [
-        121,
-        194,
-        154,
-        118,
-        103,
-        235,
-        149,
-        52
+        237,
+        236,
+        157,
+        201,
+        253,
+        20,
+        248,
+        67
       ],
       "accounts": [
         {
@@ -2755,16 +2755,16 @@ export type Coinflip = {
   ],
   "events": [
     {
-      "name": "gameCancelled",
+      "name": "gameClosed",
       "discriminator": [
-        113,
-        20,
-        200,
-        104,
-        76,
-        35,
-        9,
-        241
+        178,
+        203,
+        179,
+        224,
+        43,
+        18,
+        209,
+        4
       ]
     },
     {
@@ -3088,7 +3088,7 @@ export type Coinflip = {
       }
     },
     {
-      "name": "gameCancelled",
+      "name": "gameClosed",
       "type": {
         "kind": "struct",
         "fields": [
