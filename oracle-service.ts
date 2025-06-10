@@ -104,7 +104,7 @@ export class OracleService {
       this.program.addEventListener("playerRolled", this.handlePlayerRolledEvent.bind(this)),
       this.program.addEventListener("gameInitialized", this.handleGameInitializedEvent.bind(this)),
       this.program.addEventListener("gameCompleted", this.handleGameCompletedEvent.bind(this)),
-      this.program.addEventListener("gameCancelled", this.handleGameCancelledEvent.bind(this))
+      this.program.addEventListener("gameClosed", this.handleGameClosedEvent.bind(this))
     ];
   }
 
@@ -190,8 +190,7 @@ export class OracleService {
         gameAddress,
         event.minPlayers,
         event.maxPlayers,
-        expiresAt,
-        Number(event.nonce)
+        expiresAt
       );
       this.db.trackGame(gameAddress);
     } catch (error) {
@@ -204,10 +203,10 @@ export class OracleService {
     this.db.markGameCompleted(gameAddress);
   }
 
-  private handleGameCancelledEvent(event: any): void {
+  private handleGameClosedEvent(event: any): void {
     const gameAddress = event.gameKey.toBase58();
     this.db.markGameCancelled(gameAddress);
-    console.log(`🚫 Game cancelled: ${gameAddress}`);
+    console.log(`🚫 Game closed: ${gameAddress}`);
   }
 
   public generateGameSecrets(gameType?: string): GameSecrets {
@@ -292,7 +291,7 @@ export class OracleService {
 
       const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
       const randomHashBuffer = Buffer.from(secretData.randomHash, "hex");
-      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.slotEntropy, players.length);
+      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.lastSlot, players.length);
       const winnerPlayerAddress = players[winnerIndex];
 
       if (!winnerPlayerAddress) {
@@ -309,18 +308,11 @@ export class OracleService {
         return { success: false, notReady: true };
       }
 
-      // Get the nonce from metadata
-      const metadata = this.db.getGameMetadata(gameAddress);
-      if (!metadata?.nonce) {
-        return { success: false, error: "No nonce found for game" };
-      }
-
       const tx = await this.executeGameCompletion(
         winnerAddress,
         gameAccount.creator,
         randomHashBuffer,
-        secretKeyBuffer,
-        metadata.nonce
+        secretKeyBuffer
       );
       await this.confirmTransaction(tx);
 
@@ -334,15 +326,14 @@ export class OracleService {
     }
   }
 
-    private async executeGameCompletion(
+  private async executeGameCompletion(
     winnerAddress: PublicKey,
     creatorAddress: PublicKey,
     randomHashBuffer: Buffer,
-    secretKeyBuffer: Buffer,
-    nonce: number
+    secretKeyBuffer: Buffer
   ): Promise<string> {
     return await this.program.methods
-      .completeGame([...randomHashBuffer], [...secretKeyBuffer], nonce)
+      .completeGame([...randomHashBuffer], [...secretKeyBuffer])
       .accounts({
         authority: this.adminKeypair.publicKey,
         winner: winnerAddress,
@@ -352,21 +343,21 @@ export class OracleService {
       .rpc();
   }
 
-  private calculateWinnerIndex(secretKeyBuffer: Buffer, slotEntropy: bigint, nPlayers: number): number {
+  private calculateWinnerIndex(secretKeyBuffer: Buffer, lastSlot: bigint, nPlayers: number): number {
     if (nPlayers <= 1) {
       return 0;
     }
 
-    // Hash combination of secret key and slot_entropy for additional entropy (matching contract logic)
-    const combinedData = Buffer.alloc(40); // 32 bytes secret + 8 bytes slot_entropy
+    // Hash combination of secret key and last_slot for additional entropy (matching contract logic)
+    const combinedData = Buffer.alloc(40); // 32 bytes secret + 8 bytes last_slot
     secretKeyBuffer.copy(combinedData, 0, 0, 32);
 
     // Convert bigint to little-endian bytes (matching contract's to_le_bytes())
-    const slotEntropyBytes = Buffer.alloc(8);
-    const slotEntropyNum = Number(slotEntropy);
-    slotEntropyBytes.writeUInt32LE(slotEntropyNum & 0xffffffff, 0);
-    slotEntropyBytes.writeUInt32LE(Math.floor(slotEntropyNum / 0x100000000), 4);
-    slotEntropyBytes.copy(combinedData, 32);
+    const lastSlotBytes = Buffer.alloc(8);
+    const lastSlotNum = Number(lastSlot);
+    lastSlotBytes.writeUInt32LE(lastSlotNum & 0xffffffff, 0);
+    lastSlotBytes.writeUInt32LE(Math.floor(lastSlotNum / 0x100000000), 4);
+    lastSlotBytes.copy(combinedData, 32);
 
     // Hash the combined data (matching contract's hash() function)
     const entropyHash = createHash('sha256').update(combinedData).digest();
