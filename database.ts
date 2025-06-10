@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 // Constants
 const DATABASE_FILE = "oracle.sqlite";
 const DEFAULT_STATUS = "pending";
+const PENDING_SCAN_LIMIT = 50;
 
 // Types
 interface SecretKeyData {
@@ -87,102 +88,121 @@ export class OracleDatabase {
     `);
   }
 
+  private executeDbOperation<T>(operation: () => T, errorMessage: string, defaultValue?: T): T {
+    try {
+      return operation();
+    } catch (error) {
+      console.error(`❌ ${errorMessage}:`, error);
+      if (defaultValue !== undefined) {
+        return defaultValue;
+      }
+      throw new Error(errorMessage);
+    }
+  }
+
   // Secret key management
   public saveSecretKey(gameAddress: string, secretKey: string, randomHash: string): void {
-    try {
-      const stmt = this.db.prepare(
-        'INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)'
-      );
-      stmt.run(gameAddress, secretKey, randomHash, Date.now());
-    } catch (error) {
-      console.error("❌ Failed to save secret key:", error);
-      throw new Error(`Failed to save secret key for game ${gameAddress}`);
-    }
+    this.executeDbOperation(
+      () => {
+        const stmt = this.db.prepare(
+          'INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)'
+        );
+        stmt.run(gameAddress, secretKey, randomHash, Date.now());
+      },
+      `Failed to save secret key for game ${gameAddress}`
+    );
   }
 
   public getSecretKey(gameAddress: string): SecretKeyData | null {
-    try {
-      const stmt = this.db.prepare(
-        'SELECT secret_key, random_hash FROM secret_keys WHERE game_address = ? AND used = FALSE'
-      );
-      const result = stmt.get(gameAddress) as { secret_key: string; random_hash: string } | undefined;
+    return this.executeDbOperation(
+      () => {
+        const stmt = this.db.prepare(
+          'SELECT secret_key, random_hash FROM secret_keys WHERE game_address = ? AND used = FALSE'
+        );
+        const result = stmt.get(gameAddress) as { secret_key: string; random_hash: string } | undefined;
 
-      return result ? {
-        secretKey: result.secret_key,
-        randomHash: result.random_hash
-      } : null;
-    } catch (error) {
-      console.error("❌ Failed to get secret key:", error);
-      return null;
-    }
+        return result ? {
+          secretKey: result.secret_key,
+          randomHash: result.random_hash
+        } : null;
+      },
+      "Failed to get secret key",
+      null
+    );
   }
 
   public markSecretKeyUsed(gameAddress: string): void {
-    try {
-      const stmt = this.db.prepare('UPDATE secret_keys SET used = TRUE WHERE game_address = ?');
-      stmt.run(gameAddress);
-    } catch (error) {
-      console.error("❌ Failed to mark secret key as used:", error);
-    }
+    this.executeDbOperation(
+      () => {
+        const stmt = this.db.prepare('UPDATE secret_keys SET used = TRUE WHERE game_address = ?');
+        stmt.run(gameAddress);
+      },
+      "Failed to mark secret key as used"
+    );
   }
 
   // Game tracking
   public trackGame(gameAddress: string): void {
-    try {
-      const stmt = this.db.prepare(
-        'INSERT OR REPLACE INTO game_tracking (game_address, status, last_checked) VALUES (?, ?, ?)'
-      );
-      stmt.run(gameAddress, DEFAULT_STATUS, Date.now());
-    } catch (error) {
-      console.error("❌ Failed to track game:", error);
-    }
+    this.executeDbOperation(
+      () => {
+        const stmt = this.db.prepare(
+          'INSERT OR REPLACE INTO game_tracking (game_address, status, last_checked) VALUES (?, ?, ?)'
+        );
+        stmt.run(gameAddress, DEFAULT_STATUS, Date.now());
+      },
+      "Failed to track game"
+    );
   }
 
   public markGameCompleted(gameAddress: string): void {
-    try {
-      const now = Date.now();
-      const stmt = this.db.prepare(
-        'UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?'
-      );
-      stmt.run('completed', now, now, gameAddress);
-    } catch (error) {
-      console.error("❌ Failed to mark game as completed:", error);
-    }
+    this.executeDbOperation(
+      () => {
+        const now = Date.now();
+        const stmt = this.db.prepare(
+          'UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?'
+        );
+        stmt.run('completed', now, now, gameAddress);
+      },
+      "Failed to mark game as completed"
+    );
   }
 
   public markGameClosed(gameAddress: string): void {
-    try {
-      const now = Date.now();
-      const stmt = this.db.prepare(
-        'UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?'
-      );
-      stmt.run('cancelled', now, now, gameAddress);
-    } catch (error) {
-      console.error("❌ Failed to mark game as closed:", error);
-    }
+    this.executeDbOperation(
+      () => {
+        const now = Date.now();
+        const stmt = this.db.prepare(
+          'UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?'
+        );
+        stmt.run('cancelled', now, now, gameAddress);
+      },
+      "Failed to mark game as closed"
+    );
   }
 
   public incrementCompletionAttempts(gameAddress: string): void {
-    try {
-      const stmt = this.db.prepare(
-        'UPDATE game_tracking SET completion_attempts = completion_attempts + 1, last_checked = ? WHERE game_address = ?'
-      );
-      stmt.run(Date.now(), gameAddress);
-    } catch (error) {
-      console.error("❌ Failed to increment completion attempts:", error);
-    }
+    this.executeDbOperation(
+      () => {
+        const stmt = this.db.prepare(
+          'UPDATE game_tracking SET completion_attempts = completion_attempts + 1, last_checked = ? WHERE game_address = ?'
+        );
+        stmt.run(Date.now(), gameAddress);
+      },
+      "Failed to increment completion attempts"
+    );
   }
 
   public getPendingGames(): PendingGame[] {
-    try {
-      const stmt = this.db.prepare(
-        'SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT 50'
-      );
-      return stmt.all(DEFAULT_STATUS) as PendingGame[];
-    } catch (error) {
-      console.error("❌ Failed to get pending games:", error);
-      return [];
-    }
+    return this.executeDbOperation(
+      () => {
+        const stmt = this.db.prepare(
+          'SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?'
+        );
+        return stmt.all(DEFAULT_STATUS, PENDING_SCAN_LIMIT) as PendingGame[];
+      },
+      "Failed to get pending games",
+      []
+    );
   }
 
   // Statistics
@@ -267,49 +287,53 @@ export class OracleDatabase {
   }
 
   public addPlayerToGame(gameAddress: string, playerAddress: string): void {
-    try {
-      const stmt = this.db.prepare(
-        'INSERT OR IGNORE INTO game_players (game_address, player_address, joined_at) VALUES (?, ?, ?)'
-      );
-      stmt.run(gameAddress, playerAddress, Date.now());
-    } catch (error) {
-      console.error("❌ Failed to add player to game:", error);
-    }
+    this.executeDbOperation(
+      () => {
+        const stmt = this.db.prepare(
+          'INSERT OR IGNORE INTO game_players (game_address, player_address, joined_at) VALUES (?, ?, ?)'
+        );
+        stmt.run(gameAddress, playerAddress, Date.now());
+      },
+      "Failed to add player to game"
+    );
   }
 
   public removePlayerFromGame(gameAddress: string, playerAddress: string): void {
-    try {
-      const stmt = this.db.prepare(
-        'DELETE FROM game_players WHERE game_address = ? AND player_address = ?'
-      );
-      stmt.run(gameAddress, playerAddress);
-    } catch (error) {
-      console.error("❌ Failed to remove player from game:", error);
-    }
+    this.executeDbOperation(
+      () => {
+        const stmt = this.db.prepare(
+          'DELETE FROM game_players WHERE game_address = ? AND player_address = ?'
+        );
+        stmt.run(gameAddress, playerAddress);
+      },
+      "Failed to remove player from game"
+    );
   }
 
   public clearStalePlayersForGame(gameAddress: string): void {
-    try {
-      const stmt = this.db.prepare(
-        'DELETE FROM game_players WHERE game_address = ?'
-      );
-      stmt.run(gameAddress);
-      console.log(`🧹 Cleared stale player data for game ${gameAddress}`);
-    } catch (error) {
-      console.error("❌ Failed to clear stale players for game:", error);
-    }
+    this.executeDbOperation(
+      () => {
+        const stmt = this.db.prepare(
+          'DELETE FROM game_players WHERE game_address = ?'
+        );
+        stmt.run(gameAddress);
+        console.log(`🧹 Cleared stale player data for game ${gameAddress}`);
+      },
+      "Failed to clear stale players for game"
+    );
   }
 
   public getGamePlayers(gameAddress: string): string[] {
-    try {
-      const stmt = this.db.prepare(
-        'SELECT player_address FROM game_players WHERE game_address = ? ORDER BY joined_at ASC'
-      );
-      const results = stmt.all(gameAddress) as { player_address: string }[];
-      return results.map(row => row.player_address);
-    } catch (error) {
-      console.error("❌ Failed to get game players:", error);
-      return [];
-    }
+    return this.executeDbOperation(
+      () => {
+        const stmt = this.db.prepare(
+          'SELECT player_address FROM game_players WHERE game_address = ? ORDER BY joined_at ASC'
+        );
+        const results = stmt.all(gameAddress) as { player_address: string }[];
+        return results.map(row => row.player_address);
+      },
+      "Failed to get game players",
+      []
+    );
   }
 }

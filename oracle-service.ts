@@ -13,6 +13,13 @@ const SECRET_KEY_LENGTH = 32;
 const MAX_COMPLETION_ATTEMPTS = 5;
 const DEFAULT_DELAY_MS = 1000;
 
+// Game types that include secret keys in response
+const GAMES_WITH_SECRET_KEYS = new Set(['dumbflip', 'snowball']);
+
+// Event handling types
+type EventHandler = (event: any) => Promise<void> | void;
+type GameEvent = 'playerJoined' | 'playerUnjoined' | 'playerRolled' | 'gameInitialized' | 'gameCompleted' | 'gameClosed' | 'playerParticipationCleaned';
+
 // Types
 interface GameCompletionResult {
   success: boolean;
@@ -24,7 +31,7 @@ interface GameCompletionResult {
 interface GameSecrets {
   randomHash: string;
   gameAddress: string;
-  secretKey?: string; // Only for dumbflip and snowball games
+  secretKey?: string;
 }
 
 interface CompletionStats {
@@ -98,15 +105,19 @@ export class OracleService {
   }
 
   private async setupEventListeners(): Promise<number[]> {
-    return [
-      this.program.addEventListener("playerJoined", this.handlePlayerJoinedEvent.bind(this)),
-      this.program.addEventListener("playerUnjoined", this.handlePlayerUnjoinedEvent.bind(this)),
-      this.program.addEventListener("playerRolled", this.handlePlayerRolledEvent.bind(this)),
-      this.program.addEventListener("gameInitialized", this.handleGameInitializedEvent.bind(this)),
-      this.program.addEventListener("gameCompleted", this.handleGameCompletedEvent.bind(this)),
-      this.program.addEventListener("gameClosed", this.handleGameClosedEvent.bind(this)),
-      this.program.addEventListener("playerParticipationCleaned", this.handlePlayerParticipationCleanedEvent.bind(this))
+    const eventMap: Array<[GameEvent, EventHandler]> = [
+      ['playerJoined', this.handlePlayerEvent.bind(this, 'joined')],
+      ['playerUnjoined', this.handlePlayerEvent.bind(this, 'unjoined')],
+      ['playerRolled', this.handlePlayerEvent.bind(this, 'rolled')],
+      ['gameInitialized', this.handleGameInitialized.bind(this)],
+      ['gameCompleted', this.handleGameStatusChange.bind(this, 'completed')],
+      ['gameClosed', this.handleGameStatusChange.bind(this, 'closed')],
+      ['playerParticipationCleaned', this.handlePlayerCleaned.bind(this)]
     ];
+
+    return eventMap.map(([eventName, handler]) =>
+      this.program.addEventListener(eventName, handler)
+    );
   }
 
   public async stopEventListening(): Promise<void> {
@@ -119,101 +130,76 @@ export class OracleService {
     this.isListening = false;
   }
 
-  private async handlePlayerJoinedEvent(event: any): Promise<void> {
+  private async handlePlayerEvent(action: 'joined' | 'unjoined' | 'rolled', event: any): Promise<void> {
+    const { gameAddress, playerAddress } = this.extractEventData(event);
+
     try {
-      const gameAddress = event.gameKey.toBase58();
-      const playerAddress = event.player.toBase58();
+      // Handle player database operations
+      switch (action) {
+        case 'joined':
+          this.db.addPlayerToGame(gameAddress, playerAddress);
+          break;
+        case 'unjoined':
+          this.db.removePlayerFromGame(gameAddress, playerAddress);
+          break;
+        case 'rolled':
+          console.log(`🎲 Player ${playerAddress} rolled in game ${gameAddress}`);
+          break;
+      }
 
-      this.db.addPlayerToGame(gameAddress, playerAddress);
+      // Check for auto-completion after player events
+      await this.tryAutoComplete(event.gameKey, gameAddress, action);
+    } catch (error) {
+      console.error(`❌ Error in player ${action} event:`, error);
+    }
+  }
 
-      // Check if game is ready for completion - event.gameKey is already the PDA
-      if (await this.isGameReadyForCompletion(event.gameKey)) {
-        console.log(`🎯 Auto-completing game ${gameAddress}`);
-        const result = await this.completeGame(gameAddress);
-        if (!result.success && !result.notReady) {
-          console.error(`❌ Auto-completion failed: ${result.error}`);
-        }
+  private handleGameStatusChange(status: 'completed' | 'closed', event: any): void {
+    const { gameAddress } = this.extractEventData(event);
+
+    try {
+      if (status === 'completed') {
+        this.db.markGameCompleted(gameAddress);
+      } else {
+        this.db.markGameClosed(gameAddress);
+        this.db.clearStalePlayersForGame(gameAddress);
+        console.log(`🚫 Game closed: ${gameAddress}`);
       }
     } catch (error) {
-      console.error("❌ Error in PlayerJoined event:", error);
+      console.error(`❌ Error in game ${status} event:`, error);
     }
   }
 
-  private async handlePlayerUnjoinedEvent(event: any): Promise<void> {
+  private handleGameInitialized(event: any): void {
+    const { gameAddress } = this.extractEventData(event);
+    this.db.trackGame(gameAddress);
+  }
+
+  private async handlePlayerCleaned(event: any): Promise<void> {
+    const { gameAddress, playerAddress } = this.extractEventData(event);
+
     try {
-      const gameAddress = event.gameKey.toBase58();
-      const playerAddress = event.player.toBase58();
-
-      this.db.removePlayerFromGame(gameAddress, playerAddress);
-
-      // Check if game is ready for completion - event.gameKey is already the PDA
-      if (await this.isGameReadyForCompletion(event.gameKey)) {
-        console.log(`🎯 Auto-completing game ${gameAddress}`);
-        const result = await this.completeGame(gameAddress);
-        if (!result.success && !result.notReady) {
-          console.error(`❌ Auto-completion failed: ${result.error}`);
-        }
-      }
-    } catch (error) {
-      console.error("❌ Error in PlayerUnjoined event:", error);
-    }
-  }
-
-  private async handlePlayerRolledEvent(event: any): Promise<void> {
-    try {
-      const gameAddress = event.gameKey.toBase58();
-      const playerAddress = event.player.toBase58();
-
-      console.log(`🎲 Player ${playerAddress} rolled in game ${gameAddress}`);
-
-      // The PlayerRolled event updates slot entropy which affects winner calculation
-      // Check if game is ready for completion - event.gameKey is already the PDA
-      if (await this.isGameReadyForCompletion(event.gameKey)) {
-        console.log(`🎯 Auto-completing game ${gameAddress} after roll`);
-        const result = await this.completeGame(gameAddress);
-        if (!result.success && !result.notReady) {
-          console.error(`❌ Auto-completion failed: ${result.error}`);
-        }
-      }
-    } catch (error) {
-      console.error("❌ Error in PlayerRolled event:", error);
-    }
-  }
-
-  private async handleGameInitializedEvent(event: any): Promise<void> {
-    try {
-      const gameAddress = event.gameKey.toBase58();
-      this.db.trackGame(gameAddress);
-    } catch (error) {
-      console.error("❌ Error in GameInitialized event:", error);
-    }
-  }
-
-  private handleGameCompletedEvent(event: any): void {
-    const gameAddress = event.gameKey.toBase58();
-    this.db.markGameCompleted(gameAddress);
-  }
-
-  private handleGameClosedEvent(event: any): void {
-    const gameAddress = event.gameKey.toBase58();
-    this.db.markGameClosed(gameAddress);
-    console.log(`🚫 Game closed: ${gameAddress}`);
-
-    // Also remove any player tracking for this game since it's closed
-    this.db.clearStalePlayersForGame(gameAddress);
-  }
-
-  private async handlePlayerParticipationCleanedEvent(event: any): Promise<void> {
-    try {
-      const gameAddress = event.gameKey.toBase58();
-      const playerAddress = event.player.toBase58();
-
       console.log(`🧹 Player ${playerAddress} cleaned from game ${gameAddress}`);
-
-      // Remove the player from our local tracking
       this.db.removePlayerFromGame(gameAddress, playerAddress);
     } catch (error) {
-      console.error("❌ Error in PlayerParticipationCleaned event:", error);
+      console.error("❌ Error in player participation cleaned event:", error);
+    }
+  }
+
+  private extractEventData(event: any): { gameAddress: string; playerAddress: string } {
+    return {
+      gameAddress: event.gameKey.toBase58(),
+      playerAddress: event.player?.toBase58() || ''
+    };
+  }
+
+  private async tryAutoComplete(gamePda: PublicKey, gameAddress: string, trigger: string): Promise<void> {
+    if (await this.isGameReadyForCompletion(gamePda)) {
+      console.log(`🎯 Auto-completing game ${gameAddress} after ${trigger}`);
+      const result = await this.completeGame(gameAddress);
+      if (!result.success && !result.notReady) {
+        console.error(`❌ Auto-completion failed: ${result.error}`);
+      }
     }
   }
 
@@ -223,20 +209,21 @@ export class OracleService {
     const gamePda = this.getGamePDA(randomHash);
     const gameAddress = gamePda.toBase58();
 
+    // Store in database
     this.db.saveSecretKey(gameAddress, secretKey.toString('hex'), randomHash.toString('hex'));
     this.db.trackGame(gameAddress);
 
-    const result: GameSecrets = {
+    const secrets: GameSecrets = {
       randomHash: randomHash.toString('hex'),
       gameAddress
     };
 
-    // For dumbflip and snowball games, also return the secret key
-    if (gameType === 'dumbflip' || gameType === 'snowball') {
-      result.secretKey = secretKey.toString('hex');
+    // Include secret key for specific game types
+    if (gameType && GAMES_WITH_SECRET_KEYS.has(gameType.toLowerCase())) {
+      secrets.secretKey = secretKey.toString('hex');
     }
 
-    return result;
+    return secrets;
   }
 
   public async isGameReadyForCompletion(gamePda: PublicKey): Promise<boolean> {
@@ -268,14 +255,11 @@ export class OracleService {
       }
 
       const gamePda = this.getGamePDAFromAddress(gameAddress);
-
       if (!(await this.isGameReadyForCompletion(gamePda))) {
         return { success: false, notReady: true };
       }
 
       const gameAccount = await this.program.account.game.fetch(gamePda);
-
-      // Get players for this game from database
       const players = this.db.getGamePlayers(gameAddress);
 
       if (players.length === 0) {
@@ -293,26 +277,23 @@ export class OracleService {
 
       const winnerAddress = new PublicKey(winnerPlayerAddress);
 
-      // Check if this player participation PDA exists to verify they're actually in the game
       if (!(await this.verifyPlayerInGame(gamePda, winnerAddress))) {
-        console.log(`⚠️ Selected winner ${winnerPlayerAddress} not found in game, clearing stale player data`);
-        // Clear stale player data and try again
+        console.log(`⚠️ Selected winner ${winnerPlayerAddress} not found in game, clearing stale data`);
         this.db.clearStalePlayersForGame(gameAddress);
         return { success: false, notReady: true };
       }
 
-      const tx = await this.executeGameCompletion(
+      const txHash = await this.executeGameCompletion(
         winnerAddress,
         gameAccount.creator,
         randomHashBuffer,
         secretKeyBuffer
       );
-      await this.confirmTransaction(tx);
 
       this.db.markSecretKeyUsed(gameAddress);
       this.db.markGameCompleted(gameAddress);
 
-      return { success: true, txHash: tx };
+      return { success: true, txHash };
     } catch (error: any) {
       this.db.incrementCompletionAttempts(gameAddress);
       return { success: false, error: error.message };
@@ -325,7 +306,7 @@ export class OracleService {
     randomHashBuffer: Buffer,
     secretKeyBuffer: Buffer
   ): Promise<string> {
-    return await this.program.methods
+    const txHash = await this.program.methods
       .completeGame([...randomHashBuffer], [...secretKeyBuffer])
       .accounts({
         authority: this.adminKeypair.publicKey,
@@ -334,6 +315,9 @@ export class OracleService {
       })
       .signers([this.adminKeypair])
       .rpc();
+
+    await this.confirmTransaction(txHash);
+    return txHash;
   }
 
   private calculateWinnerIndex(secretKeyBuffer: Buffer, lastSlot: bigint, nPlayers: number): number {
@@ -437,56 +421,65 @@ export class OracleService {
       }
 
       try {
-        // First check if the game still exists on-chain
-        const secretData = this.db.getSecretKey(game.game_address);
-        if (!secretData) {
-          console.log(`⚠️  No secret key found for game ${game.game_address}, marking as completed`);
+        // Check if game still exists on-chain
+        if (!(await this.gameExistsOnChain(game.game_address))) {
           this.db.markGameCompleted(game.game_address);
-          stats.completed++;
           continue;
         }
 
-        const gamePda = this.getGamePDAFromAddress(game.game_address);
-        try {
-          await this.program.account.game.fetch(gamePda);
-        } catch (error: any) {
-          if (this.isAccountNotFoundError(error)) {
-            console.log(`🗑️  Game ${game.game_address} no longer exists on-chain, marking as completed`);
-            this.db.markGameCompleted(game.game_address);
-            stats.completed++;
-            continue;
-          }
-          throw error; // Re-throw if it's not an account not found error
-        }
-
-        console.log(`🎯 Attempting to complete game ${game.game_address}`);
         const result = await this.completeGame(game.game_address);
-        if (result.success) {
-          stats.completed++;
-          console.log(`✅ Completed game ${game.game_address}`);
-        } else if (result.notReady) {
-          stats.notReady++;
-          console.log(`⏳ Game ${game.game_address} not ready: ${result.error || 'conditions not met'}`);
-        } else {
-          stats.errors++;
-          console.log(`❌ Error with game ${game.game_address}: ${result.error}`);
-        }
+        this.updateScanStats(stats, result);
+
         await this.delay(DEFAULT_DELAY_MS);
       } catch (error) {
         stats.errors++;
-        console.log(`💥 Exception with game ${game.game_address}:`, error);
+        console.error(`❌ Error completing game ${game.game_address}:`, error);
       }
     }
 
+    this.logScanResults(stats);
+    return stats;
+  }
+
+  private async gameExistsOnChain(gameAddress: string): Promise<boolean> {
+    try {
+      const secretData = this.db.getSecretKey(gameAddress);
+      if (!secretData) {
+        console.log(`⚠️  No secret key found for game ${gameAddress}`);
+        return false;
+      }
+
+      const gamePda = this.getGamePDAFromAddress(gameAddress);
+      await this.program.account.game.fetch(gamePda);
+      return true;
+    } catch (error: any) {
+      if (this.isAccountNotFoundError(error)) {
+        console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  private updateScanStats(stats: CompletionStats, result: GameCompletionResult): void {
+    if (result.success) {
+      stats.completed++;
+    } else if (result.notReady) {
+      stats.notReady++;
+    } else {
+      stats.errors++;
+    }
+  }
+
+  private logScanResults(stats: CompletionStats): void {
     if (stats.completed > 0 || stats.errors > 0 || stats.notReady > 0) {
       const parts = [];
       if (stats.completed > 0) parts.push(`${stats.completed} completed`);
       if (stats.errors > 0) parts.push(`${stats.errors} errors`);
       if (stats.notReady > 0) parts.push(`${stats.notReady} not ready`);
-      console.log(`📊 Scan complete: ${parts.join(', ')}`);
-    }
 
-    return stats;
+      console.log(`📊 Scan: ${parts.join(', ')}`);
+    }
   }
 
   private getGamePDA(randomHash: Buffer): PublicKey {
