@@ -123,12 +123,12 @@ export class OracleService {
     try {
       const gameAddress = event.gameKey.toBase58();
       const playerAddress = event.player.toBase58();
-      const currentPlayers = Number(event.playersCount);
 
-      this.db.updatePlayerCount(gameAddress, currentPlayers);
       this.db.addPlayerToGame(gameAddress, playerAddress);
 
-      if (this.db.isGameReadyForCompletion(gameAddress)) {
+      // Check if game is ready for completion by fetching directly from blockchain
+      const gamePda = new PublicKey(gameAddress);
+      if (await this.isGameReadyForCompletion(gamePda)) {
         console.log(`🎯 Auto-completing game ${gameAddress}`);
         const result = await this.completeGame(gameAddress);
         if (!result.success && !result.notReady) {
@@ -144,12 +144,12 @@ export class OracleService {
     try {
       const gameAddress = event.gameKey.toBase58();
       const playerAddress = event.player.toBase58();
-      const currentPlayers = Number(event.playersCount);
 
-      this.db.updatePlayerCount(gameAddress, currentPlayers);
       this.db.removePlayerFromGame(gameAddress, playerAddress);
 
-      if (this.db.isGameReadyForCompletion(gameAddress)) {
+      // Check if game is ready for completion by fetching directly from blockchain
+      const gamePda = new PublicKey(gameAddress);
+      if (await this.isGameReadyForCompletion(gamePda)) {
         console.log(`🎯 Auto-completing game ${gameAddress}`);
         const result = await this.completeGame(gameAddress);
         if (!result.success && !result.notReady) {
@@ -169,8 +169,9 @@ export class OracleService {
       console.log(`🎲 Player ${playerAddress} rolled in game ${gameAddress}`);
 
       // The PlayerRolled event updates slot entropy which affects winner calculation
-      // We should trigger completion check since rolling might make the game ready
-      if (this.db.isGameReadyForCompletion(gameAddress)) {
+      // Check if game is ready for completion by fetching directly from blockchain
+      const gamePda = new PublicKey(gameAddress);
+      if (await this.isGameReadyForCompletion(gamePda)) {
         console.log(`🎯 Auto-completing game ${gameAddress} after roll`);
         const result = await this.completeGame(gameAddress);
         if (!result.success && !result.notReady) {
@@ -185,14 +186,6 @@ export class OracleService {
   private async handleGameInitializedEvent(event: any): Promise<void> {
     try {
       const gameAddress = event.gameKey.toBase58();
-      const expiresAt = Number(event.createdAt) + Number(event.timeout);
-
-      this.db.saveGameMetadata(
-        gameAddress,
-        event.minPlayers,
-        event.maxPlayers,
-        expiresAt
-      );
       this.db.trackGame(gameAddress);
     } catch (error) {
       console.error("❌ Error in GameInitialized event:", error);
@@ -247,14 +240,6 @@ export class OracleService {
   }
 
   public async isGameReadyForCompletion(gamePda: PublicKey): Promise<boolean> {
-    const gameAddress = gamePda.toBase58();
-
-    // Try cached check first
-    if (this.db.isGameReadyForCompletion(gameAddress)) {
-      return true;
-    }
-
-    // Fallback to blockchain check
     try {
       const gameAccount = await this.program.account.game.fetch(gamePda);
       const blockTime = await this.getBlockchainTime();
@@ -264,17 +249,10 @@ export class OracleService {
       const isFull = gameAccount.playersCount >= gameAccount.maxPlayers;
       const hasMinPlayers = gameAccount.playersCount >= gameAccount.minPlayers;
 
-      // Update cache
-      this.db.saveGameMetadata(
-        gameAddress,
-        gameAccount.minPlayers,
-        gameAccount.maxPlayers,
-        expiresAt
-      );
-
       return isFull || (isExpired && hasMinPlayers);
     } catch (error: any) {
       if (this.isAccountNotFoundError(error)) {
+        const gameAddress = gamePda.toBase58();
         this.db.markGameCompleted(gameAddress);
         return false;
       }
@@ -284,12 +262,12 @@ export class OracleService {
 
   public async completeGame(gameAddress: string): Promise<GameCompletionResult> {
     try {
-      const gamePda = new PublicKey(gameAddress);
       const secretData = this.db.getSecretKey(gameAddress);
-
       if (!secretData) {
         return { success: false, error: "No secret key found" };
       }
+
+      const gamePda = this.getGamePDAFromAddress(gameAddress);
 
       if (!(await this.isGameReadyForCompletion(gamePda))) {
         return { success: false, notReady: true };
@@ -487,6 +465,16 @@ export class OracleService {
     return pda;
   }
 
+  private getGamePDAFromAddress(gameAddress: string): PublicKey {
+    // Since we can predict PDAs now, we can reverse engineer from the stored secret
+    const secretData = this.db.getSecretKey(gameAddress);
+    if (!secretData) {
+      throw new Error(`No secret data found for game ${gameAddress}`);
+    }
+    const randomHash = Buffer.from(secretData.randomHash, "hex");
+    return this.getGamePDA(randomHash);
+  }
+
   private async verifyPlayerInGame(gamePda: PublicKey, playerAddress: PublicKey): Promise<boolean> {
     try {
       // Check if PlayerParticipation PDA exists for this game and player
@@ -501,6 +489,6 @@ export class OracleService {
     } catch (error) {
       // If account doesn't exist, player is not in the game
       return false;
-          }
     }
   }
+}

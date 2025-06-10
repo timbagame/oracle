@@ -223,7 +223,7 @@ setInterval(async () => {
 
     // Clean up old records periodically (every scan cycle)
     const cleanupResult = oracle.cleanupOldRecords(48);
-    if (cleanupResult.deletedSecrets > 0 || cleanupResult.deletedGames > 0 || cleanupResult.deletedMetadata > 0) {
+    if (cleanupResult.deletedSecrets > 0 || cleanupResult.deletedGames > 0) {
       console.log('🧹 Background cleanup completed');
     }
   } catch (error) {

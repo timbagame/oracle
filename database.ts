@@ -15,14 +15,6 @@ interface PendingGame {
   completion_attempts: number;
 }
 
-interface GameMetadata {
-  game_address: string;
-  min_players: number;
-  max_players: number;
-  expires_at: number;
-  current_players: number;
-}
-
 interface DatabaseStats {
   totalSecrets: number;
   usedSecrets: number;
@@ -83,17 +75,6 @@ export class OracleDatabase {
       )
     `);
 
-    // Game metadata table
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS game_metadata (
-        game_address TEXT PRIMARY KEY,
-        min_players INTEGER NOT NULL,
-        max_players INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL,
-        current_players INTEGER DEFAULT 0
-      )
-    `);
-
     // Game players table
     this.db.run(`
       CREATE TABLE IF NOT EXISTS game_players (
@@ -101,7 +82,6 @@ export class OracleDatabase {
         game_address TEXT NOT NULL,
         player_address TEXT NOT NULL,
         joined_at INTEGER NOT NULL,
-        FOREIGN KEY (game_address) REFERENCES game_metadata (game_address),
         UNIQUE(game_address, player_address)
       )
     `);
@@ -146,53 +126,7 @@ export class OracleDatabase {
     }
   }
 
-  // Game metadata management
-  public saveGameMetadata(gameAddress: string, minPlayers: number, maxPlayers: number, expiresAt: number): void {
-    try {
-      const stmt = this.db.prepare(
-        'INSERT OR REPLACE INTO game_metadata (game_address, min_players, max_players, expires_at, current_players) VALUES (?, ?, ?, ?, 0)'
-      );
-      stmt.run(gameAddress, minPlayers, maxPlayers, expiresAt);
-    } catch (error) {
-      console.error("❌ Failed to save game metadata:", error);
-    }
-  }
-
-  public getGameMetadata(gameAddress: string): GameMetadata | null {
-    try {
-      const stmt = this.db.prepare('SELECT * FROM game_metadata WHERE game_address = ?');
-      return stmt.get(gameAddress) as GameMetadata | null;
-    } catch (error) {
-      console.error("❌ Failed to get game metadata:", error);
-      return null;
-    }
-  }
-
-  public updatePlayerCount(gameAddress: string, playerCount: number): void {
-    try {
-      const stmt = this.db.prepare('UPDATE game_metadata SET current_players = ? WHERE game_address = ?');
-      stmt.run(playerCount, gameAddress);
-    } catch (error) {
-      console.error("❌ Failed to update player count:", error);
-    }
-  }
-
-  public isGameReadyForCompletion(gameAddress: string): boolean {
-    try {
-      const metadata = this.getGameMetadata(gameAddress);
-      if (!metadata) return false;
-
-      const currentTime = Math.floor(Date.now() / 1000);
-      const isExpired = currentTime > metadata.expires_at;
-      const isFull = metadata.current_players >= metadata.max_players;
-      const hasMinPlayers = metadata.current_players >= metadata.min_players;
-
-      return isFull || (isExpired && hasMinPlayers);
-    } catch (error) {
-      console.error("❌ Failed to check game readiness:", error);
-      return false;
-    }
-  }
+  // Game metadata management - simplified since we can fetch directly from blockchain
 
   // Game tracking
   public trackGame(gameAddress: string): void {
@@ -291,10 +225,9 @@ export class OracleDatabase {
   }
 
   // Utility methods
-  public cleanupOldRecords(hoursOld: number = 48): { deletedSecrets: number; deletedGames: number; deletedMetadata: number } {
+  public cleanupOldRecords(hoursOld: number = 48): { deletedSecrets: number; deletedGames: number } {
     try {
       const cutoffTime = Date.now() - (hoursOld * 60 * 60 * 1000);
-      const cutoffTimeSeconds = Math.floor(cutoffTime / 1000); // Convert to seconds for expires_at comparison
 
       // Clean up old secret keys
       const secretsStmt = this.db.prepare('DELETE FROM secret_keys WHERE created_at < ?');
@@ -306,22 +239,17 @@ export class OracleDatabase {
       );
       const trackingResult = trackingStmt.run('pending', cutoffTime, 'pending', cutoffTime);
 
-      // Clean up old game metadata - use expires_at since there's no created_at column
-      const metadataStmt = this.db.prepare('DELETE FROM game_metadata WHERE expires_at < ?');
-      const metadataResult = metadataStmt.run(cutoffTimeSeconds);
-
       const deletedCounts = {
         deletedSecrets: secretsResult.changes,
-        deletedGames: trackingResult.changes,
-        deletedMetadata: metadataResult.changes
+        deletedGames: trackingResult.changes
       };
 
-      console.log(`🧹 Cleanup completed - Secrets: ${deletedCounts.deletedSecrets}, Games: ${deletedCounts.deletedGames}, Metadata: ${deletedCounts.deletedMetadata}`);
+      console.log(`🧹 Cleanup completed - Secrets: ${deletedCounts.deletedSecrets}, Games: ${deletedCounts.deletedGames}`);
 
       return deletedCounts;
     } catch (error) {
       console.error("❌ Failed to cleanup old records:", error);
-      return { deletedSecrets: 0, deletedGames: 0, deletedMetadata: 0 };
+      return { deletedSecrets: 0, deletedGames: 0 };
     }
   }
 
