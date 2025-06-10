@@ -126,8 +126,6 @@ export class OracleDatabase {
     }
   }
 
-  // Game metadata management - simplified since we can fetch directly from blockchain
-
   // Game tracking
   public trackGame(gameAddress: string): void {
     try {

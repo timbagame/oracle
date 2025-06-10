@@ -126,9 +126,8 @@ export class OracleService {
 
       this.db.addPlayerToGame(gameAddress, playerAddress);
 
-      // Check if game is ready for completion by fetching directly from blockchain
-      const gamePda = new PublicKey(gameAddress);
-      if (await this.isGameReadyForCompletion(gamePda)) {
+      // Check if game is ready for completion - event.gameKey is already the PDA
+      if (await this.isGameReadyForCompletion(event.gameKey)) {
         console.log(`🎯 Auto-completing game ${gameAddress}`);
         const result = await this.completeGame(gameAddress);
         if (!result.success && !result.notReady) {
@@ -147,9 +146,8 @@ export class OracleService {
 
       this.db.removePlayerFromGame(gameAddress, playerAddress);
 
-      // Check if game is ready for completion by fetching directly from blockchain
-      const gamePda = new PublicKey(gameAddress);
-      if (await this.isGameReadyForCompletion(gamePda)) {
+      // Check if game is ready for completion - event.gameKey is already the PDA
+      if (await this.isGameReadyForCompletion(event.gameKey)) {
         console.log(`🎯 Auto-completing game ${gameAddress}`);
         const result = await this.completeGame(gameAddress);
         if (!result.success && !result.notReady) {
@@ -169,9 +167,8 @@ export class OracleService {
       console.log(`🎲 Player ${playerAddress} rolled in game ${gameAddress}`);
 
       // The PlayerRolled event updates slot entropy which affects winner calculation
-      // Check if game is ready for completion by fetching directly from blockchain
-      const gamePda = new PublicKey(gameAddress);
-      if (await this.isGameReadyForCompletion(gamePda)) {
+      // Check if game is ready for completion - event.gameKey is already the PDA
+      if (await this.isGameReadyForCompletion(event.gameKey)) {
         console.log(`🎯 Auto-completing game ${gameAddress} after roll`);
         const result = await this.completeGame(gameAddress);
         if (!result.success && !result.notReady) {
