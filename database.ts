@@ -90,8 +90,7 @@ export class OracleDatabase {
         min_players INTEGER NOT NULL,
         max_players INTEGER NOT NULL,
         expires_at INTEGER NOT NULL,
-        current_players INTEGER DEFAULT 0,
-        nonce INTEGER
+        current_players INTEGER DEFAULT 0
       )
     `);
 
