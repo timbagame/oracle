@@ -219,7 +219,7 @@ export class OracleDatabase {
     }
   }
 
-  public markGameCancelled(gameAddress: string): void {
+  public markGameClosed(gameAddress: string): void {
     try {
       const now = Date.now();
       const stmt = this.db.prepare(
@@ -227,7 +227,7 @@ export class OracleDatabase {
       );
       stmt.run('cancelled', now, now, gameAddress);
     } catch (error) {
-      console.error("❌ Failed to mark game as cancelled:", error);
+      console.error("❌ Failed to mark game as closed:", error);
     }
   }
 

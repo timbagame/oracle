@@ -104,7 +104,8 @@ export class OracleService {
       this.program.addEventListener("playerRolled", this.handlePlayerRolledEvent.bind(this)),
       this.program.addEventListener("gameInitialized", this.handleGameInitializedEvent.bind(this)),
       this.program.addEventListener("gameCompleted", this.handleGameCompletedEvent.bind(this)),
-      this.program.addEventListener("gameClosed", this.handleGameClosedEvent.bind(this))
+      this.program.addEventListener("gameClosed", this.handleGameClosedEvent.bind(this)),
+      this.program.addEventListener("playerParticipationCleaned", this.handlePlayerParticipationCleanedEvent.bind(this))
     ];
   }
 
@@ -205,8 +206,22 @@ export class OracleService {
 
   private handleGameClosedEvent(event: any): void {
     const gameAddress = event.gameKey.toBase58();
-    this.db.markGameCancelled(gameAddress);
+    this.db.markGameClosed(gameAddress);
     console.log(`🚫 Game closed: ${gameAddress}`);
+  }
+
+  private async handlePlayerParticipationCleanedEvent(event: any): Promise<void> {
+    try {
+      const gameAddress = event.gameKey.toBase58();
+      const playerAddress = event.player.toBase58();
+
+      console.log(`🧹 Player ${playerAddress} cleaned from game ${gameAddress}`);
+
+      // Remove the player from our local tracking
+      this.db.removePlayerFromGame(gameAddress, playerAddress);
+    } catch (error) {
+      console.error("❌ Error in PlayerParticipationCleaned event:", error);
+    }
   }
 
   public generateGameSecrets(gameType?: string): GameSecrets {
@@ -486,6 +501,6 @@ export class OracleService {
     } catch (error) {
       // If account doesn't exist, player is not in the game
       return false;
+          }
     }
   }
-}
