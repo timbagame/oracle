@@ -23,6 +23,7 @@
         {
           "name": "creator_balance",
           "writable": true,
+          "optional": true,
           "pda": {
             "seeds": [
               {
@@ -62,47 +63,6 @@
       "args": []
     },
     {
-      "name": "clean_player_participation",
-      "discriminator": [166, 212, 44, 185, 199, 105, 199, 79],
-      "accounts": [
-        {
-          "name": "game"
-        },
-        {
-          "name": "player_participation",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112, 108, 97, 121, 101, 114, 95, 112, 97, 114, 116, 105, 99,
-                  105, 112, 97, 116, 105, 111, 110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game"
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              }
-            ]
-          }
-        },
-        {
-          "name": "player",
-          "writable": true
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "complete_game",
       "discriminator": [105, 69, 184, 5, 143, 182, 92, 132],
       "accounts": [
@@ -116,17 +76,8 @@
                 "value": [103, 97, 109, 101]
               },
               {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "Game"
-              },
-              {
                 "kind": "arg",
                 "path": "random_hash"
-              },
-              {
-                "kind": "arg",
-                "path": "nonce"
               }
             ]
           }
@@ -202,6 +153,7 @@
         },
         {
           "name": "game_token",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -233,10 +185,6 @@
           "type": {
             "array": ["u8", 32]
           }
-        },
-        {
-          "name": "_nonce",
-          "type": "u64"
         }
       ]
     },
@@ -254,17 +202,8 @@
                 "value": [103, 97, 109, 101]
               },
               {
-                "kind": "account",
-                "path": "token_mint"
-              },
-              {
                 "kind": "arg",
                 "path": "random_hash"
-              },
-              {
-                "kind": "account",
-                "path": "game_token.nonce",
-                "account": "GameToken"
               }
             ]
           }
@@ -1090,6 +1029,7 @@
         {
           "name": "player_balance",
           "writable": true,
+          "optional": true,
           "pda": {
             "seeds": [
               {
@@ -1599,8 +1539,8 @@
     },
     {
       "code": 7103,
-      "name": "CoinflipHasActivePlayers",
-      "msg": "Cannot cancel coinflip game with active players"
+      "name": "GameHasActivePlayers",
+      "msg": "Cannot cancel game with active players"
     },
     {
       "code": 7104,
@@ -1616,6 +1556,11 @@
       "code": 7106,
       "name": "GameExpired",
       "msg": "Game expired"
+    },
+    {
+      "code": 7107,
+      "name": "GameAlreadyCompleted",
+      "msg": "Game already completed"
     },
     {
       "code": 7200,
@@ -1710,7 +1655,7 @@
             "type": "u32"
           },
           {
-            "name": "slot_entropy",
+            "name": "last_slot",
             "type": "u64"
           },
           {
@@ -1752,10 +1697,6 @@
           {
             "name": "winner",
             "type": "pubkey"
-          },
-          {
-            "name": "total_amount",
-            "type": "u64"
           },
           {
             "name": "players_count",
@@ -1864,10 +1805,6 @@
           {
             "name": "timeout",
             "type": "u32"
-          },
-          {
-            "name": "nonce",
-            "type": "u64"
           }
         ]
       }
@@ -1888,10 +1825,6 @@
           {
             "name": "enabled",
             "type": "bool"
-          },
-          {
-            "name": "nonce",
-            "type": "u64"
           }
         ]
       }
@@ -2118,7 +2051,7 @@
             "type": "u32"
           },
           {
-            "name": "slot_entropy",
+            "name": "last_slot",
             "type": "u64"
           },
           {
@@ -2166,7 +2099,7 @@
             "type": "u32"
           },
           {
-            "name": "slot_entropy",
+            "name": "last_slot",
             "type": "u64"
           },
           {
@@ -2202,7 +2135,7 @@
             "type": "u32"
           },
           {
-            "name": "slot_entropy",
+            "name": "last_slot",
             "type": "u64"
           },
           {

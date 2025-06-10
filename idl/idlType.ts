@@ -38,6 +38,7 @@ export type Coinflip = {
         {
           "name": "creatorBalance",
           "writable": true,
+          "optional": true,
           "pda": {
             "seeds": [
               {
@@ -97,74 +98,6 @@ export type Coinflip = {
       "args": []
     },
     {
-      "name": "cleanPlayerParticipation",
-      "discriminator": [
-        166,
-        212,
-        44,
-        185,
-        199,
-        105,
-        199,
-        79
-      ],
-      "accounts": [
-        {
-          "name": "game"
-        },
-        {
-          "name": "playerParticipation",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  112,
-                  97,
-                  114,
-                  116,
-                  105,
-                  99,
-                  105,
-                  112,
-                  97,
-                  116,
-                  105,
-                  111,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game"
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              }
-            ]
-          }
-        },
-        {
-          "name": "player",
-          "writable": true
-        },
-        {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "completeGame",
       "discriminator": [
         105,
@@ -192,17 +125,8 @@ export type Coinflip = {
                 ]
               },
               {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
-              },
-              {
                 "kind": "arg",
                 "path": "randomHash"
-              },
-              {
-                "kind": "arg",
-                "path": "nonce"
               }
             ]
           }
@@ -316,6 +240,7 @@ export type Coinflip = {
         },
         {
           "name": "gameToken",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -364,10 +289,6 @@ export type Coinflip = {
               32
             ]
           }
-        },
-        {
-          "name": "nonce",
-          "type": "u64"
         }
       ]
     },
@@ -399,17 +320,8 @@ export type Coinflip = {
                 ]
               },
               {
-                "kind": "account",
-                "path": "tokenMint"
-              },
-              {
                 "kind": "arg",
                 "path": "randomHash"
-              },
-              {
-                "kind": "account",
-                "path": "game_token.nonce",
-                "account": "gameToken"
               }
             ]
           }
@@ -1996,6 +1908,7 @@ export type Coinflip = {
         {
           "name": "playerBalance",
           "writable": true,
+          "optional": true,
           "pda": {
             "seeds": [
               {
@@ -3044,8 +2957,8 @@ export type Coinflip = {
     },
     {
       "code": 7103,
-      "name": "coinflipHasActivePlayers",
-      "msg": "Cannot cancel coinflip game with active players"
+      "name": "gameHasActivePlayers",
+      "msg": "Cannot cancel game with active players"
     },
     {
       "code": 7104,
@@ -3061,6 +2974,11 @@ export type Coinflip = {
       "code": 7106,
       "name": "gameExpired",
       "msg": "Game expired"
+    },
+    {
+      "code": 7107,
+      "name": "gameAlreadyCompleted",
+      "msg": "Game already completed"
     },
     {
       "code": 7200,
@@ -3155,7 +3073,7 @@ export type Coinflip = {
             "type": "u32"
           },
           {
-            "name": "slotEntropy",
+            "name": "lastSlot",
             "type": "u64"
           },
           {
@@ -3197,10 +3115,6 @@ export type Coinflip = {
           {
             "name": "winner",
             "type": "pubkey"
-          },
-          {
-            "name": "totalAmount",
-            "type": "u64"
           },
           {
             "name": "playersCount",
@@ -3309,10 +3223,6 @@ export type Coinflip = {
           {
             "name": "timeout",
             "type": "u32"
-          },
-          {
-            "name": "nonce",
-            "type": "u64"
           }
         ]
       }
@@ -3333,10 +3243,6 @@ export type Coinflip = {
           {
             "name": "enabled",
             "type": "bool"
-          },
-          {
-            "name": "nonce",
-            "type": "u64"
           }
         ]
       }
@@ -3563,7 +3469,7 @@ export type Coinflip = {
             "type": "u32"
           },
           {
-            "name": "slotEntropy",
+            "name": "lastSlot",
             "type": "u64"
           },
           {
@@ -3611,7 +3517,7 @@ export type Coinflip = {
             "type": "u32"
           },
           {
-            "name": "slotEntropy",
+            "name": "lastSlot",
             "type": "u64"
           },
           {
@@ -3647,7 +3553,7 @@ export type Coinflip = {
             "type": "u32"
           },
           {
-            "name": "slotEntropy",
+            "name": "lastSlot",
             "type": "u64"
           },
           {
