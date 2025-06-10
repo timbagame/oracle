@@ -14,6 +14,130 @@ export type Coinflip = {
   },
   "instructions": [
     {
+      "name": "cleanPlayerParticipation",
+      "discriminator": [
+        166,
+        212,
+        44,
+        185,
+        199,
+        105,
+        199,
+        79
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "playerParticipation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114,
+                  95,
+                  112,
+                  97,
+                  114,
+                  116,
+                  105,
+                  99,
+                  105,
+                  112,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "playerBalance",
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114,
+                  95,
+                  98,
+                  97,
+                  108,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              },
+              {
+                "kind": "account",
+                "path": "game.token_mint",
+                "account": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "closeGame",
       "discriminator": [
         237,
@@ -2859,6 +2983,19 @@ export type Coinflip = {
       ]
     },
     {
+      "name": "playerParticipationCleaned",
+      "discriminator": [
+        121,
+        176,
+        106,
+        80,
+        50,
+        196,
+        211,
+        77
+      ]
+    },
+    {
       "name": "playerRolled",
       "discriminator": [
         140,
@@ -3490,6 +3627,46 @@ export type Coinflip = {
           },
           {
             "name": "playerAmount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "playerParticipationCleaned",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "gameKey",
+            "type": "pubkey"
+          },
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "totalAmount",
+            "type": "u64"
+          },
+          {
+            "name": "playersCount",
+            "type": "u32"
+          },
+          {
+            "name": "playerIndex",
+            "type": "u32"
+          },
+          {
+            "name": "refundAmount",
+            "type": "u64"
+          },
+          {
+            "name": "isCompletedGame",
+            "type": "bool"
+          },
+          {
+            "name": "timestamp",
             "type": "u64"
           }
         ]

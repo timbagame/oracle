@@ -8,6 +8,83 @@
   },
   "instructions": [
     {
+      "name": "clean_player_participation",
+      "discriminator": [166, 212, 44, 185, 199, 105, 199, 79],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true
+        },
+        {
+          "name": "player_participation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112, 108, 97, 121, 101, 114, 95, 112, 97, 114, 116, 105, 99,
+                  105, 112, 97, 116, 105, 111, 110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "player_balance",
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112, 108, 97, 121, 101, 114, 95, 98, 97, 108, 97, 110, 99, 101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              },
+              {
+                "kind": "account",
+                "path": "game.token_mint",
+                "account": "Game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [111, 114, 97, 99, 108, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "close_game",
       "discriminator": [237, 236, 157, 201, 253, 20, 248, 67],
       "accounts": [
@@ -1486,6 +1563,10 @@
       "discriminator": [39, 144, 49, 106, 108, 210, 183, 38]
     },
     {
+      "name": "PlayerParticipationCleaned",
+      "discriminator": [121, 176, 106, 80, 50, 196, 211, 77]
+    },
+    {
       "name": "PlayerRolled",
       "discriminator": [140, 47, 89, 123, 203, 204, 244, 6]
     },
@@ -2072,6 +2153,46 @@
           },
           {
             "name": "player_amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PlayerParticipationCleaned",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "game_key",
+            "type": "pubkey"
+          },
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "total_amount",
+            "type": "u64"
+          },
+          {
+            "name": "players_count",
+            "type": "u32"
+          },
+          {
+            "name": "player_index",
+            "type": "u32"
+          },
+          {
+            "name": "refund_amount",
+            "type": "u64"
+          },
+          {
+            "name": "is_completed_game",
+            "type": "bool"
+          },
+          {
+            "name": "timestamp",
             "type": "u64"
           }
         ]
