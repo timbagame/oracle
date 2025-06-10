@@ -198,6 +198,9 @@ export class OracleService {
     const gameAddress = event.gameKey.toBase58();
     this.db.markGameClosed(gameAddress);
     console.log(`🚫 Game closed: ${gameAddress}`);
+
+    // Also remove any player tracking for this game since it's closed
+    this.db.clearStalePlayersForGame(gameAddress);
   }
 
   private async handlePlayerParticipationCleanedEvent(event: any): Promise<void> {
@@ -425,21 +428,53 @@ export class OracleService {
 
     if (pendingGames.length === 0) return stats;
 
+    console.log(`🔍 Scanning ${pendingGames.length} pending games...`);
+
     for (const game of pendingGames) {
-      if (game.completion_attempts >= MAX_COMPLETION_ATTEMPTS) continue;
+      if (game.completion_attempts >= MAX_COMPLETION_ATTEMPTS) {
+        console.log(`⏭️  Skipping game ${game.game_address} (${game.completion_attempts} attempts)`);
+        continue;
+      }
 
       try {
+        // First check if the game still exists on-chain
+        const secretData = this.db.getSecretKey(game.game_address);
+        if (!secretData) {
+          console.log(`⚠️  No secret key found for game ${game.game_address}, marking as completed`);
+          this.db.markGameCompleted(game.game_address);
+          stats.completed++;
+          continue;
+        }
+
+        const gamePda = this.getGamePDAFromAddress(game.game_address);
+        try {
+          await this.program.account.game.fetch(gamePda);
+        } catch (error: any) {
+          if (this.isAccountNotFoundError(error)) {
+            console.log(`🗑️  Game ${game.game_address} no longer exists on-chain, marking as completed`);
+            this.db.markGameCompleted(game.game_address);
+            stats.completed++;
+            continue;
+          }
+          throw error; // Re-throw if it's not an account not found error
+        }
+
+        console.log(`🎯 Attempting to complete game ${game.game_address}`);
         const result = await this.completeGame(game.game_address);
         if (result.success) {
           stats.completed++;
+          console.log(`✅ Completed game ${game.game_address}`);
         } else if (result.notReady) {
           stats.notReady++;
+          console.log(`⏳ Game ${game.game_address} not ready: ${result.error || 'conditions not met'}`);
         } else {
           stats.errors++;
+          console.log(`❌ Error with game ${game.game_address}: ${result.error}`);
         }
         await this.delay(DEFAULT_DELAY_MS);
       } catch (error) {
         stats.errors++;
+        console.log(`💥 Exception with game ${game.game_address}:`, error);
       }
     }
 
@@ -448,7 +483,7 @@ export class OracleService {
       if (stats.completed > 0) parts.push(`${stats.completed} completed`);
       if (stats.errors > 0) parts.push(`${stats.errors} errors`);
       if (stats.notReady > 0) parts.push(`${stats.notReady} not ready`);
-      console.log(`📊 Scan: ${parts.join(', ')}`);
+      console.log(`📊 Scan complete: ${parts.join(', ')}`);
     }
 
     return stats;
