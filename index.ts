@@ -1,4 +1,6 @@
 import { OracleService } from "./oracle-service.ts";
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Constants
 const DEFAULT_PORT = 3001;
@@ -12,92 +14,6 @@ const CORS_HEADERS = {
   'Content-Type': 'application/json'
 };
 
-// Simplified API documentation
-const API_DOCUMENTATION = `
-  <!DOCTYPE html>
-  <html>
-    <head>
-      <title>Oracle API Documentation</title>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <style>
-        body {
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          max-width: 800px;
-          margin: 50px auto;
-          padding: 20px;
-          line-height: 1.6;
-          color: #333;
-        }
-        h1 {
-          color: #2c3e50;
-          border-bottom: 3px solid #3498db;
-          padding-bottom: 10px;
-        }
-        h2 {
-          color: #34495e;
-          margin-top: 30px;
-        }
-        code {
-          background: #f8f9fa;
-          padding: 4px 8px;
-          border-radius: 4px;
-          font-family: 'Monaco', 'Consolas', monospace;
-          border: 1px solid #e9ecef;
-        }
-        .endpoint {
-          background: #ffffff;
-          border: 1px solid #dee2e6;
-          border-radius: 8px;
-          padding: 15px;
-          margin: 10px 0;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .method {
-          font-weight: bold;
-          padding: 2px 6px;
-          border-radius: 3px;
-          color: white;
-          font-size: 12px;
-        }
-        .get { background-color: #28a745; }
-        .post { background-color: #007bff; }
-        .description {
-          margin-top: 8px;
-          color: #6c757d;
-        }
-      </style>
-    </head>
-    <body>
-      <h1>🔮 Oracle API Documentation</h1>
-
-      <h2>Available Endpoints</h2>
-
-      <div class="endpoint">
-        <span class="method get">GET</span> <code>/health</code>
-        <div class="description">Simple health check - returns basic service status</div>
-      </div>
-
-      <div class="endpoint">
-        <span class="method post">POST</span> <code>/generate-hash</code>
-        <div class="description">
-          Generate new game secrets (random hash and game address)<br>
-          <strong>Body:</strong> <code>{ "gameType": "coinflip" | "giveaway" | "dumbflip" | "snowball" }</code><br>
-          <strong>Note:</strong> For dumbflip and snowball games, also returns the secret key
-        </div>
-      </div>
-
-      <div class="endpoint">
-        <span class="method get">GET</span> <code>/stats</code>
-        <div class="description">Detailed statistics and metrics about the oracle service</div>
-      </div>
-
-      <h2>Service Information</h2>
-      <p>This Oracle API provides game completion services for Solana-based coinflip games.</p>
-    </body>
-  </html>
-`;
-
 /**
  * Oracle API Server with enhanced features
  * Provides endpoints for requesting random hashes, monitoring, and managing games
@@ -107,19 +23,47 @@ const PORT = Number(process.env["ORACLE_PORT"]) || DEFAULT_PORT;
 const oracle = OracleService.getInstance();
 
 // Response helpers
+
+/**
+ * Creates a JSON response with appropriate CORS headers.
+ * @param data - The data to be stringified and sent as JSON.
+ * @param status - The HTTP status code for the response (default is 200).
+ * @returns A Response object.
+ */
 function createResponse(data: any, status: number = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: CORS_HEADERS });
 }
 
+/**
+ * Creates an HTML response with appropriate CORS headers.
+ * @param html - The HTML string to be sent.
+ * @returns A Response object with Content-Type set to text/html.
+ */
 function createHtmlResponse(html: string): Response {
-  return new Response(html, { headers: { 'Content-Type': 'text/html' } });
+  return new Response(html, {
+    headers: {
+      ...CORS_HEADERS, // Spread existing CORS headers
+      'Content-Type': 'text/html' // Ensure HTML content type
+    }
+  });
 }
 
+/**
+ * Creates a JSON error response.
+ * @param error - The error message string.
+ * @param status - The HTTP status code for the error response (default is 500).
+ * @returns A Response object.
+ */
 function createErrorResponse(error: string, status: number = 500): Response {
   return createResponse({ success: false, error }, status);
 }
 
 // Route handlers
+
+/**
+ * Handles health check requests.
+ * @returns A Promise resolving to a Response object indicating service health.
+ */
 async function handleHealth(): Promise<Response> {
   return createResponse({
     status: 'healthy',
@@ -129,6 +73,12 @@ async function handleHealth(): Promise<Response> {
   });
 }
 
+/**
+ * Handles requests to generate game secrets (random hash and game address).
+ * Optionally takes a gameType from the request body to include the secret key for specific game types.
+ * @param request - The incoming Request object.
+ * @returns A Promise resolving to a Response object with the generated secrets or an error.
+ */
 async function handleGenerateHash(request: Request): Promise<Response> {
   try {
     // Parse request body to get game type if provided
@@ -137,10 +87,11 @@ async function handleGenerateHash(request: Request): Promise<Response> {
       const body = await request.json() as { gameType?: string };
       gameType = body?.gameType?.toLowerCase();
     } catch {
-      // No body or invalid JSON, use default behavior
+      // No body or invalid JSON, use default behavior (gameType remains undefined)
     }
 
     const secrets = oracle.generateGameSecrets(gameType);
+    // The structure of 'response' is intentionally flexible here as 'secretKey' is conditional.
     const response: any = {
       success: true,
       randomHash: secrets.randomHash,
@@ -159,6 +110,10 @@ async function handleGenerateHash(request: Request): Promise<Response> {
   }
 }
 
+/**
+ * Handles requests for service statistics.
+ * @returns A Promise resolving to a Response object with detailed service stats.
+ */
 async function handleStats(): Promise<Response> {
   const stats = oracle.getStats();
   return createResponse({
@@ -177,6 +132,12 @@ async function handleStats(): Promise<Response> {
 // Main server
 const server = Bun.serve({
   port: PORT,
+  /**
+   * Main fetch handler for the Bun server.
+   * Routes requests to appropriate handlers based on path and method.
+   * @param request - The incoming Request object.
+   * @returns A Promise resolving to a Response object.
+   */
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const { pathname: path, method } = { pathname: url.pathname, method: request.method };
@@ -193,7 +154,9 @@ const server = Bun.serve({
         case path === '/stats' && method === 'GET':
           return await handleStats();
         case path === '/' && method === 'GET':
-          return createHtmlResponse(API_DOCUMENTATION);
+          const docPath = path.join(process.cwd(), 'api-documentation.html');
+          const apiDocHtml = fs.readFileSync(docPath, 'utf-8');
+          return createHtmlResponse(apiDocHtml);
         default:
           return createErrorResponse('Endpoint not found', 404);
       }
@@ -206,13 +169,16 @@ const server = Bun.serve({
 
 console.log(`🔮 Oracle API running on http://localhost:${PORT}`);
 
-// Initialize and start services
+/**
+ * Initializes and starts the Oracle services, including event listening.
+ * Logs success or failure of service initialization.
+ */
 async function initialize(): Promise<void> {
   try {
     await oracle.startEventListening();
     console.log('✅ Oracle services initialized');
-  } catch (error) {
-    console.error('❌ Failed to start event listeners:', error);
+  } catch (error: any) {
+    console.error('❌ Failed to start event listeners:', error.message);
   }
 }
 
@@ -226,22 +192,26 @@ setInterval(async () => {
     if (cleanupResult.deletedSecrets > 0 || cleanupResult.deletedGames > 0) {
       console.log('🧹 Background cleanup completed');
     }
-  } catch (error) {
-    console.error('❌ Background scan error:', error);
+  } catch (error: any) {
+    console.error('❌ Background scan error:', error.message);
   }
 }, FALLBACK_SCAN_INTERVAL);
 
-// Graceful shutdown
+/**
+ * Handles graceful shutdown of the server and Oracle services.
+ * Stops event listening, stops the HTTP server, and exits the process.
+ * @param signal - The shutdown signal received (e.g., "SIGINT", "SIGTERM").
+ */
 async function shutdown(signal: string): Promise<void> {
   console.log(`\n🛑 Shutting down (${signal})...`);
   try {
     await oracle.stopEventListening();
-    server.stop();
+    server.stop(); // Attempt to stop the server
     console.log('✅ Shutdown complete');
-  } catch (error) {
-    console.error('❌ Shutdown error:', error);
+  } catch (error: any) {
+    console.error('❌ Shutdown error:', error.message);
   }
-  process.exit(0);
+  process.exit(0); // Ensure the process exits
 }
 
 process.once("SIGINT", () => shutdown("SIGINT"));
