@@ -5,7 +5,7 @@
  * IDL can be found at `target/idl/coinflip.json`.
  */
 export type Coinflip = {
-  "address": "2J1SejHvJ3SaXTHttMDnUHXNB2zcs1y5Gvkd4XxDB8Fj",
+  "address": "GLAicVgkhvVtAbcf9aF4iLqAXZ9GSrsfexoDUN2fBPCG",
   "metadata": {
     "name": "coinflip",
     "version": "0.1.0",
@@ -15,6 +15,9 @@ export type Coinflip = {
   "instructions": [
     {
       "name": "cleanPlayerParticipation",
+      "docs": [
+        "Cleans up expired player participation accounts"
+      ],
       "discriminator": [
         166,
         212,
@@ -78,7 +81,6 @@ export type Coinflip = {
         {
           "name": "playerBalance",
           "writable": true,
-          "optional": true,
           "pda": {
             "seeds": [
               {
@@ -139,6 +141,9 @@ export type Coinflip = {
     },
     {
       "name": "closeGame",
+      "docs": [
+        "Closes a game with no active players (creator only)"
+      ],
       "discriminator": [
         237,
         236,
@@ -162,7 +167,6 @@ export type Coinflip = {
         {
           "name": "creatorBalance",
           "writable": true,
-          "optional": true,
           "pda": {
             "seeds": [
               {
@@ -223,6 +227,9 @@ export type Coinflip = {
     },
     {
       "name": "completeGame",
+      "docs": [
+        "Completes a game by revealing the secret key and distributing winnings"
+      ],
       "discriminator": [
         105,
         69,
@@ -418,6 +425,9 @@ export type Coinflip = {
     },
     {
       "name": "initializeGame",
+      "docs": [
+        "Creates a new game with specified configuration and random hash"
+      ],
       "discriminator": [
         44,
         62,
@@ -779,6 +789,9 @@ export type Coinflip = {
     },
     {
       "name": "initializeOracle",
+      "docs": [
+        "Initializes the global oracle account with fee settings and constraints"
+      ],
       "discriminator": [
         144,
         223,
@@ -832,6 +845,9 @@ export type Coinflip = {
     },
     {
       "name": "initializePlayerBalance",
+      "docs": [
+        "Initializes a player's balance account for a specific token"
+      ],
       "discriminator": [
         193,
         86,
@@ -1019,6 +1035,9 @@ export type Coinflip = {
     },
     {
       "name": "initializeToken",
+      "docs": [
+        "Initializes a new token for use in games with minimum amount and enabled status"
+      ],
       "discriminator": [
         38,
         209,
@@ -1224,6 +1243,9 @@ export type Coinflip = {
     },
     {
       "name": "joinGame",
+      "docs": [
+        "Allows a player to join an existing game"
+      ],
       "discriminator": [
         107,
         112,
@@ -1597,6 +1619,9 @@ export type Coinflip = {
     },
     {
       "name": "rollGame",
+      "docs": [
+        "Allows a player to roll in Snowball/Dumbflip games (multiple participation)"
+      ],
       "discriminator": [
         176,
         152,
@@ -1968,6 +1993,9 @@ export type Coinflip = {
     },
     {
       "name": "unjoinGame",
+      "docs": [
+        "Allows a player to leave a game before completion (with refund)"
+      ],
       "discriminator": [
         105,
         123,
@@ -2032,7 +2060,6 @@ export type Coinflip = {
         {
           "name": "playerBalance",
           "writable": true,
-          "optional": true,
           "pda": {
             "seeds": [
               {
@@ -2067,6 +2094,50 @@ export type Coinflip = {
           }
         },
         {
+          "name": "lastPlayer"
+        },
+        {
+          "name": "lastPlayerParticipation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114,
+                  95,
+                  112,
+                  97,
+                  114,
+                  116,
+                  105,
+                  99,
+                  105,
+                  112,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "lastPlayer"
+              }
+            ]
+          }
+        },
+        {
           "name": "oracle",
           "pda": {
             "seeds": [
@@ -2093,6 +2164,9 @@ export type Coinflip = {
     },
     {
       "name": "updateOracle",
+      "docs": [
+        "Updates oracle configuration including authority transfer"
+      ],
       "discriminator": [
         112,
         41,
@@ -2145,6 +2219,9 @@ export type Coinflip = {
     },
     {
       "name": "updateToken",
+      "docs": [
+        "Updates token configuration including minimum amounts and enabled status"
+      ],
       "discriminator": [
         92,
         200,
@@ -2222,6 +2299,9 @@ export type Coinflip = {
     },
     {
       "name": "withdrawPlayerBalance",
+      "docs": [
+        "Allows players to withdraw their accumulated balance for a token"
+      ],
       "discriminator": [
         186,
         198,
@@ -2524,6 +2604,9 @@ export type Coinflip = {
     },
     {
       "name": "withdrawTokenFee",
+      "docs": [
+        "Allows oracle authority to withdraw accumulated fees for a token"
+      ],
       "discriminator": [
         52,
         183,
@@ -3129,13 +3212,13 @@ export type Coinflip = {
     },
     {
       "code": 7202,
-      "name": "onlyLastPlayerCanUnjoin",
-      "msg": "Only the last player can unjoin to prevent index gaps"
+      "name": "snowballMultiPlayerUnjoin",
+      "msg": "Cannot unjoin Snowball game with multiple players"
     },
     {
       "code": 7203,
-      "name": "snowballMultiPlayerUnjoin",
-      "msg": "Cannot unjoin Snowball game with multiple players"
+      "name": "invalidLastPlayerIndex",
+      "msg": "Invalid last player index"
     },
     {
       "code": 7300,
@@ -3171,10 +3254,16 @@ export type Coinflip = {
         "fields": [
           {
             "name": "creator",
+            "docs": [
+              "Creator of the game"
+            ],
             "type": "pubkey"
           },
           {
             "name": "gameType",
+            "docs": [
+              "Type of game being played"
+            ],
             "type": {
               "defined": {
                 "name": "gameType"
@@ -3183,42 +3272,72 @@ export type Coinflip = {
           },
           {
             "name": "ticketAmount",
+            "docs": [
+              "Amount each player must contribute"
+            ],
             "type": "u64"
           },
           {
             "name": "maxPlayers",
+            "docs": [
+              "Maximum number of players allowed"
+            ],
             "type": "u32"
           },
           {
             "name": "minPlayers",
+            "docs": [
+              "Minimum number of players required"
+            ],
             "type": "u32"
           },
           {
             "name": "playersCount",
+            "docs": [
+              "Current number of players who have joined"
+            ],
             "type": "u32"
           },
           {
             "name": "tokenMint",
+            "docs": [
+              "Token mint used for this game"
+            ],
             "type": "pubkey"
           },
           {
             "name": "createdAt",
+            "docs": [
+              "Timestamp when game was created"
+            ],
             "type": "u64"
           },
           {
             "name": "timeout",
+            "docs": [
+              "Timeout duration in seconds"
+            ],
             "type": "u32"
           },
           {
             "name": "lastSlot",
+            "docs": [
+              "Last slot when any player action occurred"
+            ],
             "type": "u64"
           },
           {
             "name": "isPrivate",
+            "docs": [
+              "Whether this is a private game requiring oracle approval"
+            ],
             "type": "bool"
           },
           {
             "name": "totalAmount",
+            "docs": [
+              "Total accumulated prize"
+            ],
             "type": "u64"
           }
         ]
@@ -3226,15 +3345,24 @@ export type Coinflip = {
     },
     {
       "name": "gameClosed",
+      "docs": [
+        "Emitted when a game is closed by the creator"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "gameKey",
+            "docs": [
+              "Game that was closed"
+            ],
             "type": "pubkey"
           },
           {
             "name": "timestamp",
+            "docs": [
+              "Closure timestamp"
+            ],
             "type": "u64"
           }
         ]
@@ -3242,31 +3370,52 @@ export type Coinflip = {
     },
     {
       "name": "gameCompleted",
+      "docs": [
+        "Emitted when a game is completed and winner is determined"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "gameKey",
+            "docs": [
+              "Game that was completed"
+            ],
             "type": "pubkey"
           },
           {
             "name": "winner",
+            "docs": [
+              "Winner of the game"
+            ],
             "type": "pubkey"
           },
           {
             "name": "playersCount",
+            "docs": [
+              "Total number of players who participated"
+            ],
             "type": "u32"
           },
           {
             "name": "winnerAmount",
+            "docs": [
+              "Amount awarded to the winner"
+            ],
             "type": "u64"
           },
           {
             "name": "feeAmount",
+            "docs": [
+              "Fee amount collected"
+            ],
             "type": "u64"
           },
           {
             "name": "timestamp",
+            "docs": [
+              "Completion timestamp"
+            ],
             "type": "u64"
           }
         ]
@@ -3274,11 +3423,17 @@ export type Coinflip = {
     },
     {
       "name": "gameConfig",
+      "docs": [
+        "Configuration parameters for game creation"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "gameType",
+            "docs": [
+              "Type of game being created"
+            ],
             "type": {
               "defined": {
                 "name": "gameType"
@@ -3287,22 +3442,37 @@ export type Coinflip = {
           },
           {
             "name": "amount",
+            "docs": [
+              "Amount per player (ticket amount for regular games, total prize for giveaways)"
+            ],
             "type": "u64"
           },
           {
             "name": "maxPlayers",
+            "docs": [
+              "Maximum number of players allowed"
+            ],
             "type": "u32"
           },
           {
             "name": "minPlayers",
+            "docs": [
+              "Minimum number of players required to complete"
+            ],
             "type": "u32"
           },
           {
             "name": "timeout",
+            "docs": [
+              "Timeout duration in seconds"
+            ],
             "type": "u32"
           },
           {
             "name": "isPrivate",
+            "docs": [
+              "Whether game requires oracle authority to join"
+            ],
             "type": "bool"
           }
         ]
@@ -3310,19 +3480,31 @@ export type Coinflip = {
     },
     {
       "name": "gameInitialized",
+      "docs": [
+        "Emitted when a new game is created"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "gameKey",
+            "docs": [
+              "Game account address"
+            ],
             "type": "pubkey"
           },
           {
             "name": "creator",
+            "docs": [
+              "Game creator"
+            ],
             "type": "pubkey"
           },
           {
             "name": "gameType",
+            "docs": [
+              "Type of game created"
+            ],
             "type": {
               "defined": {
                 "name": "gameType"
@@ -3331,34 +3513,58 @@ export type Coinflip = {
           },
           {
             "name": "ticketAmount",
+            "docs": [
+              "Amount per player (or total prize for giveaways)"
+            ],
             "type": "u64"
           },
           {
             "name": "totalAmount",
+            "docs": [
+              "Initial total amount in the game"
+            ],
             "type": "u64"
           },
           {
             "name": "maxPlayers",
+            "docs": [
+              "Maximum players allowed"
+            ],
             "type": "u32"
           },
           {
             "name": "minPlayers",
+            "docs": [
+              "Minimum players required"
+            ],
             "type": "u32"
           },
           {
             "name": "tokenMint",
+            "docs": [
+              "Token mint used for the game"
+            ],
             "type": "pubkey"
           },
           {
             "name": "isPrivate",
+            "docs": [
+              "Whether game is private"
+            ],
             "type": "bool"
           },
           {
             "name": "createdAt",
+            "docs": [
+              "Game creation timestamp"
+            ],
             "type": "u64"
           },
           {
             "name": "timeout",
+            "docs": [
+              "Game timeout duration"
+            ],
             "type": "u32"
           }
         ]
@@ -3371,14 +3577,23 @@ export type Coinflip = {
         "fields": [
           {
             "name": "minAmount",
+            "docs": [
+              "Minimum amount required to participate in games"
+            ],
             "type": "u64"
           },
           {
             "name": "feeAmount",
+            "docs": [
+              "Accumulated fee amount for this token"
+            ],
             "type": "u64"
           },
           {
             "name": "enabled",
+            "docs": [
+              "Whether this token is enabled for games"
+            ],
             "type": "bool"
           }
         ]
@@ -3411,26 +3626,44 @@ export type Coinflip = {
         "fields": [
           {
             "name": "authority",
+            "docs": [
+              "Authority that can update oracle settings and claim fees"
+            ],
             "type": "pubkey"
           },
           {
             "name": "feePercentage",
+            "docs": [
+              "Percentage of game amount taken as fee (0-100)"
+            ],
             "type": "u8"
           },
           {
             "name": "oracleBufferTime",
+            "docs": [
+              "Buffer time in seconds after game timeout before cancellation is allowed"
+            ],
             "type": "u16"
           },
           {
             "name": "maxPlayers",
+            "docs": [
+              "Maximum number of players allowed in a game"
+            ],
             "type": "u32"
           },
           {
             "name": "maxTimeout",
+            "docs": [
+              "Maximum timeout duration in seconds for a game"
+            ],
             "type": "u32"
           },
           {
             "name": "minTimeout",
+            "docs": [
+              "Minimum timeout duration in seconds for a game"
+            ],
             "type": "u32"
           }
         ]
@@ -3438,27 +3671,45 @@ export type Coinflip = {
     },
     {
       "name": "oracleConfig",
+      "docs": [
+        "Configuration parameters for oracle initialization and updates"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "feePercentage",
+            "docs": [
+              "Fee percentage taken from game winnings (0-100)"
+            ],
             "type": "u8"
           },
           {
             "name": "oracleBufferTime",
+            "docs": [
+              "Buffer time in seconds after game timeout before cancellation"
+            ],
             "type": "u16"
           },
           {
             "name": "maxPlayers",
+            "docs": [
+              "Maximum number of players allowed in any game"
+            ],
             "type": "u32"
           },
           {
             "name": "maxTimeout",
+            "docs": [
+              "Maximum timeout duration in seconds for games"
+            ],
             "type": "u32"
           },
           {
             "name": "minTimeout",
+            "docs": [
+              "Minimum timeout duration in seconds for games"
+            ],
             "type": "u32"
           }
         ]
@@ -3466,31 +3717,52 @@ export type Coinflip = {
     },
     {
       "name": "oracleInitialized",
+      "docs": [
+        "Emitted when the global oracle account is initialized"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "authority",
+            "docs": [
+              "Authority that controls the oracle"
+            ],
             "type": "pubkey"
           },
           {
             "name": "feePercentage",
+            "docs": [
+              "Fee percentage taken from game winnings (0-100)"
+            ],
             "type": "u8"
           },
           {
             "name": "oracleBufferTime",
+            "docs": [
+              "Buffer time in seconds after game timeout"
+            ],
             "type": "u16"
           },
           {
             "name": "maxPlayers",
+            "docs": [
+              "Maximum players allowed in any game"
+            ],
             "type": "u32"
           },
           {
             "name": "maxTimeout",
+            "docs": [
+              "Maximum timeout duration for games"
+            ],
             "type": "u32"
           },
           {
             "name": "minTimeout",
+            "docs": [
+              "Minimum timeout duration for games"
+            ],
             "type": "u32"
           }
         ]
@@ -3498,35 +3770,59 @@ export type Coinflip = {
     },
     {
       "name": "oracleUpdated",
+      "docs": [
+        "Emitted when oracle configuration is updated"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "oldAuthority",
+            "docs": [
+              "Previous authority"
+            ],
             "type": "pubkey"
           },
           {
             "name": "newAuthority",
+            "docs": [
+              "New authority"
+            ],
             "type": "pubkey"
           },
           {
             "name": "feePercentage",
+            "docs": [
+              "Updated fee percentage"
+            ],
             "type": "u8"
           },
           {
             "name": "oracleBufferTime",
+            "docs": [
+              "Updated buffer time"
+            ],
             "type": "u16"
           },
           {
             "name": "maxPlayers",
+            "docs": [
+              "Updated maximum players"
+            ],
             "type": "u32"
           },
           {
             "name": "maxTimeout",
+            "docs": [
+              "Updated maximum timeout"
+            ],
             "type": "u32"
           },
           {
             "name": "minTimeout",
+            "docs": [
+              "Updated minimum timeout"
+            ],
             "type": "u32"
           }
         ]
@@ -3539,6 +3835,9 @@ export type Coinflip = {
         "fields": [
           {
             "name": "amount",
+            "docs": [
+              "Current balance amount"
+            ],
             "type": "u64"
           }
         ]
@@ -3546,15 +3845,24 @@ export type Coinflip = {
     },
     {
       "name": "playerBalanceInitialized",
+      "docs": [
+        "Emitted when a player's balance account is initialized"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "player",
+            "docs": [
+              "Player who initialized the balance"
+            ],
             "type": "pubkey"
           },
           {
             "name": "tokenMint",
+            "docs": [
+              "Token mint for this balance"
+            ],
             "type": "pubkey"
           }
         ]
@@ -3562,19 +3870,31 @@ export type Coinflip = {
     },
     {
       "name": "playerBalanceWithdrawn",
+      "docs": [
+        "Emitted when a player withdraws from their balance"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "player",
+            "docs": [
+              "Player who withdrew"
+            ],
             "type": "pubkey"
           },
           {
             "name": "tokenMint",
+            "docs": [
+              "Token mint of the withdrawal"
+            ],
             "type": "pubkey"
           },
           {
             "name": "amount",
+            "docs": [
+              "Amount withdrawn"
+            ],
             "type": "u64"
           }
         ]
@@ -3582,35 +3902,59 @@ export type Coinflip = {
     },
     {
       "name": "playerJoined",
+      "docs": [
+        "Emitted when a player joins a game"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "gameKey",
+            "docs": [
+              "Game that was joined"
+            ],
             "type": "pubkey"
           },
           {
             "name": "player",
+            "docs": [
+              "Player who joined"
+            ],
             "type": "pubkey"
           },
           {
             "name": "totalAmount",
+            "docs": [
+              "Total prize amount after join"
+            ],
             "type": "u64"
           },
           {
             "name": "playersCount",
+            "docs": [
+              "Number of players after join"
+            ],
             "type": "u32"
           },
           {
             "name": "playerIndex",
+            "docs": [
+              "Player's index in the game"
+            ],
             "type": "u32"
           },
           {
             "name": "lastSlot",
+            "docs": [
+              "Last slot for entropy"
+            ],
             "type": "u64"
           },
           {
             "name": "timestamp",
+            "docs": [
+              "Timestamp of the join"
+            ],
             "type": "u64"
           }
         ]
@@ -3623,10 +3967,16 @@ export type Coinflip = {
         "fields": [
           {
             "name": "playerIndex",
+            "docs": [
+              "Player's position/index in the game (for winner calculation)"
+            ],
             "type": "u32"
           },
           {
             "name": "playerAmount",
+            "docs": [
+              "Amount contributed by the player"
+            ],
             "type": "u64"
           }
         ]
@@ -3634,39 +3984,66 @@ export type Coinflip = {
     },
     {
       "name": "playerParticipationCleaned",
+      "docs": [
+        "Emitted when expired player participation is cleaned up"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "gameKey",
+            "docs": [
+              "Game being cleaned"
+            ],
             "type": "pubkey"
           },
           {
             "name": "player",
+            "docs": [
+              "Player whose participation was cleaned"
+            ],
             "type": "pubkey"
           },
           {
             "name": "totalAmount",
+            "docs": [
+              "Remaining total amount"
+            ],
             "type": "u64"
           },
           {
             "name": "playersCount",
+            "docs": [
+              "Remaining players count"
+            ],
             "type": "u32"
           },
           {
             "name": "playerIndex",
+            "docs": [
+              "Player's index that was cleaned"
+            ],
             "type": "u32"
           },
           {
             "name": "refundAmount",
+            "docs": [
+              "Amount refunded to player (if any)"
+            ],
             "type": "u64"
           },
           {
             "name": "isCompletedGame",
+            "docs": [
+              "Whether the game was already completed"
+            ],
             "type": "bool"
           },
           {
             "name": "timestamp",
+            "docs": [
+              "Timestamp of the cleanup"
+            ],
             "type": "u64"
           }
         ]
@@ -3674,31 +4051,52 @@ export type Coinflip = {
     },
     {
       "name": "playerRolled",
+      "docs": [
+        "Emitted when a player rolls in Snowball/Dumbflip games"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "gameKey",
+            "docs": [
+              "Game where the roll occurred"
+            ],
             "type": "pubkey"
           },
           {
             "name": "player",
+            "docs": [
+              "Player who rolled"
+            ],
             "type": "pubkey"
           },
           {
             "name": "totalAmount",
+            "docs": [
+              "Total amount after roll"
+            ],
             "type": "u64"
           },
           {
             "name": "playerIndex",
+            "docs": [
+              "Player's index in the game"
+            ],
             "type": "u32"
           },
           {
             "name": "lastSlot",
+            "docs": [
+              "Last slot for entropy"
+            ],
             "type": "u64"
           },
           {
             "name": "timestamp",
+            "docs": [
+              "Timestamp of the roll"
+            ],
             "type": "u64"
           }
         ]
@@ -3706,35 +4104,59 @@ export type Coinflip = {
     },
     {
       "name": "playerUnjoined",
+      "docs": [
+        "Emitted when a player leaves a game before completion"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "gameKey",
+            "docs": [
+              "Game that was left"
+            ],
             "type": "pubkey"
           },
           {
             "name": "player",
+            "docs": [
+              "Player who left"
+            ],
             "type": "pubkey"
           },
           {
             "name": "totalAmount",
+            "docs": [
+              "Remaining total amount after unjoin"
+            ],
             "type": "u64"
           },
           {
             "name": "playersCount",
+            "docs": [
+              "Remaining players count"
+            ],
             "type": "u32"
           },
           {
             "name": "playerIndex",
+            "docs": [
+              "Player's index that was removed"
+            ],
             "type": "u32"
           },
           {
             "name": "lastSlot",
+            "docs": [
+              "Last slot for entropy"
+            ],
             "type": "u64"
           },
           {
             "name": "timestamp",
+            "docs": [
+              "Timestamp of the unjoin"
+            ],
             "type": "u64"
           }
         ]
@@ -3742,15 +4164,24 @@ export type Coinflip = {
     },
     {
       "name": "tokenConfig",
+      "docs": [
+        "Configuration parameters for token initialization and updates"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "minAmount",
+            "docs": [
+              "Minimum amount required to participate in games with this token"
+            ],
             "type": "u64"
           },
           {
             "name": "enabled",
+            "docs": [
+              "Whether this token is enabled for creating/joining games"
+            ],
             "type": "bool"
           }
         ]
@@ -3758,19 +4189,31 @@ export type Coinflip = {
     },
     {
       "name": "tokenFeeWithdrawn",
+      "docs": [
+        "Emitted when accumulated fees are withdrawn by authority"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "authority",
+            "docs": [
+              "Authority that withdrew the fees"
+            ],
             "type": "pubkey"
           },
           {
             "name": "tokenMint",
+            "docs": [
+              "Token mint of the withdrawn fees"
+            ],
             "type": "pubkey"
           },
           {
             "name": "amount",
+            "docs": [
+              "Amount of fees withdrawn"
+            ],
             "type": "u64"
           }
         ]
@@ -3778,19 +4221,31 @@ export type Coinflip = {
     },
     {
       "name": "tokenInitialized",
+      "docs": [
+        "Emitted when a new token is initialized for games"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "tokenMint",
+            "docs": [
+              "Token mint address"
+            ],
             "type": "pubkey"
           },
           {
             "name": "minAmount",
+            "docs": [
+              "Minimum amount required for games"
+            ],
             "type": "u64"
           },
           {
             "name": "enabled",
+            "docs": [
+              "Whether token is enabled"
+            ],
             "type": "bool"
           }
         ]
@@ -3798,19 +4253,31 @@ export type Coinflip = {
     },
     {
       "name": "tokenUpdated",
+      "docs": [
+        "Emitted when token configuration is updated"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "tokenMint",
+            "docs": [
+              "Token mint address"
+            ],
             "type": "pubkey"
           },
           {
             "name": "minAmount",
+            "docs": [
+              "Updated minimum amount"
+            ],
             "type": "u64"
           },
           {
             "name": "enabled",
+            "docs": [
+              "Updated enabled status"
+            ],
             "type": "bool"
           }
         ]
