@@ -140,23 +140,26 @@ const server = Bun.serve({
    */
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const { pathname: path, method } = { pathname: url.pathname, method: request.method };
+    // Renamed 'path' to 'routePath' to avoid collision with the imported 'path' module
+    const { pathname: routePath, method } = { pathname: url.pathname, method: request.method };
 
     // CORS preflight
     if (method === 'OPTIONS') return createResponse(null, 200);
 
     try {
       switch (true) {
-        case path === '/health' && method === 'GET':
+        case routePath === '/health' && method === 'GET':
           return await handleHealth();
-        case path === '/generate-hash' && method === 'POST':
+        case routePath === '/generate-hash' && method === 'POST':
           return await handleGenerateHash(request);
-        case path === '/stats' && method === 'GET':
+        case routePath === '/stats' && method === 'GET':
           return await handleStats();
-        case path === '/' && method === 'GET':
+        case routePath === '/' && method === 'GET': { // Use 'routePath' here
+          // 'path.join' now correctly refers to the imported 'path' module
           const docPath = path.join(process.cwd(), 'api-documentation.html');
           const apiDocHtml = fs.readFileSync(docPath, 'utf-8');
           return createHtmlResponse(apiDocHtml);
+        }
         default:
           return createErrorResponse('Endpoint not found', 404);
       }

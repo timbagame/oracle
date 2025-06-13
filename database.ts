@@ -407,7 +407,7 @@ export class OracleDatabase {
   public getConnectionInfo(): { file: string; isOpen: boolean } {
     return {
       file: this.db.filename, // Use db.filename for the actual path
-      isOpen: this.db.readonly // A simple check, though 'isOpen' might be more complex
+      isOpen: !this.db.closed // Use the inverse of the 'closed' property
     };
   }
 
