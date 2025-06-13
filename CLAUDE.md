@@ -100,3 +100,16 @@ Required files:
 - **Database**: SQLite (via Bun's built-in support)
 - **TypeScript**: Strict mode enabled
 - **Package Manager**: Bun (uses `bun.lock`)
+
+## Important Development Notes
+
+### Code Style and Patterns
+- **Service Management**: `OracleService` is a singleton - always use `OracleService.getInstance()`
+- **Error Handling**: Distinguish between actual errors and "not ready" states in game processing
+- **Type Safety**: Full TypeScript interfaces exist for all data structures - always use them
+- **Resource Cleanup**: All services implement graceful shutdown handlers
+
+### Common Development Tasks
+- **Adding New Game Types**: Update `GameType` enum and implement handling in both `oracle-service.ts` and database schema
+- **Modifying Event Handling**: Events are processed in real-time with fallback scanning - consider both paths
+- **Database Changes**: Use transactions for consistency and test schema migrations carefully
