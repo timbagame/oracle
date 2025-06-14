@@ -82,8 +82,14 @@ const API_DOCUMENTATION = `
         <span class="method post">POST</span> <code>/generate-hash</code>
         <div class="description">
           Generate new game secrets (random hash and game address)<br>
-          <strong>Body:</strong> <code>{ "gameType": "coinflip" | "giveaway" | "dumbflip" | "snowball" }</code><br>
-          <strong>Note:</strong> For dumbflip and snowball games, also returns the secret key
+          <strong>Body:</strong> <code>{ "gameType": "coinflip" | "giveaway" | "dumbflip" | "snowball" }</code>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <span class="method get">GET</span> <code>/current-winner/:gameAddress</code>
+        <div class="description">
+          Get the current winner for a specific game (dumbflip/snowball)
         </div>
       </div>
 
@@ -129,28 +135,14 @@ async function handleHealth(): Promise<Response> {
   });
 }
 
-async function handleGenerateHash(request: Request): Promise<Response> {
+async function handleGenerateHash(): Promise<Response> {
   try {
-    // Parse request body to get game type if provided
-    let gameType: string | undefined;
-    try {
-      const body = await request.json() as { gameType?: string };
-      gameType = body?.gameType?.toLowerCase();
-    } catch {
-      // No body or invalid JSON, use default behavior
-    }
-
-    const secrets = oracle.generateGameSecrets(gameType);
-    const response: any = {
+    const secrets = oracle.generateGameSecrets();
+    const response = {
       success: true,
       randomHash: secrets.randomHash,
       gameAddress: secrets.gameAddress
     };
-
-    // Include secret key for dumbflip and snowball games
-    if (secrets.secretKey) {
-      response.secretKey = secrets.secretKey;
-    }
 
     return createResponse(response);
   } catch (error: any) {
@@ -174,6 +166,16 @@ async function handleStats(): Promise<Response> {
   });
 }
 
+async function handleCurrentWinner(gameAddress: string): Promise<Response> {
+  try {
+    const result = await oracle.getCurrentWinner(gameAddress);
+    return createResponse(result);
+  } catch (error: any) {
+    console.error('❌ Error getting current winner:', error);
+    return createErrorResponse('Failed to get current winner', 500);
+  }
+}
+
 // Main server
 const server = Bun.serve({
   port: PORT,
@@ -189,9 +191,15 @@ const server = Bun.serve({
         case path === '/health' && method === 'GET':
           return await handleHealth();
         case path === '/generate-hash' && method === 'POST':
-          return await handleGenerateHash(request);
+          return await handleGenerateHash();
         case path === '/stats' && method === 'GET':
           return await handleStats();
+        case path.startsWith('/current-winner/') && method === 'GET':
+          const gameAddress = path.split('/current-winner/')[1];
+          if (!gameAddress) {
+            return createErrorResponse('Game address required', 400);
+          }
+          return await handleCurrentWinner(gameAddress);
         case path === '/' && method === 'GET':
           return createHtmlResponse(API_DOCUMENTATION);
         default:

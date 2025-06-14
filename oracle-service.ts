@@ -13,8 +13,6 @@ const SECRET_KEY_LENGTH = 32;
 const MAX_COMPLETION_ATTEMPTS = 5;
 const DEFAULT_DELAY_MS = 1000;
 
-// Game types that include secret keys in response
-const GAMES_WITH_SECRET_KEYS = new Set(['dumbflip', 'snowball']);
 
 // Event handling types
 type EventHandler = (event: any) => Promise<void> | void;
@@ -31,7 +29,6 @@ interface GameCompletionResult {
 interface GameSecrets {
   randomHash: string;
   gameAddress: string;
-  secretKey?: string;
 }
 
 interface CompletionStats {
@@ -203,7 +200,7 @@ export class OracleService {
     }
   }
 
-  public generateGameSecrets(gameType?: string): GameSecrets {
+  public generateGameSecrets(): GameSecrets {
     const secretKey = randomBytes(SECRET_KEY_LENGTH);
     const randomHash = createHash('sha256').update(secretKey).digest();
     const gamePda = this.getGamePDA(randomHash);
@@ -218,10 +215,6 @@ export class OracleService {
       gameAddress
     };
 
-    // Include secret key for specific game types
-    if (gameType && GAMES_WITH_SECRET_KEYS.has(gameType.toLowerCase())) {
-      secrets.secretKey = secretKey.toString('hex');
-    }
 
     return secrets;
   }
@@ -396,6 +389,38 @@ export class OracleService {
 
   public cleanupOldRecords(hoursOld: number = 48) {
     return this.db.cleanupOldRecords(hoursOld);
+  }
+
+  public async getCurrentWinner(gameAddress: string): Promise<{ success: boolean; winner?: string; error?: string }> {
+    try {
+      const secretData = this.db.getSecretKey(gameAddress);
+      if (!secretData) {
+        return { success: false, error: "Game not found" };
+      }
+
+      const gamePda = this.getGamePDAFromAddress(gameAddress);
+      const gameAccount = await this.program.account.game.fetch(gamePda);
+      const players = this.db.getGamePlayers(gameAddress);
+
+      if (players.length === 0) {
+        return { success: false, error: "No players in game" };
+      }
+
+      const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
+      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.lastSlot, players.length);
+      const winnerPlayerAddress = players[winnerIndex];
+
+      if (!winnerPlayerAddress) {
+        return { success: false, error: "Unable to determine winner" };
+      }
+
+      return { success: true, winner: winnerPlayerAddress };
+    } catch (error: any) {
+      if (this.isAccountNotFoundError(error)) {
+        return { success: false, error: "Game not found" };
+      }
+      return { success: false, error: error.message };
+    }
   }
 
   public getStats() {
