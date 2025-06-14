@@ -70,6 +70,7 @@ export class OracleDatabase {
       CREATE TABLE IF NOT EXISTS game_tracking (
         game_address TEXT PRIMARY KEY,
         status TEXT NOT NULL DEFAULT '${DEFAULT_STATUS}',
+        game_type TEXT,
         last_checked INTEGER NOT NULL,
         completion_attempts INTEGER DEFAULT 0,
         completed_at INTEGER
@@ -142,15 +143,26 @@ export class OracleDatabase {
   }
 
   // Game tracking
-  public trackGame(gameAddress: string): void {
+  public trackGame(gameAddress: string, gameType?: string): void {
     this.executeDbOperation(
       () => {
         const stmt = this.db.prepare(
-          'INSERT OR REPLACE INTO game_tracking (game_address, status, last_checked) VALUES (?, ?, ?)'
+          'INSERT OR REPLACE INTO game_tracking (game_address, status, game_type, last_checked) VALUES (?, ?, ?, ?)'
         );
-        stmt.run(gameAddress, DEFAULT_STATUS, Date.now());
+        stmt.run(gameAddress, DEFAULT_STATUS, gameType || null, Date.now());
       },
       "Failed to track game"
+    );
+  }
+
+  public getGameType(gameAddress: string): string | null {
+    return this.executeDbOperation(
+      () => {
+        const stmt = this.db.prepare('SELECT game_type FROM game_tracking WHERE game_address = ?');
+        const result = stmt.get(gameAddress) as { game_type: string | null } | undefined;
+        return result?.game_type || null;
+      },
+      "Failed to get game type"
     );
   }
 

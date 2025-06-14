@@ -169,7 +169,19 @@ export class OracleService {
 
   private handleGameInitialized(event: any): void {
     const { gameAddress } = this.extractEventData(event);
-    this.db.trackGame(gameAddress);
+    
+    // Extract game type from event
+    let gameType: string | undefined = undefined;
+    if (event.gameType) {
+      // GameType is an enum, extract the variant name
+      const gameTypeKeys = Object.keys(event.gameType);
+      if (gameTypeKeys.length > 0 && gameTypeKeys[0]) {
+        gameType = gameTypeKeys[0].toLowerCase();
+      }
+    }
+    
+    console.log(`🎮 Game initialized: ${gameAddress}, Type: ${gameType || 'unknown'}`);
+    this.db.trackGame(gameAddress, gameType);
   }
 
   private async handlePlayerCleaned(event: any): Promise<void> {
@@ -393,6 +405,12 @@ export class OracleService {
 
   public async getCurrentWinner(gameAddress: string): Promise<{ success: boolean; winner?: string; error?: string }> {
     try {
+      // Check if this is a dumbflip or snowball game
+      const gameType = this.db.getGameType(gameAddress);
+      if (!gameType || (gameType !== 'dumbflip' && gameType !== 'snowball')) {
+        return { success: false, error: "Current winner only available for dumbflip and snowball games" };
+      }
+
       const secretData = this.db.getSecretKey(gameAddress);
       if (!secretData) {
         return { success: false, error: "Game not found" };
