@@ -271,9 +271,14 @@ export class OracleService {
         return { success: false, error: "No players found for game" };
       }
 
+      // Calculate entries: for Snowball games use total_amount/ticket_amount, for others use player count
+      const nEntries = gameAccount.gameType.snowball 
+        ? Number(gameAccount.totalAmount) / Number(gameAccount.ticketAmount)
+        : players.length;
+
       const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
       const randomHashBuffer = Buffer.from(secretData.randomHash, "hex");
-      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.lastSlot, players.length);
+      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.lastSlot, nEntries);
       const winnerPlayerAddress = players[winnerIndex];
 
       if (!winnerPlayerAddress) {
@@ -424,8 +429,13 @@ export class OracleService {
         return { success: false, error: "No players in game" };
       }
 
+      // Calculate entries: for Snowball games use total_amount/ticket_amount, for others use player count
+      const nEntries = gameAccount.gameType.snowball 
+        ? Number(gameAccount.totalAmount) / Number(gameAccount.ticketAmount)
+        : players.length;
+
       const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
-      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.lastSlot, players.length);
+      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.lastSlot, nEntries);
       const winnerPlayerAddress = players[winnerIndex];
 
       if (!winnerPlayerAddress) {
