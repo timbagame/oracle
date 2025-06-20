@@ -271,8 +271,8 @@ export class OracleService {
         return { success: false, error: "No players found for game" };
       }
 
-      // Calculate entries: for Snowball games use total_amount/ticket_amount, for others use player count
-      const nEntries = gameAccount.gameType.snowball 
+      // Calculate entries: for Snowball and Dumbball games use total_amount/ticket_amount, for others use player count
+      const nEntries = (gameAccount.gameType.snowball || gameAccount.gameType.dumbball)
         ? Number(gameAccount.totalAmount) / Number(gameAccount.ticketAmount)
         : players.length;
 
@@ -410,10 +410,10 @@ export class OracleService {
 
   public async getCurrentWinner(gameAddress: string): Promise<{ success: boolean; winner?: string; error?: string }> {
     try {
-      // Check if this is a dumbflip or snowball game
+      // Check if this is a dumb mode game (real-time winner revelation)
       const gameType = this.db.getGameType(gameAddress);
-      if (!gameType || (gameType !== 'dumbflip' && gameType !== 'snowball')) {
-        return { success: false, error: "Current winner only available for dumbflip and snowball games" };
+      if (!gameType || (gameType !== 'dumbflip' && gameType !== 'dumbaway' && gameType !== 'dumbball')) {
+        return { success: false, error: "Current winner only available for dumb mode games (dumbflip, dumbaway, dumbball)" };
       }
 
       const secretData = this.db.getSecretKey(gameAddress);
@@ -429,8 +429,8 @@ export class OracleService {
         return { success: false, error: "No players in game" };
       }
 
-      // Calculate entries: for Snowball games use total_amount/ticket_amount, for others use player count
-      const nEntries = gameAccount.gameType.snowball 
+      // Calculate entries: for Snowball and Dumbball games use total_amount/ticket_amount, for others use player count
+      const nEntries = (gameAccount.gameType.snowball || gameAccount.gameType.dumbball)
         ? Number(gameAccount.totalAmount) / Number(gameAccount.ticketAmount)
         : players.length;
 
