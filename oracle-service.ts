@@ -16,7 +16,21 @@ const DEFAULT_DELAY_MS = 1000;
 
 // Event handling types
 type EventHandler = (event: any) => Promise<void> | void;
-type GameEvent = 'playerJoined' | 'playerUnjoined' | 'playerRolled' | 'gameInitialized' | 'gameCompleted' | 'gameClosed' | 'playerParticipationCleaned';
+type EventMap = {
+  gameInitialized: any;
+  playerJoined: any;
+  playerUnjoined: any;
+  playerRolled: any;
+  gameCompleted: any;
+  gameClosed: any;
+  oracleInitialized: any;
+  oracleUpdated: any;
+  playerBalanceInitialized: any;
+  playerBalanceWithdrawn: any;
+  tokenFeeWithdrawn: any;
+  tokenInitialized: any;
+  tokenUpdated: any;
+};
 
 // Types
 interface GameCompletionResult {
@@ -102,14 +116,13 @@ export class OracleService {
   }
 
   private async setupEventListeners(): Promise<number[]> {
-    const eventMap: Array<[GameEvent, EventHandler]> = [
+    const eventMap: Array<[keyof EventMap, EventHandler]> = [
       ['playerJoined', this.handlePlayerEvent.bind(this, 'joined')],
       ['playerUnjoined', this.handlePlayerEvent.bind(this, 'unjoined')],
       ['playerRolled', this.handlePlayerEvent.bind(this, 'rolled')],
       ['gameInitialized', this.handleGameInitialized.bind(this)],
       ['gameCompleted', this.handleGameStatusChange.bind(this, 'completed')],
-      ['gameClosed', this.handleGameStatusChange.bind(this, 'closed')],
-      ['playerParticipationCleaned', this.handlePlayerCleaned.bind(this)]
+      ['gameClosed', this.handleGameStatusChange.bind(this, 'closed')]
     ];
 
     return eventMap.map(([eventName, handler]) =>
@@ -184,16 +197,6 @@ export class OracleService {
     this.db.trackGame(gameAddress, gameType);
   }
 
-  private async handlePlayerCleaned(event: any): Promise<void> {
-    const { gameAddress, playerAddress } = this.extractEventData(event);
-
-    try {
-      console.log(`🧹 Player ${playerAddress} cleaned from game ${gameAddress}`);
-      this.db.removePlayerFromGame(gameAddress, playerAddress);
-    } catch (error) {
-      console.error("❌ Error in player participation cleaned event:", error);
-    }
-  }
 
   private extractEventData(event: any): { gameAddress: string; playerAddress: string } {
     return {
@@ -238,10 +241,10 @@ export class OracleService {
 
       const expiresAt = Number(gameAccount.createdAt) + Number(gameAccount.timeout);
       const isExpired = blockTime > expiresAt;
-      const isFull = gameAccount.playersCount >= gameAccount.maxPlayers;
-      const hasMinPlayers = gameAccount.playersCount >= gameAccount.minPlayers;
+      const isFull = gameAccount.ticketsCount >= gameAccount.maxTickets;
+      const hasMinTickets = gameAccount.ticketsCount >= gameAccount.minTickets;
 
-      return isFull || (isExpired && hasMinPlayers);
+      return isFull || (isExpired && hasMinTickets);
     } catch (error: any) {
       if (this.isAccountNotFoundError(error)) {
         const gameAddress = gamePda.toBase58();
@@ -316,10 +319,15 @@ export class OracleService {
     randomHashBuffer: Buffer,
     secretKeyBuffer: Buffer
   ): Promise<string> {
+    const winnerIndex = this.calculateWinnerIndex(
+      secretKeyBuffer, 
+      BigInt(0), // Using 0 as placeholder - should be updated with actual lastSlot
+      1 // This will be updated based on actual player/ticket count
+    );
+
     const txHash = await this.program.methods
-      .completeGame([...randomHashBuffer], [...secretKeyBuffer])
+      .completeGame([...randomHashBuffer], [...secretKeyBuffer], winnerIndex)
       .accounts({
-        authority: this.adminKeypair.publicKey,
         winner: winnerAddress,
         creator: creatorAddress,
       })
@@ -561,8 +569,8 @@ export class OracleService {
         this.program.programId
       );
 
-      // Try to fetch the PlayerParticipation account
-      await this.program.account.playerParticipation.fetch(playerParticipationPda);
+      // Try to fetch the PlayerBalance account instead
+      await this.program.account.playerBalance.fetch(playerParticipationPda);
       return true;
     } catch (error) {
       // If account doesn't exist, player is not in the game

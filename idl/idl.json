@@ -8,83 +8,6 @@
   },
   "instructions": [
     {
-      "name": "clean_player_participation",
-      "docs": ["Cleans up expired player participation accounts"],
-      "discriminator": [166, 212, 44, 185, 199, 105, 199, 79],
-      "accounts": [
-        {
-          "name": "game",
-          "writable": true
-        },
-        {
-          "name": "player_participation",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112, 108, 97, 121, 101, 114, 95, 112, 97, 114, 116, 105, 99,
-                  105, 112, 97, 116, 105, 111, 110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game"
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              }
-            ]
-          }
-        },
-        {
-          "name": "player",
-          "writable": true
-        },
-        {
-          "name": "player_balance",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112, 108, 97, 121, 101, 114, 95, 98, 97, 108, 97, 110, 99, 101
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "Game"
-              }
-            ]
-          }
-        },
-        {
-          "name": "oracle",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [111, 114, 97, 99, 108, 101]
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "close_game",
       "docs": ["Closes a game with no active players (creator only)"],
       "discriminator": [237, 236, 157, 201, 253, 20, 248, 67],
@@ -174,31 +97,8 @@
           }
         },
         {
-          "name": "authority",
+          "name": "oracle_operator",
           "signer": true
-        },
-        {
-          "name": "winner_participation",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112, 108, 97, 121, 101, 114, 95, 112, 97, 114, 116, 105, 99,
-                  105, 112, 97, 116, 105, 111, 110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game"
-              },
-              {
-                "kind": "account",
-                "path": "winner"
-              }
-            ]
-          }
         },
         {
           "name": "winner",
@@ -261,18 +161,20 @@
           }
         },
         {
-          "name": "_secret_key",
+          "name": "secret_key",
           "type": {
             "array": ["u8", 32]
           }
+        },
+        {
+          "name": "winner_index",
+          "type": "u32"
         }
       ]
     },
     {
       "name": "initialize_game",
-      "docs": [
-        "Creates a new game with specified configuration and random hash"
-      ],
+      "docs": ["Creates a new game with specified configuration"],
       "discriminator": [44, 62, 102, 247, 126, 208, 130, 215],
       "accounts": [
         {
@@ -477,7 +379,7 @@
           }
         },
         {
-          "name": "authority",
+          "name": "oracle_operator",
           "writable": true,
           "signer": true
         },
@@ -678,7 +580,7 @@
           }
         },
         {
-          "name": "authority",
+          "name": "oracle_operator",
           "writable": true,
           "signer": true
         },
@@ -716,29 +618,6 @@
           "writable": true
         },
         {
-          "name": "player_participation",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112, 108, 97, 121, 101, 114, 95, 112, 97, 114, 116, 105, 99,
-                  105, 112, 97, 116, 105, 111, 110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game"
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              }
-            ]
-          }
-        },
-        {
           "name": "player",
           "writable": true,
           "signer": true
@@ -767,7 +646,7 @@
           }
         },
         {
-          "name": "authority",
+          "name": "oracle_operator",
           "signer": true,
           "optional": true
         },
@@ -907,29 +786,8 @@
           "writable": true
         },
         {
-          "name": "player_participation",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112, 108, 97, 121, 101, 114, 95, 112, 97, 114, 116, 105, 99,
-                  105, 112, 97, 116, 105, 111, 110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game"
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              }
-            ]
-          }
-        },
-        {
           "name": "player",
+          "writable": true,
           "signer": true
         },
         {
@@ -956,7 +814,7 @@
           }
         },
         {
-          "name": "authority",
+          "name": "oracle_operator",
           "signer": true,
           "optional": true
         },
@@ -1096,29 +954,6 @@
           "writable": true
         },
         {
-          "name": "player_participation",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112, 108, 97, 121, 101, 114, 95, 112, 97, 114, 116, 105, 99,
-                  105, 112, 97, 116, 105, 111, 110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game"
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              }
-            ]
-          }
-        },
-        {
           "name": "player",
           "writable": true,
           "signer": true
@@ -1147,32 +982,6 @@
           }
         },
         {
-          "name": "last_player"
-        },
-        {
-          "name": "last_player_participation",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112, 108, 97, 121, 101, 114, 95, 112, 97, 114, 116, 105, 99,
-                  105, 112, 97, 116, 105, 111, 110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game"
-              },
-              {
-                "kind": "account",
-                "path": "last_player"
-              }
-            ]
-          }
-        },
-        {
           "name": "oracle",
           "pda": {
             "seeds": [
@@ -1188,11 +997,16 @@
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "ticket_index",
+          "type": "u32"
+        }
+      ]
     },
     {
       "name": "update_oracle",
-      "docs": ["Updates oracle configuration including authority transfer"],
+      "docs": ["Updates oracle configuration including operator transfer"],
       "discriminator": [112, 41, 209, 18, 248, 226, 252, 188],
       "accounts": [
         {
@@ -1208,11 +1022,11 @@
           }
         },
         {
-          "name": "old_authority",
+          "name": "old_oracle_operator",
           "signer": true
         },
         {
-          "name": "new_authority",
+          "name": "new_oracle_operator",
           "signer": true
         }
       ],
@@ -1265,7 +1079,7 @@
           }
         },
         {
-          "name": "authority",
+          "name": "oracle_operator",
           "signer": true
         }
       ],
@@ -1428,7 +1242,7 @@
     {
       "name": "withdraw_token_fee",
       "docs": [
-        "Allows oracle authority to withdraw accumulated fees for a token"
+        "Allows oracle operator to withdraw accumulated fees for a token"
       ],
       "discriminator": [52, 183, 125, 234, 165, 30, 67, 19],
       "accounts": [
@@ -1479,17 +1293,17 @@
           }
         },
         {
-          "name": "authority",
+          "name": "oracle_operator",
           "signer": true
         },
         {
-          "name": "authority_token_account",
+          "name": "oracle_operator_token_account",
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "account",
-                "path": "authority"
+                "path": "oracle_operator"
               },
               {
                 "kind": "const",
@@ -1578,10 +1392,6 @@
     {
       "name": "PlayerBalance",
       "discriminator": [244, 128, 24, 93, 212, 190, 202, 111]
-    },
-    {
-      "name": "PlayerParticipation",
-      "discriminator": [193, 220, 110, 11, 204, 119, 191, 216]
     }
   ],
   "events": [
@@ -1618,10 +1428,6 @@
       "discriminator": [39, 144, 49, 106, 108, 210, 183, 38]
     },
     {
-      "name": "PlayerParticipationCleaned",
-      "discriminator": [121, 176, 106, 80, 50, 196, 211, 77]
-    },
-    {
       "name": "PlayerRolled",
       "discriminator": [140, 47, 89, 123, 203, 204, 244, 6]
     },
@@ -1645,8 +1451,8 @@
   "errors": [
     {
       "code": 7000,
-      "name": "UnauthorizedAuthority",
-      "msg": "Unauthorized authority"
+      "name": "UnauthorizedOperator",
+      "msg": "Unauthorized operator"
     },
     {
       "code": 7001,
@@ -1699,6 +1505,11 @@
       "msg": "Game already completed"
     },
     {
+      "code": 7108,
+      "name": "OracleBufferNotExpired",
+      "msg": "Oracle buffer time not expired"
+    },
+    {
       "code": 7200,
       "name": "AlreadyJoined",
       "msg": "Player already joined"
@@ -1710,18 +1521,28 @@
     },
     {
       "code": 7202,
-      "name": "SnowballMultiPlayerUnjoin",
-      "msg": "Cannot unjoin Snowball game with multiple players"
+      "name": "InvalidWinnerIndex",
+      "msg": "Invalid winner index"
     },
     {
       "code": 7203,
-      "name": "InvalidLastPlayerIndex",
-      "msg": "Invalid last player index"
+      "name": "WinnerPubkeyMismatch",
+      "msg": "Winner pubkey mismatch"
+    },
+    {
+      "code": 7204,
+      "name": "PrivateGameAccessDenied",
+      "msg": "Private game access denied"
+    },
+    {
+      "code": 7205,
+      "name": "RandomnessGenerationFailed",
+      "msg": "Randomness generation failed"
     },
     {
       "code": 7300,
-      "name": "InvalidPlayersCount",
-      "msg": "Invalid players count"
+      "name": "InvalidTicketsCount",
+      "msg": "Invalid tickets count"
     },
     {
       "code": 7301,
@@ -1739,12 +1560,49 @@
       "msg": "Invalid secret key"
     },
     {
+      "code": 7304,
+      "name": "InvalidConfiguration",
+      "msg": "Invalid configuration"
+    },
+    {
       "code": 7400,
       "name": "TokenNotEnabled",
       "msg": "Token not enabled"
     }
   ],
   "types": [
+    {
+      "name": "BloomFilters",
+      "docs": ["Simplified bloom filter structure (no metadata, just filters)"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "game_filter",
+            "docs": ["512-bit bloom filter for game participation tracking"],
+            "type": {
+              "array": ["u64", 8]
+            }
+          },
+          {
+            "name": "game_index_filter",
+            "docs": ["512-bit bloom filter for game + ticket index tracking"],
+            "type": {
+              "array": ["u64", 8]
+            }
+          },
+          {
+            "name": "unjoin_index_filter",
+            "docs": [
+              "512-bit bloom filter for game + ticket index unjoin tracking"
+            ],
+            "type": {
+              "array": ["u64", 8]
+            }
+          }
+        ]
+      }
+    },
     {
       "name": "Game",
       "type": {
@@ -1770,18 +1628,18 @@
             "type": "u64"
           },
           {
-            "name": "max_players",
-            "docs": ["Maximum number of players allowed"],
+            "name": "max_tickets",
+            "docs": ["Maximum number of tickets allowed"],
             "type": "u32"
           },
           {
-            "name": "min_players",
-            "docs": ["Minimum number of players required"],
+            "name": "min_tickets",
+            "docs": ["Minimum number of tickets required"],
             "type": "u32"
           },
           {
-            "name": "players_count",
-            "docs": ["Current number of players who have joined"],
+            "name": "tickets_count",
+            "docs": ["Current number of tickets (total participations)"],
             "type": "u32"
           },
           {
@@ -1855,8 +1713,8 @@
             "type": "pubkey"
           },
           {
-            "name": "players_count",
-            "docs": ["Total number of players who participated"],
+            "name": "tickets_count",
+            "docs": ["Total number of tickets that participated"],
             "type": "u32"
           },
           {
@@ -1900,13 +1758,13 @@
             "type": "u64"
           },
           {
-            "name": "max_players",
-            "docs": ["Maximum number of players allowed"],
+            "name": "max_tickets",
+            "docs": ["Maximum number of tickets allowed"],
             "type": "u32"
           },
           {
-            "name": "min_players",
-            "docs": ["Minimum number of players required to complete"],
+            "name": "min_tickets",
+            "docs": ["Minimum number of tickets required to complete"],
             "type": "u32"
           },
           {
@@ -1916,7 +1774,7 @@
           },
           {
             "name": "is_private",
-            "docs": ["Whether game requires oracle authority to join"],
+            "docs": ["Whether game requires oracle operator to join"],
             "type": "bool"
           }
         ]
@@ -1958,13 +1816,13 @@
             "type": "u64"
           },
           {
-            "name": "max_players",
-            "docs": ["Maximum players allowed"],
+            "name": "max_tickets",
+            "docs": ["Maximum tickets allowed"],
             "type": "u32"
           },
           {
-            "name": "min_players",
-            "docs": ["Minimum players required"],
+            "name": "min_tickets",
+            "docs": ["Minimum tickets required"],
             "type": "u32"
           },
           {
@@ -1996,6 +1854,16 @@
         "kind": "struct",
         "fields": [
           {
+            "name": "token_mint",
+            "docs": ["Token mint for this game token configuration"],
+            "type": "pubkey"
+          },
+          {
+            "name": "vault_bump",
+            "docs": ["Vault bump seed for PDA token transfers"],
+            "type": "u8"
+          },
+          {
             "name": "min_amount",
             "docs": ["Minimum amount required to participate in games"],
             "type": "u64"
@@ -2022,13 +1890,19 @@
             "name": "Coinflip"
           },
           {
-            "name": "Giveaway"
-          },
-          {
             "name": "Dumbflip"
           },
           {
+            "name": "Giveaway"
+          },
+          {
+            "name": "Dumbaway"
+          },
+          {
             "name": "Snowball"
+          },
+          {
+            "name": "Dumbball"
           }
         ]
       }
@@ -2039,10 +1913,8 @@
         "kind": "struct",
         "fields": [
           {
-            "name": "authority",
-            "docs": [
-              "Authority that can update oracle settings and claim fees"
-            ],
+            "name": "operator",
+            "docs": ["Operator that can update oracle settings and claim fees"],
             "type": "pubkey"
           },
           {
@@ -2058,8 +1930,8 @@
             "type": "u16"
           },
           {
-            "name": "max_players",
-            "docs": ["Maximum number of players allowed in a game"],
+            "name": "max_tickets",
+            "docs": ["Maximum number of tickets allowed in a game"],
             "type": "u32"
           },
           {
@@ -2071,6 +1943,13 @@
             "name": "min_timeout",
             "docs": ["Minimum timeout duration in seconds for a game"],
             "type": "u32"
+          },
+          {
+            "name": "filter_cleanup_buffer",
+            "docs": [
+              "Additional buffer time for filter cleanup after oracle buffer expires"
+            ],
+            "type": "u16"
           }
         ]
       }
@@ -2096,8 +1975,8 @@
             "type": "u16"
           },
           {
-            "name": "max_players",
-            "docs": ["Maximum number of players allowed in any game"],
+            "name": "max_tickets",
+            "docs": ["Maximum number of tickets allowed in any game"],
             "type": "u32"
           },
           {
@@ -2109,6 +1988,13 @@
             "name": "min_timeout",
             "docs": ["Minimum timeout duration in seconds for games"],
             "type": "u32"
+          },
+          {
+            "name": "filter_cleanup_buffer",
+            "docs": [
+              "Additional buffer time for filter cleanup after oracle buffer expires"
+            ],
+            "type": "u16"
           }
         ]
       }
@@ -2120,8 +2006,8 @@
         "kind": "struct",
         "fields": [
           {
-            "name": "authority",
-            "docs": ["Authority that controls the oracle"],
+            "name": "operator",
+            "docs": ["Operator that controls the oracle"],
             "type": "pubkey"
           },
           {
@@ -2135,8 +2021,8 @@
             "type": "u16"
           },
           {
-            "name": "max_players",
-            "docs": ["Maximum players allowed in any game"],
+            "name": "max_tickets",
+            "docs": ["Maximum tickets allowed in any game"],
             "type": "u32"
           },
           {
@@ -2159,13 +2045,13 @@
         "kind": "struct",
         "fields": [
           {
-            "name": "old_authority",
-            "docs": ["Previous authority"],
+            "name": "old_operator",
+            "docs": ["Previous operator"],
             "type": "pubkey"
           },
           {
-            "name": "new_authority",
-            "docs": ["New authority"],
+            "name": "new_operator",
+            "docs": ["New operator"],
             "type": "pubkey"
           },
           {
@@ -2179,8 +2065,8 @@
             "type": "u16"
           },
           {
-            "name": "max_players",
-            "docs": ["Updated maximum players"],
+            "name": "max_tickets",
+            "docs": ["Updated maximum tickets"],
             "type": "u32"
           },
           {
@@ -2204,6 +2090,60 @@
           {
             "name": "amount",
             "docs": ["Current balance amount"],
+            "type": "u64"
+          },
+          {
+            "name": "recent_games",
+            "docs": [
+              "Hybrid approach: recent games tracking for high-confidence detection"
+            ],
+            "type": {
+              "array": ["pubkey", 6]
+            }
+          },
+          {
+            "name": "recent_games_idx",
+            "type": "u8"
+          },
+          {
+            "name": "active_filter_index",
+            "docs": [
+              "Dual bloom filter system - 0 means filter_a is active, 1 means filter_b is active"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "filter_a",
+            "docs": ["Filter Set A"],
+            "type": {
+              "defined": {
+                "name": "BloomFilters"
+              }
+            }
+          },
+          {
+            "name": "filter_a_last_updated",
+            "type": "u64"
+          },
+          {
+            "name": "filter_a_longest_expiry",
+            "type": "u64"
+          },
+          {
+            "name": "filter_b",
+            "docs": ["Filter Set B"],
+            "type": {
+              "defined": {
+                "name": "BloomFilters"
+              }
+            }
+          },
+          {
+            "name": "filter_b_last_updated",
+            "type": "u64"
+          },
+          {
+            "name": "filter_b_longest_expiry",
             "type": "u64"
           }
         ]
@@ -2274,13 +2214,13 @@
             "type": "u64"
           },
           {
-            "name": "players_count",
-            "docs": ["Number of players after join"],
+            "name": "tickets_count",
+            "docs": ["Total number of tickets after join"],
             "type": "u32"
           },
           {
-            "name": "player_index",
-            "docs": ["Player's index in the game"],
+            "name": "ticket_index",
+            "docs": ["Ticket index for this join"],
             "type": "u32"
           },
           {
@@ -2291,75 +2231,6 @@
           {
             "name": "timestamp",
             "docs": ["Timestamp of the join"],
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "PlayerParticipation",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "player_index",
-            "docs": [
-              "Player's position/index in the game (for winner calculation)"
-            ],
-            "type": "u32"
-          },
-          {
-            "name": "player_amount",
-            "docs": ["Amount contributed by the player"],
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "PlayerParticipationCleaned",
-      "docs": ["Emitted when expired player participation is cleaned up"],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "game_key",
-            "docs": ["Game being cleaned"],
-            "type": "pubkey"
-          },
-          {
-            "name": "player",
-            "docs": ["Player whose participation was cleaned"],
-            "type": "pubkey"
-          },
-          {
-            "name": "total_amount",
-            "docs": ["Remaining total amount"],
-            "type": "u64"
-          },
-          {
-            "name": "players_count",
-            "docs": ["Remaining players count"],
-            "type": "u32"
-          },
-          {
-            "name": "player_index",
-            "docs": ["Player's index that was cleaned"],
-            "type": "u32"
-          },
-          {
-            "name": "refund_amount",
-            "docs": ["Amount refunded to player (if any)"],
-            "type": "u64"
-          },
-          {
-            "name": "is_completed_game",
-            "docs": ["Whether the game was already completed"],
-            "type": "bool"
-          },
-          {
-            "name": "timestamp",
-            "docs": ["Timestamp of the cleanup"],
             "type": "u64"
           }
         ]
@@ -2387,8 +2258,13 @@
             "type": "u64"
           },
           {
-            "name": "player_index",
-            "docs": ["Player's index in the game"],
+            "name": "tickets_count",
+            "docs": ["Total number of tickets after roll"],
+            "type": "u32"
+          },
+          {
+            "name": "ticket_index",
+            "docs": ["Ticket index for this roll"],
             "type": "u32"
           },
           {
@@ -2426,13 +2302,13 @@
             "type": "u64"
           },
           {
-            "name": "players_count",
-            "docs": ["Remaining players count"],
+            "name": "tickets_count",
+            "docs": ["Remaining total tickets count"],
             "type": "u32"
           },
           {
-            "name": "player_index",
-            "docs": ["Player's index that was removed"],
+            "name": "ticket_index",
+            "docs": ["Ticket index that was removed"],
             "type": "u32"
           },
           {
@@ -2473,13 +2349,13 @@
     },
     {
       "name": "TokenFeeWithdrawn",
-      "docs": ["Emitted when accumulated fees are withdrawn by authority"],
+      "docs": ["Emitted when accumulated fees are withdrawn by operator"],
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "authority",
-            "docs": ["Authority that withdrew the fees"],
+            "name": "operator",
+            "docs": ["Operator that withdrew the fees"],
             "type": "pubkey"
           },
           {
