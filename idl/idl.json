@@ -1573,17 +1573,12 @@
   "types": [
     {
       "name": "BloomFilters",
-      "docs": ["Simplified bloom filter structure (no metadata, just filters)"],
+      "docs": [
+        "Simplified bloom filter structure (removed redundant game_filter)"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
-          {
-            "name": "game_filter",
-            "docs": ["512-bit bloom filter for game participation tracking"],
-            "type": {
-              "array": ["u64", 8]
-            }
-          },
           {
             "name": "game_index_filter",
             "docs": ["512-bit bloom filter for game + ticket index tracking"],
@@ -1673,6 +1668,15 @@
             "name": "total_amount",
             "docs": ["Total accumulated prize"],
             "type": "u64"
+          },
+          {
+            "name": "participants_filter",
+            "docs": [
+              "512-bit bloom filter for this game's participants (safety redundancy) - same size as PlayerBalance filters"
+            ],
+            "type": {
+              "array": ["u64", 8]
+            }
           }
         ]
       }
@@ -2093,19 +2097,6 @@
             "type": "u64"
           },
           {
-            "name": "recent_games",
-            "docs": [
-              "Hybrid approach: recent games tracking for high-confidence detection"
-            ],
-            "type": {
-              "array": ["pubkey", 6]
-            }
-          },
-          {
-            "name": "recent_games_idx",
-            "type": "u8"
-          },
-          {
             "name": "active_filter_index",
             "docs": [
               "Dual bloom filter system - 0 means filter_a is active, 1 means filter_b is active"
@@ -2145,6 +2136,21 @@
           {
             "name": "filter_b_longest_expiry",
             "type": "u64"
+          },
+          {
+            "name": "filter_cleaning_scheduled_at",
+            "docs": [
+              "Collision Detection & Recovery System",
+              "Timestamp when current active filter is scheduled for cleaning"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "emergency_unjoin_mode",
+            "docs": [
+              "Whether emergency unjoin mode is active (Game-filter-only validation)"
+            ],
+            "type": "bool"
           }
         ]
       }

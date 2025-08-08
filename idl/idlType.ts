@@ -2921,23 +2921,11 @@ export type Coinflip = {
     {
       "name": "bloomFilters",
       "docs": [
-        "Simplified bloom filter structure (no metadata, just filters)"
+        "Simplified bloom filter structure (removed redundant game_filter)"
       ],
       "type": {
         "kind": "struct",
         "fields": [
-          {
-            "name": "gameFilter",
-            "docs": [
-              "512-bit bloom filter for game participation tracking"
-            ],
-            "type": {
-              "array": [
-                "u64",
-                8
-              ]
-            }
-          },
           {
             "name": "gameIndexFilter",
             "docs": [
@@ -3057,6 +3045,18 @@ export type Coinflip = {
               "Total accumulated prize"
             ],
             "type": "u64"
+          },
+          {
+            "name": "participantsFilter",
+            "docs": [
+              "512-bit bloom filter for this game's participants (safety redundancy) - same size as PlayerBalance filters"
+            ],
+            "type": {
+              "array": [
+                "u64",
+                8
+              ]
+            }
           }
         ]
       }
@@ -3593,22 +3593,6 @@ export type Coinflip = {
             "type": "u64"
           },
           {
-            "name": "recentGames",
-            "docs": [
-              "Hybrid approach: recent games tracking for high-confidence detection"
-            ],
-            "type": {
-              "array": [
-                "pubkey",
-                6
-              ]
-            }
-          },
-          {
-            "name": "recentGamesIdx",
-            "type": "u8"
-          },
-          {
             "name": "activeFilterIndex",
             "docs": [
               "Dual bloom filter system - 0 means filter_a is active, 1 means filter_b is active"
@@ -3652,6 +3636,21 @@ export type Coinflip = {
           {
             "name": "filterBLongestExpiry",
             "type": "u64"
+          },
+          {
+            "name": "filterCleaningScheduledAt",
+            "docs": [
+              "Collision Detection & Recovery System",
+              "Timestamp when current active filter is scheduled for cleaning"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "emergencyUnjoinMode",
+            "docs": [
+              "Whether emergency unjoin mode is active (Game-filter-only validation)"
+            ],
+            "type": "bool"
           }
         ]
       }
