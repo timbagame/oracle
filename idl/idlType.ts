@@ -3023,7 +3023,7 @@ export type Coinflip = {
             "docs": [
               "Timeout duration in seconds"
             ],
-            "type": "u32"
+            "type": "u64"
           },
           {
             "name": "lastSlot",
@@ -3184,7 +3184,7 @@ export type Coinflip = {
             "docs": [
               "Timeout duration in seconds"
             ],
-            "type": "u32"
+            "type": "u64"
           },
           {
             "name": "isPrivate",
@@ -3283,7 +3283,7 @@ export type Coinflip = {
             "docs": [
               "Game timeout duration"
             ],
-            "type": "u32"
+            "type": "u64"
           }
         ]
       }
@@ -3381,7 +3381,7 @@ export type Coinflip = {
             "docs": [
               "Buffer time in seconds after game timeout before cancellation is allowed"
             ],
-            "type": "u16"
+            "type": "u64"
           },
           {
             "name": "maxTickets",
@@ -3395,21 +3395,21 @@ export type Coinflip = {
             "docs": [
               "Maximum timeout duration in seconds for a game"
             ],
-            "type": "u32"
+            "type": "u64"
           },
           {
             "name": "minTimeout",
             "docs": [
               "Minimum timeout duration in seconds for a game"
             ],
-            "type": "u32"
+            "type": "u64"
           },
           {
             "name": "filterCleanupBuffer",
             "docs": [
               "Additional buffer time for filter cleanup after oracle buffer expires"
             ],
-            "type": "u16"
+            "type": "u64"
           }
         ]
       }
@@ -3434,7 +3434,7 @@ export type Coinflip = {
             "docs": [
               "Buffer time in seconds after game timeout before cancellation"
             ],
-            "type": "u16"
+            "type": "u64"
           },
           {
             "name": "maxTickets",
@@ -3448,21 +3448,21 @@ export type Coinflip = {
             "docs": [
               "Maximum timeout duration in seconds for games"
             ],
-            "type": "u32"
+            "type": "u64"
           },
           {
             "name": "minTimeout",
             "docs": [
               "Minimum timeout duration in seconds for games"
             ],
-            "type": "u32"
+            "type": "u64"
           },
           {
             "name": "filterCleanupBuffer",
             "docs": [
               "Additional buffer time for filter cleanup after oracle buffer expires"
             ],
-            "type": "u16"
+            "type": "u64"
           }
         ]
       }
@@ -3494,7 +3494,7 @@ export type Coinflip = {
             "docs": [
               "Buffer time in seconds after game timeout"
             ],
-            "type": "u16"
+            "type": "u64"
           },
           {
             "name": "maxTickets",
@@ -3508,14 +3508,14 @@ export type Coinflip = {
             "docs": [
               "Maximum timeout duration for games"
             ],
-            "type": "u32"
+            "type": "u64"
           },
           {
             "name": "minTimeout",
             "docs": [
               "Minimum timeout duration for games"
             ],
-            "type": "u32"
+            "type": "u64"
           }
         ]
       }
@@ -3554,7 +3554,7 @@ export type Coinflip = {
             "docs": [
               "Updated buffer time"
             ],
-            "type": "u16"
+            "type": "u64"
           },
           {
             "name": "maxTickets",
@@ -3568,14 +3568,14 @@ export type Coinflip = {
             "docs": [
               "Updated maximum timeout"
             ],
-            "type": "u32"
+            "type": "u64"
           },
           {
             "name": "minTimeout",
             "docs": [
               "Updated minimum timeout"
             ],
-            "type": "u32"
+            "type": "u64"
           }
         ]
       }
