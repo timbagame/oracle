@@ -5,7 +5,7 @@
  * IDL can be found at `target/idl/coinflip.json`.
  */
 export type Coinflip = {
-  "address": "GLAicVgkhvVtAbcf9aF4iLqAXZ9GSrsfexoDUN2fBPCG",
+  "address": "BpdzqWdNJfgeVCsFHppS4WgeRZSRxt5iSj6xH4QdeR7t",
   "metadata": {
     "name": "coinflip",
     "version": "0.1.0",
