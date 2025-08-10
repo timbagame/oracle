@@ -182,7 +182,7 @@ export class OracleService {
 
   private handleGameInitialized(event: any): void {
     const { gameAddress } = this.extractEventData(event);
-    
+
     // Extract game type from event
     let gameType: string | undefined = undefined;
     if (event.gameType) {
@@ -192,7 +192,7 @@ export class OracleService {
         gameType = gameTypeKeys[0].toLowerCase();
       }
     }
-    
+
     console.log(`🎮 Game initialized: ${gameAddress}, Type: ${gameType || 'unknown'}`);
     this.db.trackGame(gameAddress, gameType);
   }
@@ -274,15 +274,13 @@ export class OracleService {
         return { success: false, error: "No players found for game" };
       }
 
-      // Calculate entries: for Snowball and Dumbball games use total_amount/ticket_amount, for others use player count
-      const nEntries = (gameAccount.gameType.snowball || gameAccount.gameType.dumbball)
-        ? Number(gameAccount.totalAmount) / Number(gameAccount.ticketAmount)
-        : players.length;
+  // Contract uses tickets_count for winner selection across all modes
+  const nEntries = Number(gameAccount.ticketsCount);
 
       const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
       const randomHashBuffer = Buffer.from(secretData.randomHash, "hex");
-      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.lastSlot, nEntries);
-      const winnerPlayerAddress = players[winnerIndex];
+  const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, Number(gameAccount.lastSlot), nEntries);
+  const winnerPlayerAddress = players[winnerIndex] || players[winnerIndex % players.length];
 
       if (!winnerPlayerAddress) {
         return { success: false, error: "Unable to determine winner" };
@@ -290,18 +288,14 @@ export class OracleService {
 
       const winnerAddress = new PublicKey(winnerPlayerAddress);
 
-      if (!(await this.verifyPlayerInGame(gamePda, winnerAddress))) {
-        console.log(`⚠️ Selected winner ${winnerPlayerAddress} not found in game, clearing stale data`);
-        this.db.clearStalePlayersForGame(gameAddress);
-        return { success: false, notReady: true };
-      }
-
-      const txHash = await this.executeGameCompletion(
+      const txHash = await this.executeGameCompletion({
+        gamePda,
+        gameAccount,
         winnerAddress,
-        gameAccount.creator,
         randomHashBuffer,
-        secretKeyBuffer
-      );
+        secretKeyBuffer,
+        winnerIndex,
+      });
 
       this.db.markSecretKeyUsed(gameAddress);
       this.db.markGameCompleted(gameAddress);
@@ -313,24 +307,19 @@ export class OracleService {
     }
   }
 
-  private async executeGameCompletion(
-    winnerAddress: PublicKey,
-    creatorAddress: PublicKey,
-    randomHashBuffer: Buffer,
-    secretKeyBuffer: Buffer
-  ): Promise<string> {
-    const winnerIndex = this.calculateWinnerIndex(
-      secretKeyBuffer, 
-      BigInt(0), // Using 0 as placeholder - should be updated with actual lastSlot
-      1 // This will be updated based on actual player/ticket count
-    );
+  private async executeGameCompletion(args: {
+    gamePda: PublicKey;
+    gameAccount: any;
+    winnerAddress: PublicKey;
+    randomHashBuffer: Buffer;
+    secretKeyBuffer: Buffer;
+    winnerIndex: number;
+  }): Promise<string> {
+  const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
 
-    const txHash = await this.program.methods
+  const txHash = await this.program.methods
       .completeGame([...randomHashBuffer], [...secretKeyBuffer], winnerIndex)
-      .accounts({
-        winner: winnerAddress,
-        creator: creatorAddress,
-      })
+  .accounts({ oracleOperator: this.adminKeypair.publicKey, winner: winnerAddress, creator: gameAccount.creator as PublicKey })
       .signers([this.adminKeypair])
       .rpc();
 
@@ -338,7 +327,7 @@ export class OracleService {
     return txHash;
   }
 
-  private calculateWinnerIndex(secretKeyBuffer: Buffer, lastSlot: bigint, nPlayers: number): number {
+  private calculateWinnerIndex(secretKeyBuffer: Buffer, lastSlot: number, nPlayers: number): number {
     if (nPlayers <= 1) {
       return 0;
     }
@@ -347,9 +336,9 @@ export class OracleService {
     const combinedData = Buffer.alloc(40); // 32 bytes secret + 8 bytes last_slot
     secretKeyBuffer.copy(combinedData, 0, 0, 32);
 
-    // Convert bigint to little-endian bytes (matching contract's to_le_bytes())
+  // Convert number to little-endian bytes (matching contract's to_le_bytes())
     const lastSlotBytes = Buffer.alloc(8);
-    const lastSlotNum = Number(lastSlot);
+  const lastSlotNum = Number(lastSlot);
     lastSlotBytes.writeUInt32LE(lastSlotNum & 0xffffffff, 0);
     lastSlotBytes.writeUInt32LE(Math.floor(lastSlotNum / 0x100000000), 4);
     lastSlotBytes.copy(combinedData, 32);
@@ -437,13 +426,11 @@ export class OracleService {
         return { success: false, error: "No players in game" };
       }
 
-      // Calculate entries: for Snowball and Dumbball games use total_amount/ticket_amount, for others use player count
-      const nEntries = (gameAccount.gameType.snowball || gameAccount.gameType.dumbball)
-        ? Number(gameAccount.totalAmount) / Number(gameAccount.ticketAmount)
-        : players.length;
+  // Contract uses tickets_count across all modes
+  const nEntries = Number(gameAccount.ticketsCount);
 
       const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
-      const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, gameAccount.lastSlot, nEntries);
+  const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, Number(gameAccount.lastSlot), nEntries);
       const winnerPlayerAddress = players[winnerIndex];
 
       if (!winnerPlayerAddress) {
@@ -561,20 +548,4 @@ export class OracleService {
     return this.getGamePDA(randomHash);
   }
 
-  private async verifyPlayerInGame(gamePda: PublicKey, playerAddress: PublicKey): Promise<boolean> {
-    try {
-      // Check if PlayerParticipation PDA exists for this game and player
-      const [playerParticipationPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("player_participation", 'utf8'), gamePda.toBuffer(), playerAddress.toBuffer()],
-        this.program.programId
-      );
-
-      // Try to fetch the PlayerBalance account instead
-      await this.program.account.playerBalance.fetch(playerParticipationPda);
-      return true;
-    } catch (error) {
-      // If account doesn't exist, player is not in the game
-      return false;
-    }
-  }
 }
