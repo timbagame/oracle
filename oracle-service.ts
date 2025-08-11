@@ -25,8 +25,7 @@ type EventMap = {
   gameClosed: any;
   oracleInitialized: any;
   oracleUpdated: any;
-  playerBalanceInitialized: any;
-  playerBalanceWithdrawn: any;
+  playerGamesInitialized: any;
   tokenFeeWithdrawn: any;
   tokenInitialized: any;
   tokenUpdated: any;
