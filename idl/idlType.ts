@@ -3424,7 +3424,7 @@ export type Coinflip = {
           {
             "name": "participantsFilter",
             "docs": [
-              "512-bit bloom filter for this game's participants (safety redundancy) - same size as PlayerBalance filters"
+              "512-bit bloom filter for this game's participants (safety redundancy) - same size as PlayerGames filters"
             ],
             "type": {
               "array": [
