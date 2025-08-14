@@ -3014,13 +3014,6 @@ export type Coinflip = {
               "Minimum timeout duration in seconds for a game"
             ],
             "type": "u64"
-          },
-          {
-            "name": "filterCleanupBuffer",
-            "docs": [
-              "Additional buffer time for filter cleanup after oracle buffer expires"
-            ],
-            "type": "u64"
           }
         ]
       }
@@ -3065,13 +3058,6 @@ export type Coinflip = {
             "name": "minTimeout",
             "docs": [
               "Minimum timeout duration in seconds for games"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "filterCleanupBuffer",
-            "docs": [
-              "Additional buffer time for filter cleanup after oracle buffer expires"
             ],
             "type": "u64"
           }
