@@ -2963,13 +2963,7 @@ export type Coinflip = {
             "name": "coinflip"
           },
           {
-            "name": "dumbflip"
-          },
-          {
             "name": "giveaway"
-          },
-          {
-            "name": "dumbaway"
           }
         ]
       }
