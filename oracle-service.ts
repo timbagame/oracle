@@ -20,7 +20,6 @@ type EventMap = {
   gameInitialized: any;
   playerJoined: any;
   playerUnjoined: any;
-  playerRolled: any;
   gameCompleted: any;
   gameClosed: any;
   oracleInitialized: any;
@@ -118,7 +117,6 @@ export class OracleService {
     const eventMap: Array<[keyof EventMap, EventHandler]> = [
       ['playerJoined', this.handlePlayerEvent.bind(this, 'joined')],
       ['playerUnjoined', this.handlePlayerEvent.bind(this, 'unjoined')],
-      ['playerRolled', this.handlePlayerEvent.bind(this, 'rolled')],
       ['gameInitialized', this.handleGameInitialized.bind(this)],
       ['gameCompleted', this.handleGameStatusChange.bind(this, 'completed')],
       ['gameClosed', this.handleGameStatusChange.bind(this, 'closed')]
@@ -139,7 +137,7 @@ export class OracleService {
     this.isListening = false;
   }
 
-  private async handlePlayerEvent(action: 'joined' | 'unjoined' | 'rolled', event: any): Promise<void> {
+  private async handlePlayerEvent(action: 'joined' | 'unjoined', event: any): Promise<void> {
     const { gameAddress, playerAddress } = this.extractEventData(event);
 
     try {
@@ -151,9 +149,7 @@ export class OracleService {
         case 'unjoined':
           this.db.removePlayerFromGame(gameAddress, playerAddress);
           break;
-        case 'rolled':
-          console.log(`🎲 Player ${playerAddress} rolled in game ${gameAddress}`);
-          break;
+
       }
 
       // Check for auto-completion after player events
