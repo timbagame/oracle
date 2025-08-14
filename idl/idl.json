@@ -33,40 +33,6 @@
           "signer": true
         },
         {
-          "name": "creator_games",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  103,
-                  97,
-                  109,
-                  101,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "creator"
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "Game"
-              }
-            ]
-          }
-        },
-        {
           "name": "oracle",
           "pda": {
             "seeds": [
@@ -404,40 +370,6 @@
           "writable": true
         },
         {
-          "name": "winner_games",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  103,
-                  97,
-                  109,
-                  101,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "winner"
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "Game"
-              }
-            ]
-          }
-        },
-        {
           "name": "game_token",
           "writable": true,
           "pda": {
@@ -753,39 +685,6 @@
           "name": "creator",
           "writable": true,
           "signer": true
-        },
-        {
-          "name": "creator_games",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  103,
-                  97,
-                  109,
-                  101,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "creator"
-              },
-              {
-                "kind": "account",
-                "path": "token_mint"
-              }
-            ]
-          }
         },
         {
           "name": "oracle",
@@ -1131,194 +1030,6 @@
       ]
     },
     {
-      "name": "initialize_player_games",
-      "docs": [
-        "Initializes a player's games tracking account for a specific token"
-      ],
-      "discriminator": [
-        124,
-        38,
-        240,
-        5,
-        235,
-        15,
-        165,
-        126
-      ],
-      "accounts": [
-        {
-          "name": "player_games",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  103,
-                  97,
-                  109,
-                  101,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              },
-              {
-                "kind": "account",
-                "path": "token_mint"
-              }
-            ]
-          }
-        },
-        {
-          "name": "game_token",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  103,
-                  97,
-                  109,
-                  101,
-                  95,
-                  116,
-                  111,
-                  107,
-                  101,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "token_mint"
-              }
-            ]
-          }
-        },
-        {
-          "name": "token_mint"
-        },
-        {
-          "name": "player_token_account",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "player"
-              },
-              {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "token_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "player",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        },
-        {
-          "name": "associated_token_program",
-          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "initialize_token",
       "docs": [
         "Initializes a new token for use in games with minimum amount and enabled status"
@@ -1550,373 +1261,6 @@
           "name": "player",
           "writable": true,
           "signer": true
-        },
-        {
-          "name": "player_games",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  103,
-                  97,
-                  109,
-                  101,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "Game"
-              }
-            ]
-          }
-        },
-        {
-          "name": "oracle_operator",
-          "signer": true,
-          "optional": true
-        },
-        {
-          "name": "game_token",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  103,
-                  97,
-                  109,
-                  101,
-                  95,
-                  116,
-                  111,
-                  107,
-                  101,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "Game"
-              }
-            ]
-          }
-        },
-        {
-          "name": "game_vault",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  103,
-                  97,
-                  109,
-                  101,
-                  95,
-                  118,
-                  97,
-                  117,
-                  108,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "Game"
-              }
-            ]
-          }
-        },
-        {
-          "name": "player_token_account",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "player"
-              },
-              {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "Game"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "game_token_account",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "game_vault"
-              },
-              {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "Game"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "oracle",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  111,
-                  114,
-                  97,
-                  99,
-                  108,
-                  101
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        },
-        {
-          "name": "associated_token_program",
-          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "roll_game",
-      "docs": [
-        "Allows a player to roll in Snowball/Dumbflip games (multiple participation)"
-      ],
-      "discriminator": [
-        176,
-        152,
-        195,
-        115,
-        32,
-        211,
-        176,
-        209
-      ],
-      "accounts": [
-        {
-          "name": "game",
-          "writable": true
-        },
-        {
-          "name": "player",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "player_games",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  103,
-                  97,
-                  109,
-                  101,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "Game"
-              }
-            ]
-          }
         },
         {
           "name": "oracle_operator",
@@ -2216,40 +1560,6 @@
           "name": "player",
           "writable": true,
           "signer": true
-        },
-        {
-          "name": "player_games",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  103,
-                  97,
-                  109,
-                  101,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "Game"
-              }
-            ]
-          }
         },
         {
           "name": "oracle",
@@ -2991,19 +2301,6 @@
         229,
         244
       ]
-    },
-    {
-      "name": "PlayerGames",
-      "discriminator": [
-        152,
-        30,
-        0,
-        98,
-        182,
-        99,
-        110,
-        192
-      ]
     }
   ],
   "events": [
@@ -3073,19 +2370,6 @@
       ]
     },
     {
-      "name": "PlayerGamesInitialized",
-      "discriminator": [
-        245,
-        25,
-        237,
-        122,
-        88,
-        19,
-        206,
-        143
-      ]
-    },
-    {
       "name": "PlayerJoined",
       "discriminator": [
         39,
@@ -3096,19 +2380,6 @@
         210,
         183,
         38
-      ]
-    },
-    {
-      "name": "PlayerRolled",
-      "discriminator": [
-        140,
-        47,
-        89,
-        123,
-        203,
-        204,
-        244,
-        6
       ]
     },
     {
@@ -3231,27 +2502,27 @@
       "msg": "Player already joined"
     },
     {
-      "code": 7201,
+      "code": 7202,
       "name": "InsufficientBalance",
       "msg": "Insufficient balance"
     },
     {
-      "code": 7202,
+      "code": 7203,
       "name": "InvalidWinnerIndex",
       "msg": "Invalid winner index"
     },
     {
-      "code": 7203,
+      "code": 7204,
       "name": "WinnerPubkeyMismatch",
       "msg": "Winner pubkey mismatch"
     },
     {
-      "code": 7204,
+      "code": 7205,
       "name": "PrivateGameAccessDenied",
       "msg": "Private game access denied"
     },
     {
-      "code": 7205,
+      "code": 7206,
       "name": "RandomnessGenerationFailed",
       "msg": "Randomness generation failed"
     },
@@ -3287,41 +2558,6 @@
     }
   ],
   "types": [
-    {
-      "name": "BloomFilters",
-      "docs": [
-        "Simplified bloom filter structure (removed redundant game_filter)"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "game_index_filter",
-            "docs": [
-              "512-bit bloom filter for game + ticket index tracking"
-            ],
-            "type": {
-              "array": [
-                "u64",
-                8
-              ]
-            }
-          },
-          {
-            "name": "unjoin_index_filter",
-            "docs": [
-              "512-bit bloom filter for game + ticket index unjoin tracking"
-            ],
-            "type": {
-              "array": [
-                "u64",
-                8
-              ]
-            }
-          }
-        ]
-      }
-    },
     {
       "name": "Game",
       "type": {
@@ -3418,13 +2654,22 @@
           {
             "name": "participants_filter",
             "docs": [
-              "512-bit bloom filter for this game's participants (safety redundancy) - same size as PlayerGames filters"
+              "512-bit bloom filter for this game's participants (probabilistic)"
             ],
             "type": {
               "array": [
                 "u64",
                 8
               ]
+            }
+          },
+          {
+            "name": "participant_hashes",
+            "docs": [
+              "Exact participant hash list (first 8 bytes of SHA256(pubkey)) to eliminate false positives"
+            ],
+            "type": {
+              "vec": "u64"
             }
           }
         ]
@@ -3702,6 +2947,9 @@
     },
     {
       "name": "GameType",
+      "repr": {
+        "kind": "rust"
+      },
       "type": {
         "kind": "enum",
         "variants": [
@@ -3950,99 +3198,6 @@
       }
     },
     {
-      "name": "PlayerGames",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "active_filter_index",
-            "docs": [
-              "Dual bloom filter system - 0 means filter_a is active, 1 means filter_b is active"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "filter_a",
-            "docs": [
-              "Filter Set A"
-            ],
-            "type": {
-              "defined": {
-                "name": "BloomFilters"
-              }
-            }
-          },
-          {
-            "name": "filter_a_last_updated",
-            "type": "u64"
-          },
-          {
-            "name": "filter_a_longest_expiry",
-            "type": "u64"
-          },
-          {
-            "name": "filter_b",
-            "docs": [
-              "Filter Set B"
-            ],
-            "type": {
-              "defined": {
-                "name": "BloomFilters"
-              }
-            }
-          },
-          {
-            "name": "filter_b_last_updated",
-            "type": "u64"
-          },
-          {
-            "name": "filter_b_longest_expiry",
-            "type": "u64"
-          },
-          {
-            "name": "filter_cleaning_scheduled_at",
-            "docs": [
-              "Collision Detection & Recovery System",
-              "Timestamp when current active filter is scheduled for cleaning"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "emergency_unjoin_mode",
-            "docs": [
-              "Whether emergency unjoin mode is active (Game-filter-only validation)"
-            ],
-            "type": "bool"
-          }
-        ]
-      }
-    },
-    {
-      "name": "PlayerGamesInitialized",
-      "docs": [
-        "Emitted when a player's games tracking account is initialized"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "player",
-            "docs": [
-              "Player who initialized the games tracking"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "token_mint",
-            "docs": [
-              "Token mint for this games tracking"
-            ],
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
       "name": "PlayerJoined",
       "docs": [
         "Emitted when a player joins a game"
@@ -4096,66 +3251,6 @@
             "name": "timestamp",
             "docs": [
               "Timestamp of the join"
-            ],
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "PlayerRolled",
-      "docs": [
-        "Emitted when a player rolls in Snowball/Dumbflip games"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "game_key",
-            "docs": [
-              "Game where the roll occurred"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "player",
-            "docs": [
-              "Player who rolled"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "total_amount",
-            "docs": [
-              "Total amount after roll"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "tickets_count",
-            "docs": [
-              "Total number of tickets after roll"
-            ],
-            "type": "u32"
-          },
-          {
-            "name": "ticket_index",
-            "docs": [
-              "Ticket index for this roll"
-            ],
-            "type": "u32"
-          },
-          {
-            "name": "last_slot",
-            "docs": [
-              "Last slot for entropy"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "timestamp",
-            "docs": [
-              "Timestamp of the roll"
             ],
             "type": "u64"
           }

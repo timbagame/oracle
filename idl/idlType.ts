@@ -39,40 +39,6 @@ export type Coinflip = {
           "signer": true
         },
         {
-          "name": "creatorGames",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  103,
-                  97,
-                  109,
-                  101,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "creator"
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
-              }
-            ]
-          }
-        },
-        {
           "name": "oracle",
           "pda": {
             "seeds": [
@@ -410,40 +376,6 @@ export type Coinflip = {
           "writable": true
         },
         {
-          "name": "winnerGames",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  103,
-                  97,
-                  109,
-                  101,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "winner"
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
-              }
-            ]
-          }
-        },
-        {
           "name": "gameToken",
           "writable": true,
           "pda": {
@@ -759,39 +691,6 @@ export type Coinflip = {
           "name": "creator",
           "writable": true,
           "signer": true
-        },
-        {
-          "name": "creatorGames",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  103,
-                  97,
-                  109,
-                  101,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "creator"
-              },
-              {
-                "kind": "account",
-                "path": "tokenMint"
-              }
-            ]
-          }
         },
         {
           "name": "oracle",
@@ -1137,194 +1036,6 @@ export type Coinflip = {
       ]
     },
     {
-      "name": "initializePlayerGames",
-      "docs": [
-        "Initializes a player's games tracking account for a specific token"
-      ],
-      "discriminator": [
-        124,
-        38,
-        240,
-        5,
-        235,
-        15,
-        165,
-        126
-      ],
-      "accounts": [
-        {
-          "name": "playerGames",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  103,
-                  97,
-                  109,
-                  101,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              },
-              {
-                "kind": "account",
-                "path": "tokenMint"
-              }
-            ]
-          }
-        },
-        {
-          "name": "gameToken",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  103,
-                  97,
-                  109,
-                  101,
-                  95,
-                  116,
-                  111,
-                  107,
-                  101,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "tokenMint"
-              }
-            ]
-          }
-        },
-        {
-          "name": "tokenMint"
-        },
-        {
-          "name": "playerTokenAccount",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "player"
-              },
-              {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "tokenMint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "player",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        },
-        {
-          "name": "associatedTokenProgram",
-          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-        },
-        {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "initializeToken",
       "docs": [
         "Initializes a new token for use in games with minimum amount and enabled status"
@@ -1556,373 +1267,6 @@ export type Coinflip = {
           "name": "player",
           "writable": true,
           "signer": true
-        },
-        {
-          "name": "playerGames",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  103,
-                  97,
-                  109,
-                  101,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
-              }
-            ]
-          }
-        },
-        {
-          "name": "oracleOperator",
-          "signer": true,
-          "optional": true
-        },
-        {
-          "name": "gameToken",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  103,
-                  97,
-                  109,
-                  101,
-                  95,
-                  116,
-                  111,
-                  107,
-                  101,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
-              }
-            ]
-          }
-        },
-        {
-          "name": "gameVault",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  103,
-                  97,
-                  109,
-                  101,
-                  95,
-                  118,
-                  97,
-                  117,
-                  108,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
-              }
-            ]
-          }
-        },
-        {
-          "name": "playerTokenAccount",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "player"
-              },
-              {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "gameTokenAccount",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "gameVault"
-              },
-              {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "oracle",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  111,
-                  114,
-                  97,
-                  99,
-                  108,
-                  101
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
-        },
-        {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        },
-        {
-          "name": "associatedTokenProgram",
-          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "rollGame",
-      "docs": [
-        "Allows a player to roll in Snowball/Dumbflip games (multiple participation)"
-      ],
-      "discriminator": [
-        176,
-        152,
-        195,
-        115,
-        32,
-        211,
-        176,
-        209
-      ],
-      "accounts": [
-        {
-          "name": "game",
-          "writable": true
-        },
-        {
-          "name": "player",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "playerGames",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  103,
-                  97,
-                  109,
-                  101,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
-              }
-            ]
-          }
         },
         {
           "name": "oracleOperator",
@@ -2222,40 +1566,6 @@ export type Coinflip = {
           "name": "player",
           "writable": true,
           "signer": true
-        },
-        {
-          "name": "playerGames",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114,
-                  95,
-                  103,
-                  97,
-                  109,
-                  101,
-                  115
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              },
-              {
-                "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
-              }
-            ]
-          }
         },
         {
           "name": "oracle",
@@ -2997,19 +2307,6 @@ export type Coinflip = {
         229,
         244
       ]
-    },
-    {
-      "name": "playerGames",
-      "discriminator": [
-        152,
-        30,
-        0,
-        98,
-        182,
-        99,
-        110,
-        192
-      ]
     }
   ],
   "events": [
@@ -3079,19 +2376,6 @@ export type Coinflip = {
       ]
     },
     {
-      "name": "playerGamesInitialized",
-      "discriminator": [
-        245,
-        25,
-        237,
-        122,
-        88,
-        19,
-        206,
-        143
-      ]
-    },
-    {
       "name": "playerJoined",
       "discriminator": [
         39,
@@ -3102,19 +2386,6 @@ export type Coinflip = {
         210,
         183,
         38
-      ]
-    },
-    {
-      "name": "playerRolled",
-      "discriminator": [
-        140,
-        47,
-        89,
-        123,
-        203,
-        204,
-        244,
-        6
       ]
     },
     {
@@ -3237,27 +2508,27 @@ export type Coinflip = {
       "msg": "Player already joined"
     },
     {
-      "code": 7201,
+      "code": 7202,
       "name": "insufficientBalance",
       "msg": "Insufficient balance"
     },
     {
-      "code": 7202,
+      "code": 7203,
       "name": "invalidWinnerIndex",
       "msg": "Invalid winner index"
     },
     {
-      "code": 7203,
+      "code": 7204,
       "name": "winnerPubkeyMismatch",
       "msg": "Winner pubkey mismatch"
     },
     {
-      "code": 7204,
+      "code": 7205,
       "name": "privateGameAccessDenied",
       "msg": "Private game access denied"
     },
     {
-      "code": 7205,
+      "code": 7206,
       "name": "randomnessGenerationFailed",
       "msg": "Randomness generation failed"
     },
@@ -3293,41 +2564,6 @@ export type Coinflip = {
     }
   ],
   "types": [
-    {
-      "name": "bloomFilters",
-      "docs": [
-        "Simplified bloom filter structure (removed redundant game_filter)"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "gameIndexFilter",
-            "docs": [
-              "512-bit bloom filter for game + ticket index tracking"
-            ],
-            "type": {
-              "array": [
-                "u64",
-                8
-              ]
-            }
-          },
-          {
-            "name": "unjoinIndexFilter",
-            "docs": [
-              "512-bit bloom filter for game + ticket index unjoin tracking"
-            ],
-            "type": {
-              "array": [
-                "u64",
-                8
-              ]
-            }
-          }
-        ]
-      }
-    },
     {
       "name": "game",
       "type": {
@@ -3424,13 +2660,22 @@ export type Coinflip = {
           {
             "name": "participantsFilter",
             "docs": [
-              "512-bit bloom filter for this game's participants (safety redundancy) - same size as PlayerGames filters"
+              "512-bit bloom filter for this game's participants (probabilistic)"
             ],
             "type": {
               "array": [
                 "u64",
                 8
               ]
+            }
+          },
+          {
+            "name": "participantHashes",
+            "docs": [
+              "Exact participant hash list (first 8 bytes of SHA256(pubkey)) to eliminate false positives"
+            ],
+            "type": {
+              "vec": "u64"
             }
           }
         ]
@@ -3708,6 +2953,9 @@ export type Coinflip = {
     },
     {
       "name": "gameType",
+      "repr": {
+        "kind": "rust"
+      },
       "type": {
         "kind": "enum",
         "variants": [
@@ -3956,99 +3204,6 @@ export type Coinflip = {
       }
     },
     {
-      "name": "playerGames",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "activeFilterIndex",
-            "docs": [
-              "Dual bloom filter system - 0 means filter_a is active, 1 means filter_b is active"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "filterA",
-            "docs": [
-              "Filter Set A"
-            ],
-            "type": {
-              "defined": {
-                "name": "bloomFilters"
-              }
-            }
-          },
-          {
-            "name": "filterALastUpdated",
-            "type": "u64"
-          },
-          {
-            "name": "filterALongestExpiry",
-            "type": "u64"
-          },
-          {
-            "name": "filterB",
-            "docs": [
-              "Filter Set B"
-            ],
-            "type": {
-              "defined": {
-                "name": "bloomFilters"
-              }
-            }
-          },
-          {
-            "name": "filterBLastUpdated",
-            "type": "u64"
-          },
-          {
-            "name": "filterBLongestExpiry",
-            "type": "u64"
-          },
-          {
-            "name": "filterCleaningScheduledAt",
-            "docs": [
-              "Collision Detection & Recovery System",
-              "Timestamp when current active filter is scheduled for cleaning"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "emergencyUnjoinMode",
-            "docs": [
-              "Whether emergency unjoin mode is active (Game-filter-only validation)"
-            ],
-            "type": "bool"
-          }
-        ]
-      }
-    },
-    {
-      "name": "playerGamesInitialized",
-      "docs": [
-        "Emitted when a player's games tracking account is initialized"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "player",
-            "docs": [
-              "Player who initialized the games tracking"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "tokenMint",
-            "docs": [
-              "Token mint for this games tracking"
-            ],
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
       "name": "playerJoined",
       "docs": [
         "Emitted when a player joins a game"
@@ -4102,66 +3257,6 @@ export type Coinflip = {
             "name": "timestamp",
             "docs": [
               "Timestamp of the join"
-            ],
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "playerRolled",
-      "docs": [
-        "Emitted when a player rolls in Snowball/Dumbflip games"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "gameKey",
-            "docs": [
-              "Game where the roll occurred"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "player",
-            "docs": [
-              "Player who rolled"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "totalAmount",
-            "docs": [
-              "Total amount after roll"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "ticketsCount",
-            "docs": [
-              "Total number of tickets after roll"
-            ],
-            "type": "u32"
-          },
-          {
-            "name": "ticketIndex",
-            "docs": [
-              "Ticket index for this roll"
-            ],
-            "type": "u32"
-          },
-          {
-            "name": "lastSlot",
-            "docs": [
-              "Last slot for entropy"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "timestamp",
-            "docs": [
-              "Timestamp of the roll"
             ],
             "type": "u64"
           }
