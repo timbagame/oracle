@@ -2970,12 +2970,6 @@ export type Coinflip = {
           },
           {
             "name": "dumbaway"
-          },
-          {
-            "name": "snowball"
-          },
-          {
-            "name": "dumbball"
           }
         ]
       }
