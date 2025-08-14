@@ -2663,15 +2663,6 @@ export type Coinflip = {
             "type": "u64"
           },
           {
-            "name": "participantsFilter",
-            "docs": [
-              "Dynamic bloom filter bitset (probabilistic membership)"
-            ],
-            "type": {
-              "vec": "u64"
-            }
-          },
-          {
             "name": "participantHashes",
             "docs": [
               "Exact participant hash list (first 8 bytes of SHA256(pubkey)) to eliminate false positives"
@@ -2679,20 +2670,6 @@ export type Coinflip = {
             "type": {
               "vec": "u64"
             }
-          },
-          {
-            "name": "bloomMBits",
-            "docs": [
-              "Bloom filter size in bits"
-            ],
-            "type": "u32"
-          },
-          {
-            "name": "bloomK",
-            "docs": [
-              "Number of hash functions used in bloom"
-            ],
-            "type": "u8"
           }
         ]
       }

@@ -2657,15 +2657,6 @@
             "type": "u64"
           },
           {
-            "name": "participants_filter",
-            "docs": [
-              "Dynamic bloom filter bitset (probabilistic membership)"
-            ],
-            "type": {
-              "vec": "u64"
-            }
-          },
-          {
             "name": "participant_hashes",
             "docs": [
               "Exact participant hash list (first 8 bytes of SHA256(pubkey)) to eliminate false positives"
@@ -2673,20 +2664,6 @@
             "type": {
               "vec": "u64"
             }
-          },
-          {
-            "name": "bloom_m_bits",
-            "docs": [
-              "Bloom filter size in bits"
-            ],
-            "type": "u32"
-          },
-          {
-            "name": "bloom_k",
-            "docs": [
-              "Number of hash functions used in bloom"
-            ],
-            "type": "u8"
           }
         ]
       }
