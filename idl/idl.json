@@ -2508,21 +2508,26 @@
     },
     {
       "code": 7202,
-      "name": "InvalidWinnerIndex",
-      "msg": "Invalid winner index"
+      "name": "WinnerIndexMismatch",
+      "msg": "Winner index mismatch"
     },
     {
       "code": 7203,
-      "name": "WinnerPubkeyMismatch",
-      "msg": "Winner pubkey mismatch"
+      "name": "WinnerIndexOutOfRange",
+      "msg": "Winner index out of range"
     },
     {
       "code": 7204,
+      "name": "WinnerPubkeyHashMismatch",
+      "msg": "Winner pubkey hash mismatch"
+    },
+    {
+      "code": 7205,
       "name": "PrivateGameAccessDenied",
       "msg": "Private game access denied"
     },
     {
-      "code": 7205,
+      "code": 7206,
       "name": "RandomnessGenerationFailed",
       "msg": "Randomness generation failed"
     },

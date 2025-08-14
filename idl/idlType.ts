@@ -2514,21 +2514,26 @@ export type Coinflip = {
     },
     {
       "code": 7202,
-      "name": "invalidWinnerIndex",
-      "msg": "Invalid winner index"
+      "name": "winnerIndexMismatch",
+      "msg": "Winner index mismatch"
     },
     {
       "code": 7203,
-      "name": "winnerPubkeyMismatch",
-      "msg": "Winner pubkey mismatch"
+      "name": "winnerIndexOutOfRange",
+      "msg": "Winner index out of range"
     },
     {
       "code": 7204,
+      "name": "winnerPubkeyHashMismatch",
+      "msg": "Winner pubkey hash mismatch"
+    },
+    {
+      "code": 7205,
       "name": "privateGameAccessDenied",
       "msg": "Private game access denied"
     },
     {
-      "code": 7205,
+      "code": 7206,
       "name": "randomnessGenerationFailed",
       "msg": "Randomness generation failed"
     },
