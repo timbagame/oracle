@@ -2659,13 +2659,10 @@
           {
             "name": "participants_filter",
             "docs": [
-              "512-bit bloom filter for this game's participants (probabilistic)"
+              "Dynamic bloom filter bitset (probabilistic membership)"
             ],
             "type": {
-              "array": [
-                "u64",
-                8
-              ]
+              "vec": "u64"
             }
           },
           {
@@ -2676,6 +2673,20 @@
             "type": {
               "vec": "u64"
             }
+          },
+          {
+            "name": "bloom_m_bits",
+            "docs": [
+              "Bloom filter size in bits"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "bloom_k",
+            "docs": [
+              "Number of hash functions used in bloom"
+            ],
+            "type": "u8"
           }
         ]
       }
