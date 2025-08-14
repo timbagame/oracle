@@ -24,7 +24,7 @@ type EventMap = {
   gameClosed: any;
   oracleInitialized: any;
   oracleUpdated: any;
-  playerGamesInitialized: any;
+
   tokenFeeWithdrawn: any;
   tokenInitialized: any;
   tokenUpdated: any;
@@ -400,46 +400,7 @@ export class OracleService {
     return this.db.cleanupOldRecords(hoursOld);
   }
 
-  public async getCurrentWinner(gameAddress: string): Promise<{ success: boolean; winner?: string; error?: string }> {
-    try {
-      // Check if this is a dumb mode game (real-time winner revelation)
-      const gameType = this.db.getGameType(gameAddress);
-      if (!gameType || (gameType !== 'dumbflip' && gameType !== 'dumbaway' && gameType !== 'dumbball')) {
-        return { success: false, error: "Current winner only available for dumb mode games (dumbflip, dumbaway, dumbball)" };
-      }
 
-      const secretData = this.db.getSecretKey(gameAddress);
-      if (!secretData) {
-        return { success: false, error: "Game not found" };
-      }
-
-      const gamePda = this.getGamePDAFromAddress(gameAddress);
-      const gameAccount = await this.program.account.game.fetch(gamePda);
-      const players = this.db.getGamePlayers(gameAddress);
-
-      if (players.length === 0) {
-        return { success: false, error: "No players in game" };
-      }
-
-  // Contract uses tickets_count across all modes
-  const nEntries = Number(gameAccount.ticketsCount);
-
-      const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
-  const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, Number(gameAccount.lastSlot), nEntries);
-      const winnerPlayerAddress = players[winnerIndex];
-
-      if (!winnerPlayerAddress) {
-        return { success: false, error: "Unable to determine winner" };
-      }
-
-      return { success: true, winner: winnerPlayerAddress };
-    } catch (error: any) {
-      if (this.isAccountNotFoundError(error)) {
-        return { success: false, error: "Game not found" };
-      }
-      return { success: false, error: error.message };
-    }
-  }
 
   public getStats() {
     return {

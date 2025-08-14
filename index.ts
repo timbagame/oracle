@@ -82,16 +82,11 @@ const API_DOCUMENTATION = `
         <span class="method post">POST</span> <code>/generate-hash</code>
         <div class="description">
           Generate new game secrets (random hash and game address)<br>
-          <strong>Body:</strong> <code>{ "gameType": "coinflip" | "giveaway" | "dumbflip" | "snowball" }</code>
+          <strong>Body:</strong> <code>{ "gameType": "coinflip" | "giveaway" }</code>
         </div>
       </div>
 
-      <div class="endpoint">
-        <span class="method get">GET</span> <code>/current-winner/:gameAddress</code>
-        <div class="description">
-          Get the current winner for a specific game (dumbflip/snowball)
-        </div>
-      </div>
+
 
       <div class="endpoint">
         <span class="method get">GET</span> <code>/stats</code>
@@ -166,15 +161,7 @@ async function handleStats(): Promise<Response> {
   });
 }
 
-async function handleCurrentWinner(gameAddress: string): Promise<Response> {
-  try {
-    const result = await oracle.getCurrentWinner(gameAddress);
-    return createResponse(result);
-  } catch (error: any) {
-    console.error('❌ Error getting current winner:', error);
-    return createErrorResponse('Failed to get current winner', 500);
-  }
-}
+
 
 // Main server
 const server = Bun.serve({
@@ -194,12 +181,12 @@ const server = Bun.serve({
           return await handleGenerateHash();
         case path === '/stats' && method === 'GET':
           return await handleStats();
-        case path.startsWith('/current-winner/') && method === 'GET':
-          const gameAddress = path.split('/current-winner/')[1];
-          if (!gameAddress) {
-            return createErrorResponse('Game address required', 400);
-          }
-          return await handleCurrentWinner(gameAddress);
+        // current-winner endpoint removed
+
+
+
+
+
         case path === '/' && method === 'GET':
           return createHtmlResponse(API_DOCUMENTATION);
         default:

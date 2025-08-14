@@ -5,14 +5,14 @@ A robust Oracle service for Solana-based games that generates cryptographic secr
 ## ✨ Features
 
 - **🔑 Cryptographic Secret Generation**: Secure random secret generation for new games
-- **🎯 Multi-Game Type Support**: Supports Coinflip, Giveaway, Dumbflip, and Snowball games
+- **🎯 Game Type Support**: Supports Coinflip and Giveaway games
 - **🎧 Event-Driven Completion**: Real-time game completion via Solana event listeners
 - **🔄 Fallback Scanning**: Periodic scanning as backup for missed events
 - **📊 Real-Time Monitoring**: Health checks and comprehensive statistics
 - **🛡️ Error Resilience**: Robust error handling and retry mechanisms
 - **💾 Persistent Storage**: SQLite database for secret and game tracking
 - **⚡ Optimized Performance**: Cached game metadata to minimize blockchain calls
-- **🎲 Flexible Secret Handling**: Returns secret keys immediately for Dumbflip and Snowball games
+- **🎲 Secure Secret Handling**: Secrets retained until game completion
 
 ## 🚀 Architecture
 
@@ -43,8 +43,6 @@ The Oracle service uses a hybrid approach with performance optimizations:
 
 - **`coinflip`**: Traditional coinflip games (Oracle keeps secret until completion)
 - **`giveaway`**: Giveaway games (Oracle keeps secret until completion)
-- **`dumbflip`**: Dumbflip games (Secret returned immediately)
-- **`snowball`**: Snowball games (Secret returned immediately)
 
 ## 🔧 Setup & Installation
 
@@ -117,24 +115,7 @@ curl -X POST http://localhost:3001/generate-hash \
 }
 ```
 
-#### Dumbflip/Snowball Games
 
-```bash
-curl -X POST http://localhost:3001/generate-hash \
-  -H "Content-Type: application/json" \
-  -d '{"gameType": "dumbflip"}'
-```
-
-**Response:**
-
-```json
-{
-  "success": true,
-  "randomHash": "abc123...",
-  "gameAddress": "def456...",
-  "secretKey": "789xyz..."
-}
-```
 
 #### Default (No Game Type)
 
@@ -221,23 +202,11 @@ curl http://localhost:3001/stats
    - Uses stored secret to determine winner fairly
    - Marks game as completed in database
 
-#### For Immediate-Secret Games (Dumbflip, Snowball)
 
-1. **Secret Generation**
-
-   - Client calls `/generate-hash` with `gameType: "dumbflip"` or `"snowball"`
-   - Oracle generates cryptographic secret and hash
-   - Stores secret in database and returns both hash and secret to client
-
-2. **Game Creation & Management**
-   - Client creates game and handles completion using the provided secret
-   - Oracle still tracks the game for monitoring and statistics
-   - Client is responsible for fair winner determination
 
 ### Game Type Differences
 
-- **Coinflip/Giveaway**: Oracle-managed completion for maximum security and fairness
-- **Dumbflip/Snowball**: Client-managed completion for immediate gameplay and special mechanics
+- **Coinflip/Giveaway**: Oracle-managed completion for security and fairness
 
 ### Event-Driven Architecture
 
@@ -347,21 +316,7 @@ const { randomHash, gameAddress } = await response.json();
 // Oracle will automatically complete the game when ready
 ```
 
-#### Immediate-Secret Games (Client-Managed)
 
-```javascript
-// Generate secrets for dumbflip game
-const response = await fetch("http://localhost:3001/generate-hash", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ gameType: "dumbflip" }),
-});
-const { randomHash, gameAddress, secretKey } = await response.json();
-
-// Use randomHash for game creation
-// Use secretKey for immediate winner determination
-// Client handles game completion logic
-```
 
 ### Smart Contract Integration
 
@@ -371,15 +326,8 @@ The Oracle works with Solana programs supporting multiple game types:
 
 1. Uses the provided hash for game creation
 2. Emits required events (`GameInitialized`, `PlayerJoined`, `GameCompleted`)
-3. Accepts the secret key from Oracle for winner determination
+3. Oracle retains the secret key until winner determination
 4. Oracle handles automatic completion when conditions are met
-
-#### Client-Managed Games (Dumbflip, Snowball)
-
-1. Uses the provided hash for game creation
-2. Client receives secret key immediately for game logic
-3. Supports special game mechanics like `rollSnowballGame` instruction
-4. Oracle provides monitoring and statistics tracking
 
 **Required Events for All Game Types:**
 
