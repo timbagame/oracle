@@ -3275,7 +3275,7 @@
           {
             "name": "ticket_index",
             "docs": [
-              "Ticket index that was removed"
+              "Ticket index associated with this unjoin operation"
             ],
             "type": "u32"
           },

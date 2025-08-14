@@ -3281,7 +3281,7 @@ export type Coinflip = {
           {
             "name": "ticketIndex",
             "docs": [
-              "Ticket index that was removed"
+              "Ticket index associated with this unjoin operation"
             ],
             "type": "u32"
           },
