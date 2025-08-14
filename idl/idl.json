@@ -1829,12 +1829,7 @@
           "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
         }
       ],
-      "args": [
-        {
-          "name": "ticket_index",
-          "type": "u32"
-        }
-      ]
+      "args": []
     },
     {
       "name": "update_oracle",

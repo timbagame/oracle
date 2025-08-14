@@ -1835,12 +1835,7 @@ export type Coinflip = {
           "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
         }
       ],
-      "args": [
-        {
-          "name": "ticketIndex",
-          "type": "u32"
-        }
-      ]
+      "args": []
     },
     {
       "name": "updateOracle",
