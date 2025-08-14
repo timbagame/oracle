@@ -6,10 +6,10 @@ const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
 
 // CORS headers configuration
 const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-  'Content-Type': 'application/json'
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Content-Type": "application/json",
 };
 
 // Simplified API documentation
@@ -113,7 +113,7 @@ function createResponse(data: any, status: number = 200): Response {
 }
 
 function createHtmlResponse(html: string): Response {
-  return new Response(html, { headers: { 'Content-Type': 'text/html' } });
+  return new Response(html, { headers: { "Content-Type": "text/html" } });
 }
 
 function createErrorResponse(error: string, status: number = 500): Response {
@@ -123,10 +123,10 @@ function createErrorResponse(error: string, status: number = 500): Response {
 // Route handlers
 async function handleHealth(): Promise<Response> {
   return createResponse({
-    status: 'healthy',
+    status: "healthy",
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    service: 'oracle-api'
+    service: "oracle-api",
   });
 }
 
@@ -136,13 +136,13 @@ async function handleGenerateHash(): Promise<Response> {
     const response = {
       success: true,
       randomHash: secrets.randomHash,
-      gameAddress: secrets.gameAddress
+      gameAddress: secrets.gameAddress,
     };
 
     return createResponse(response);
   } catch (error: any) {
-    console.error('❌ Error generating hash:', error);
-    return createErrorResponse('Failed to generate hash', 500);
+    console.error("❌ Error generating hash:", error);
+    return createErrorResponse("Failed to generate hash", 500);
   }
 }
 
@@ -153,48 +153,45 @@ async function handleStats(): Promise<Response> {
     timestamp: new Date().toISOString(),
     stats,
     service: {
-      name: 'oracle-api',
-      version: '1.0.0',
+      name: "oracle-api",
+      version: "1.0.0",
       uptime: process.uptime(),
-      environment: process.env.NODE_ENV || 'development'
-    }
+      environment: process.env.NODE_ENV || "development",
+    },
   });
 }
-
-
 
 // Main server
 const server = Bun.serve({
   port: PORT,
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const { pathname: path, method } = { pathname: url.pathname, method: request.method };
+    const { pathname: path, method } = {
+      pathname: url.pathname,
+      method: request.method,
+    };
 
     // CORS preflight
-    if (method === 'OPTIONS') return createResponse(null, 200);
+    if (method === "OPTIONS") return createResponse(null, 200);
 
     try {
       switch (true) {
-        case path === '/health' && method === 'GET':
+        case path === "/health" && method === "GET":
           return await handleHealth();
-        case path === '/generate-hash' && method === 'POST':
+        case path === "/generate-hash" && method === "POST":
           return await handleGenerateHash();
-        case path === '/stats' && method === 'GET':
+        case path === "/stats" && method === "GET":
           return await handleStats();
-        // current-winner endpoint removed
+        // current-winner endpoint not implemented in current service version
 
-
-
-
-
-        case path === '/' && method === 'GET':
+        case path === "/" && method === "GET":
           return createHtmlResponse(API_DOCUMENTATION);
         default:
-          return createErrorResponse('Endpoint not found', 404);
+          return createErrorResponse("Endpoint not found", 404);
       }
     } catch (error: any) {
-      console.error('❌ Server error:', error);
-      return createErrorResponse('Internal server error', 500);
+      console.error("❌ Server error:", error);
+      return createErrorResponse("Internal server error", 500);
     }
   },
 });
@@ -205,9 +202,9 @@ console.log(`🔮 Oracle API running on http://localhost:${PORT}`);
 async function initialize(): Promise<void> {
   try {
     await oracle.startEventListening();
-    console.log('✅ Oracle services initialized');
+    console.log("✅ Oracle services initialized");
   } catch (error) {
-    console.error('❌ Failed to start event listeners:', error);
+    console.error("❌ Failed to start event listeners:", error);
   }
 }
 
@@ -219,10 +216,10 @@ setInterval(async () => {
     // Clean up old records periodically (every scan cycle)
     const cleanupResult = oracle.cleanupOldRecords(48);
     if (cleanupResult.deletedSecrets > 0 || cleanupResult.deletedGames > 0) {
-      console.log('🧹 Background cleanup completed');
+      console.log("🧹 Background cleanup completed");
     }
   } catch (error) {
-    console.error('❌ Background scan error:', error);
+    console.error("❌ Background scan error:", error);
   }
 }, FALLBACK_SCAN_INTERVAL);
 
@@ -232,9 +229,9 @@ async function shutdown(signal: string): Promise<void> {
   try {
     await oracle.stopEventListening();
     server.stop();
-    console.log('✅ Shutdown complete');
+    console.log("✅ Shutdown complete");
   } catch (error) {
-    console.error('❌ Shutdown error:', error);
+    console.error("❌ Shutdown error:", error);
   }
   process.exit(0);
 }
