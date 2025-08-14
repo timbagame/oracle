@@ -2508,27 +2508,27 @@ export type Coinflip = {
       "msg": "Player already joined"
     },
     {
-      "code": 7202,
+      "code": 7201,
       "name": "insufficientBalance",
       "msg": "Insufficient balance"
     },
     {
-      "code": 7203,
+      "code": 7202,
       "name": "invalidWinnerIndex",
       "msg": "Invalid winner index"
     },
     {
-      "code": 7204,
+      "code": 7203,
       "name": "winnerPubkeyMismatch",
       "msg": "Winner pubkey mismatch"
     },
     {
-      "code": 7205,
+      "code": 7204,
       "name": "privateGameAccessDenied",
       "msg": "Private game access denied"
     },
     {
-      "code": 7206,
+      "code": 7205,
       "name": "randomnessGenerationFailed",
       "msg": "Randomness generation failed"
     },
