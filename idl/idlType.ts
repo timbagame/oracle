@@ -2660,7 +2660,7 @@ export type Coinflip = {
           {
             "name": "participantHashes",
             "docs": [
-              "Exact participant hash list (first 8 bytes of SHA256(pubkey)) to eliminate false positives"
+              "Exact participant hash list (first 8 bytes of SHA256(\"timba:part:v1\" || game_key || pubkey))"
             ],
             "type": {
               "vec": "u64"
