@@ -1,0 +1,14 @@
+services:
+  oracle:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      SOLANA_NETWORK: ${SOLANA_NETWORK}
+      ORACLE_PORT: ${ORACLE_PORT}
+    volumes:
+      # Read-only keypair; required for on-chain actions
+      - ./admin-keypair.json:/app/admin-keypair.json:ro
+      # Persist the sqlite database between restarts
+      - ./oracle.sqlite:/app/oracle.sqlite
+
