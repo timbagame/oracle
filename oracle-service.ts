@@ -93,8 +93,12 @@ export class OracleService {
   }
 
   private initializeProgram(): anchor.Program<Coinflip> {
-    const adminWallet = new anchor.Wallet(this.adminKeypair);
-    const provider = new anchor.AnchorProvider(this.connection, adminWallet, { commitment: "confirmed" });
+    const adminWallet = new anchor.Wallet(this.adminKeypair as anchor.web3.Keypair);
+    const provider = new anchor.AnchorProvider(
+      this.connection as anchor.web3.Connection,
+      adminWallet,
+      { commitment: "confirmed" }
+    );
     anchor.setProvider(provider);
     return new anchor.Program(idl as Coinflip, provider) as anchor.Program<Coinflip>;
   }
