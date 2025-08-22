@@ -1,4 +1,5 @@
 import { OracleService } from "./oracle-service.ts";
+import type { Server } from "bun";
 
 // Constants
 const DEFAULT_PORT = 3001;
@@ -107,6 +108,8 @@ const API_DOCUMENTATION = `
 const PORT = Number(process.env["ORACLE_PORT"]) || DEFAULT_PORT;
 const oracle = OracleService.getInstance();
 
+let server: Server | undefined;
+
 // Response helpers
 function createResponse(data: any, status: number = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: CORS_HEADERS });
@@ -121,7 +124,7 @@ function createErrorResponse(error: string, status: number = 500): Response {
 }
 
 // Route handlers
-async function handleHealth(): Promise<Response> {
+export async function handleHealth(): Promise<Response> {
   return createResponse({
     status: "healthy",
     timestamp: new Date().toISOString(),
@@ -130,7 +133,7 @@ async function handleHealth(): Promise<Response> {
   });
 }
 
-async function handleGenerateHash(): Promise<Response> {
+export async function handleGenerateHash(): Promise<Response> {
   try {
     const secrets = oracle.generateGameSecrets();
     const response = {
@@ -146,7 +149,7 @@ async function handleGenerateHash(): Promise<Response> {
   }
 }
 
-async function handleStats(): Promise<Response> {
+export async function handleStats(): Promise<Response> {
   const stats = oracle.getStats();
   return createResponse({
     success: true,
@@ -162,41 +165,63 @@ async function handleStats(): Promise<Response> {
 }
 
 // Main server
-const server = Bun.serve({
-  port: PORT,
-  async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    const { pathname: path, method } = {
-      pathname: url.pathname,
-      method: request.method,
-    };
+if (process.env.NODE_ENV !== "test") {
+  server = Bun.serve({
+    port: PORT,
+    async fetch(request: Request): Promise<Response> {
+      const url = new URL(request.url);
+      const { pathname: path, method } = {
+        pathname: url.pathname,
+        method: request.method,
+      };
 
-    // CORS preflight
-    if (method === "OPTIONS") return createResponse(null, 200);
+      // CORS preflight
+      if (method === "OPTIONS") return createResponse(null, 200);
 
-    try {
-      switch (true) {
-        case path === "/health" && method === "GET":
-          return await handleHealth();
-        case path === "/generate-hash" && method === "POST":
-          return await handleGenerateHash();
-        case path === "/stats" && method === "GET":
-          return await handleStats();
-        // current-winner endpoint not implemented in current service version
+      try {
+        switch (true) {
+          case path === "/health" && method === "GET":
+            return await handleHealth();
+          case path === "/generate-hash" && method === "POST":
+            return await handleGenerateHash();
+          case path === "/stats" && method === "GET":
+            return await handleStats();
+          // current-winner endpoint not implemented in current service version
 
-        case path === "/" && method === "GET":
-          return createHtmlResponse(API_DOCUMENTATION);
-        default:
-          return createErrorResponse("Endpoint not found", 404);
+          case path === "/" && method === "GET":
+            return createHtmlResponse(API_DOCUMENTATION);
+          default:
+            return createErrorResponse("Endpoint not found", 404);
+        }
+      } catch (error: any) {
+        console.error("❌ Server error:", error);
+        return createErrorResponse("Internal server error", 500);
       }
-    } catch (error: any) {
-      console.error("❌ Server error:", error);
-      return createErrorResponse("Internal server error", 500);
-    }
-  },
-});
+    },
+  });
 
-console.log(`🔮 Oracle API running on http://localhost:${PORT}`);
+  console.log(`🔮 Oracle API running on http://localhost:${PORT}`);
+
+  initialize();
+
+  // Background scanning
+  setInterval(async () => {
+    try {
+      await oracle.scanAndCompleteActiveGames();
+
+      // Clean up old records periodically (every scan cycle)
+      const cleanupResult = oracle.cleanupOldRecords(48);
+      if (cleanupResult.deletedSecrets > 0 || cleanupResult.deletedGames > 0) {
+        console.log("🧹 Background cleanup completed");
+      }
+    } catch (error) {
+      console.error("❌ Background scan error:", error);
+    }
+  }, FALLBACK_SCAN_INTERVAL);
+
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+}
 
 // Initialize and start services
 async function initialize(): Promise<void> {
@@ -208,35 +233,15 @@ async function initialize(): Promise<void> {
   }
 }
 
-// Background scanning
-setInterval(async () => {
-  try {
-    await oracle.scanAndCompleteActiveGames();
-
-    // Clean up old records periodically (every scan cycle)
-    const cleanupResult = oracle.cleanupOldRecords(48);
-    if (cleanupResult.deletedSecrets > 0 || cleanupResult.deletedGames > 0) {
-      console.log("🧹 Background cleanup completed");
-    }
-  } catch (error) {
-    console.error("❌ Background scan error:", error);
-  }
-}, FALLBACK_SCAN_INTERVAL);
-
 // Graceful shutdown
 async function shutdown(signal: string): Promise<void> {
   console.log(`\n🛑 Shutting down (${signal})...`);
   try {
     await oracle.stopEventListening();
-    server.stop();
+    server?.stop();
     console.log("✅ Shutdown complete");
   } catch (error) {
     console.error("❌ Shutdown error:", error);
   }
   process.exit(0);
 }
-
-process.once("SIGINT", () => shutdown("SIGINT"));
-process.once("SIGTERM", () => shutdown("SIGTERM"));
-
-initialize();
