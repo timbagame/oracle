@@ -89,7 +89,11 @@ export class OracleDatabase {
     `);
   }
 
-  private executeDbOperation<T>(operation: () => T, errorMessage: string, defaultValue?: T): T {
+  private executeDbOperation<T>(
+    operation: () => T,
+    errorMessage: string,
+    defaultValue?: T
+  ): T {
     try {
       return operation();
     } catch (error) {
@@ -102,30 +106,35 @@ export class OracleDatabase {
   }
 
   // Secret key management
-  public saveSecretKey(gameAddress: string, secretKey: string, randomHash: string): void {
-    this.executeDbOperation(
-      () => {
-        const stmt = this.db.prepare(
-          'INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)'
-        );
-        stmt.run(gameAddress, secretKey, randomHash, Date.now());
-      },
-      `Failed to save secret key for game ${gameAddress}`
-    );
+  public saveSecretKey(
+    gameAddress: string,
+    secretKey: string,
+    randomHash: string
+  ): void {
+    this.executeDbOperation(() => {
+      const stmt = this.db.prepare(
+        "INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)"
+      );
+      stmt.run(gameAddress, secretKey, randomHash, Date.now());
+    }, `Failed to save secret key for game ${gameAddress}`);
   }
 
   public getSecretKey(gameAddress: string): SecretKeyData | null {
     return this.executeDbOperation(
       () => {
         const stmt = this.db.prepare(
-          'SELECT secret_key, random_hash FROM secret_keys WHERE game_address = ? AND used = FALSE'
+          "SELECT secret_key, random_hash FROM secret_keys WHERE game_address = ? AND used = FALSE"
         );
-        const result = stmt.get(gameAddress) as { secret_key: string; random_hash: string } | undefined;
+        const result = stmt.get(gameAddress) as
+          | { secret_key: string; random_hash: string }
+          | undefined;
 
-        return result ? {
-          secretKey: result.secret_key,
-          randomHash: result.random_hash
-        } : null;
+        return result
+          ? {
+              secretKey: result.secret_key,
+              randomHash: result.random_hash,
+            }
+          : null;
       },
       "Failed to get secret key",
       null
@@ -133,82 +142,70 @@ export class OracleDatabase {
   }
 
   public markSecretKeyUsed(gameAddress: string): void {
-    this.executeDbOperation(
-      () => {
-        const stmt = this.db.prepare('UPDATE secret_keys SET used = TRUE WHERE game_address = ?');
-        stmt.run(gameAddress);
-      },
-      "Failed to mark secret key as used"
-    );
+    this.executeDbOperation(() => {
+      const stmt = this.db.prepare(
+        "UPDATE secret_keys SET used = TRUE WHERE game_address = ?"
+      );
+      stmt.run(gameAddress);
+    }, "Failed to mark secret key as used");
   }
 
   // Game tracking
   public trackGame(gameAddress: string, gameType?: string): void {
-    this.executeDbOperation(
-      () => {
-        const stmt = this.db.prepare(
-          'INSERT OR REPLACE INTO game_tracking (game_address, status, game_type, last_checked) VALUES (?, ?, ?, ?)'
-        );
-        stmt.run(gameAddress, DEFAULT_STATUS, gameType || null, Date.now());
-      },
-      "Failed to track game"
-    );
+    this.executeDbOperation(() => {
+      const stmt = this.db.prepare(
+        "INSERT OR REPLACE INTO game_tracking (game_address, status, game_type, last_checked) VALUES (?, ?, ?, ?)"
+      );
+      stmt.run(gameAddress, DEFAULT_STATUS, gameType || null, Date.now());
+    }, "Failed to track game");
   }
 
   public getGameType(gameAddress: string): string | null {
-    return this.executeDbOperation(
-      () => {
-        const stmt = this.db.prepare('SELECT game_type FROM game_tracking WHERE game_address = ?');
-        const result = stmt.get(gameAddress) as { game_type: string | null } | undefined;
-        return result?.game_type || null;
-      },
-      "Failed to get game type"
-    );
+    return this.executeDbOperation(() => {
+      const stmt = this.db.prepare(
+        "SELECT game_type FROM game_tracking WHERE game_address = ?"
+      );
+      const result = stmt.get(gameAddress) as
+        | { game_type: string | null }
+        | undefined;
+      return result?.game_type || null;
+    }, "Failed to get game type");
   }
 
   public markGameCompleted(gameAddress: string): void {
-    this.executeDbOperation(
-      () => {
-        const now = Date.now();
-        const stmt = this.db.prepare(
-          'UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?'
-        );
-        stmt.run('completed', now, now, gameAddress);
-      },
-      "Failed to mark game as completed"
-    );
+    this.executeDbOperation(() => {
+      const now = Date.now();
+      const stmt = this.db.prepare(
+        "UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?"
+      );
+      stmt.run("completed", now, now, gameAddress);
+    }, "Failed to mark game as completed");
   }
 
   public markGameClosed(gameAddress: string): void {
-    this.executeDbOperation(
-      () => {
-        const now = Date.now();
-        const stmt = this.db.prepare(
-          'UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?'
-        );
-        stmt.run('cancelled', now, now, gameAddress);
-      },
-      "Failed to mark game as closed"
-    );
+    this.executeDbOperation(() => {
+      const now = Date.now();
+      const stmt = this.db.prepare(
+        "UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?"
+      );
+      stmt.run("cancelled", now, now, gameAddress);
+    }, "Failed to mark game as closed");
   }
 
   public incrementCompletionAttempts(gameAddress: string): void {
-    this.executeDbOperation(
-      () => {
-        const stmt = this.db.prepare(
-          'UPDATE game_tracking SET completion_attempts = completion_attempts + 1, last_checked = ? WHERE game_address = ?'
-        );
-        stmt.run(Date.now(), gameAddress);
-      },
-      "Failed to increment completion attempts"
-    );
+    this.executeDbOperation(() => {
+      const stmt = this.db.prepare(
+        "UPDATE game_tracking SET completion_attempts = completion_attempts + 1, last_checked = ? WHERE game_address = ?"
+      );
+      stmt.run(Date.now(), gameAddress);
+    }, "Failed to increment completion attempts");
   }
 
   public getPendingGames(): PendingGame[] {
     return this.executeDbOperation(
       () => {
         const stmt = this.db.prepare(
-          'SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?'
+          "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?"
         );
         return stmt.all(DEFAULT_STATUS, PENDING_SCAN_LIMIT) as PendingGame[];
       },
@@ -228,22 +225,32 @@ export class OracleDatabase {
         usedSecrets: secretsStats.used || 0,
         pendingGames: gamesStats.pending || 0,
         completedGames: gamesStats.completed || 0,
-        cancelledGames: gamesStats.cancelled || 0
+        cancelledGames: gamesStats.cancelled || 0,
       };
     } catch (error) {
       console.error("❌ Failed to get stats:", error);
-      return { totalSecrets: 0, usedSecrets: 0, pendingGames: 0, completedGames: 0, cancelledGames: 0 };
+      return {
+        totalSecrets: 0,
+        usedSecrets: 0,
+        pendingGames: 0,
+        completedGames: 0,
+        cancelledGames: 0,
+      };
     }
   }
 
   private getSecretsStats(): { total: number; used: number } {
     const stmt = this.db.prepare(
-      'SELECT COUNT(*) as total, SUM(CASE WHEN used = TRUE THEN 1 ELSE 0 END) as used FROM secret_keys'
+      "SELECT COUNT(*) as total, SUM(CASE WHEN used = TRUE THEN 1 ELSE 0 END) as used FROM secret_keys"
     );
     return stmt.get() as { total: number; used: number };
   }
 
-  private getGamesStats(): { pending: number; completed: number; cancelled: number } {
+  private getGamesStats(): {
+    pending: number;
+    completed: number;
+    cancelled: number;
+  } {
     const stmt = this.db.prepare(`
       SELECT
         SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as pending,
@@ -251,30 +258,46 @@ export class OracleDatabase {
         SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled
       FROM game_tracking
     `);
-    return stmt.get(DEFAULT_STATUS) as { pending: number; completed: number; cancelled: number };
+    return stmt.get(DEFAULT_STATUS) as {
+      pending: number;
+      completed: number;
+      cancelled: number;
+    };
   }
 
   // Utility methods
-  public cleanupOldRecords(hoursOld: number = 48): { deletedSecrets: number; deletedGames: number } {
+  public cleanupOldRecords(hoursOld: number = 48): {
+    deletedSecrets: number;
+    deletedGames: number;
+  } {
     try {
-      const cutoffTime = Date.now() - (hoursOld * 60 * 60 * 1000);
+      const cutoffTime = Date.now() - hoursOld * 60 * 60 * 1000;
 
       // Clean up old secret keys
-      const secretsStmt = this.db.prepare('DELETE FROM secret_keys WHERE created_at < ?');
+      const secretsStmt = this.db.prepare(
+        "DELETE FROM secret_keys WHERE created_at < ?"
+      );
       const secretsResult = secretsStmt.run(cutoffTime);
 
       // Clean up old game tracking records (completed/cancelled games older than cutoff)
       const trackingStmt = this.db.prepare(
-        'DELETE FROM game_tracking WHERE (status != ? AND completed_at IS NOT NULL AND completed_at < ?) OR (status = ? AND last_checked < ?)'
+        "DELETE FROM game_tracking WHERE (status != ? AND completed_at IS NOT NULL AND completed_at < ?) OR (status = ? AND last_checked < ?)"
       );
-      const trackingResult = trackingStmt.run('pending', cutoffTime, 'pending', cutoffTime);
+      const trackingResult = trackingStmt.run(
+        "pending",
+        cutoffTime,
+        "pending",
+        cutoffTime
+      );
 
       const deletedCounts = {
         deletedSecrets: secretsResult.changes,
-        deletedGames: trackingResult.changes
+        deletedGames: trackingResult.changes,
       };
 
-      console.log(`🧹 Cleanup completed - Secrets: ${deletedCounts.deletedSecrets}, Games: ${deletedCounts.deletedGames}`);
+      console.log(
+        `🧹 Cleanup completed - Secrets: ${deletedCounts.deletedSecrets}, Games: ${deletedCounts.deletedGames}`
+      );
 
       return deletedCounts;
     } catch (error) {
@@ -294,55 +317,49 @@ export class OracleDatabase {
   public getConnectionInfo(): { file: string; isOpen: boolean } {
     return {
       file: DATABASE_FILE,
-      isOpen: this.db !== null
+      isOpen: this.db !== null,
     };
   }
 
   public addPlayerToGame(gameAddress: string, playerAddress: string): void {
-    this.executeDbOperation(
-      () => {
-        const stmt = this.db.prepare(
-          'INSERT OR IGNORE INTO game_players (game_address, player_address, joined_at) VALUES (?, ?, ?)'
-        );
-        stmt.run(gameAddress, playerAddress, Date.now());
-      },
-      "Failed to add player to game"
-    );
+    this.executeDbOperation(() => {
+      const stmt = this.db.prepare(
+        "INSERT OR IGNORE INTO game_players (game_address, player_address, joined_at) VALUES (?, ?, ?)"
+      );
+      stmt.run(gameAddress, playerAddress, Date.now());
+    }, "Failed to add player to game");
   }
 
-  public removePlayerFromGame(gameAddress: string, playerAddress: string): void {
-    this.executeDbOperation(
-      () => {
-        const stmt = this.db.prepare(
-          'DELETE FROM game_players WHERE game_address = ? AND player_address = ?'
-        );
-        stmt.run(gameAddress, playerAddress);
-      },
-      "Failed to remove player from game"
-    );
+  public removePlayerFromGame(
+    gameAddress: string,
+    playerAddress: string
+  ): void {
+    this.executeDbOperation(() => {
+      const stmt = this.db.prepare(
+        "DELETE FROM game_players WHERE game_address = ? AND player_address = ?"
+      );
+      stmt.run(gameAddress, playerAddress);
+    }, "Failed to remove player from game");
   }
 
   public clearStalePlayersForGame(gameAddress: string): void {
-    this.executeDbOperation(
-      () => {
-        const stmt = this.db.prepare(
-          'DELETE FROM game_players WHERE game_address = ?'
-        );
-        stmt.run(gameAddress);
-        console.log(`🧹 Cleared stale player data for game ${gameAddress}`);
-      },
-      "Failed to clear stale players for game"
-    );
+    this.executeDbOperation(() => {
+      const stmt = this.db.prepare(
+        "DELETE FROM game_players WHERE game_address = ?"
+      );
+      stmt.run(gameAddress);
+      console.log(`🧹 Cleared stale player data for game ${gameAddress}`);
+    }, "Failed to clear stale players for game");
   }
 
   public getGamePlayers(gameAddress: string): string[] {
     return this.executeDbOperation(
       () => {
         const stmt = this.db.prepare(
-          'SELECT player_address FROM game_players WHERE game_address = ? ORDER BY joined_at ASC'
+          "SELECT player_address FROM game_players WHERE game_address = ? ORDER BY joined_at ASC"
         );
         const results = stmt.all(gameAddress) as { player_address: string }[];
-        return results.map(row => row.player_address);
+        return results.map((row) => row.player_address);
       },
       "Failed to get game players",
       []
