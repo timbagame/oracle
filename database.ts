@@ -172,24 +172,26 @@ export class OracleDatabase {
     }, "Failed to get game type");
   }
 
-  public markGameCompleted(gameAddress: string): void {
+  private updateGameStatus(
+    gameAddress: string,
+    status: "completed" | "cancelled",
+    errorMessage: string
+  ): void {
     this.executeDbOperation(() => {
       const now = Date.now();
       const stmt = this.db.prepare(
         "UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?"
       );
-      stmt.run("completed", now, now, gameAddress);
-    }, "Failed to mark game as completed");
+      stmt.run(status, now, now, gameAddress);
+    }, errorMessage);
+  }
+
+  public markGameCompleted(gameAddress: string): void {
+    this.updateGameStatus(gameAddress, "completed", "Failed to mark game as completed");
   }
 
   public markGameClosed(gameAddress: string): void {
-    this.executeDbOperation(() => {
-      const now = Date.now();
-      const stmt = this.db.prepare(
-        "UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?"
-      );
-      stmt.run("cancelled", now, now, gameAddress);
-    }, "Failed to mark game as closed");
+    this.updateGameStatus(gameAddress, "cancelled", "Failed to mark game as closed");
   }
 
   public incrementCompletionAttempts(gameAddress: string): void {

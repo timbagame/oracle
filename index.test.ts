@@ -70,5 +70,28 @@ describe("OracleDatabase", () => {
     const pending = db.getPendingGames();
     expect(pending.some((g) => g.game_address === "game2")).toBe(true);
   });
+
+  it("marks secret keys used and updates stats", () => {
+    const db = OracleDatabase.getInstance();
+    db.saveSecretKey("game3", "secret3", "hash3");
+    expect(db.getStats().usedSecrets).toBe(0);
+    db.markSecretKeyUsed("game3");
+    expect(db.getStats().usedSecrets).toBe(1);
+  });
+
+  it("updates game status and cleans up old records", () => {
+    const db = OracleDatabase.getInstance();
+    db.saveSecretKey("game4", "secret4", "hash4");
+    db.trackGame("game4");
+    db.markGameCompleted("game4");
+
+    db.saveSecretKey("game5", "secret5", "hash5");
+    db.trackGame("game5");
+    db.markGameClosed("game5");
+
+    const cleanup = db.cleanupOldRecords(-1);
+    expect(cleanup.deletedSecrets).toBeGreaterThanOrEqual(1);
+    expect(cleanup.deletedGames).toBeGreaterThanOrEqual(1);
+  });
 });
 
