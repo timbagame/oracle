@@ -73,6 +73,15 @@ describe("OracleService", () => {
     expect(check({ message: "Something else" })).toBe(false);
   });
 
+  it("computes deterministic winner index", () => {
+    const service = OracleService.getInstance();
+    const secret = Buffer.alloc(32, 1);
+    const winner = (service as any).calculateWinnerIndex(secret, 123456, 100);
+    expect(winner).toBe(2);
+    const single = (service as any).calculateWinnerIndex(secret, 123456, 1);
+    expect(single).toBe(0);
+  });
+
   it("updates scan statistics correctly", () => {
     const service = OracleService.getInstance();
     const stats = { completed: 0, errors: 0, notReady: 0 };
