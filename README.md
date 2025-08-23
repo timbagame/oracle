@@ -247,6 +247,15 @@ This prevents normal "not ready" states from being reported as errors in logs an
 └── README.md          # This file
 ```
 
+### Testing
+
+Run the test suite and TypeScript checks to verify changes:
+
+```bash
+bun test
+bunx tsc --noEmit
+```
+
 ### Key Improvements
 
 - **Constants Extraction**: All magic numbers and strings are now constants

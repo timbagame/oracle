@@ -5,6 +5,7 @@ let handleHealth: () => Promise<Response>;
 let handleGenerateHash: () => Promise<Response>;
 let handleStats: () => Promise<Response>;
 let OracleDatabase: typeof import("./database.ts").OracleDatabase;
+let OracleService: typeof import("./oracle-service.ts").OracleService;
 
 beforeAll(async () => {
   process.env["NODE_ENV"] = "test";
@@ -13,6 +14,7 @@ beforeAll(async () => {
 
   ({ handleHealth, handleGenerateHash, handleStats } = await import("./index.ts"));
   ({ OracleDatabase } = await import("./database.ts"));
+  ({ OracleService } = await import("./oracle-service.ts"));
 });
 
 afterAll(() => {
@@ -52,6 +54,19 @@ describe("API handlers", () => {
     const data = (await res.json()) as { success: boolean; stats: unknown };
     expect(data.success).toBe(true);
     expect(data.stats).toBeDefined();
+  });
+
+  it("handles generate hash errors", async () => {
+    const service = OracleService.getInstance();
+    const original = service.generateGameSecrets;
+    (service as any).generateGameSecrets = () => {
+      throw new Error("boom");
+    };
+    const res = await handleGenerateHash();
+    expect(res.status).toBe(500);
+    const data = (await res.json()) as { success: boolean };
+    expect(data.success).toBe(false);
+    (service as any).generateGameSecrets = original;
   });
 });
 
