@@ -81,5 +81,67 @@ describe("OracleService", () => {
     (service as any).updateScanStats(stats, { success: false });
     expect(stats).toEqual({ completed: 1, errors: 1, notReady: 1 });
   });
+
+  it("returns zero stats when no games are pending", async () => {
+    const service = OracleService.getInstance();
+    service.cleanupOldRecords(-1);
+
+    const stats = await service.scanAndCompleteActiveGames();
+    expect(stats).toEqual({ completed: 0, errors: 0, notReady: 0 });
+  });
+
+  it("scans pending games and records outcomes", async () => {
+    const service = OracleService.getInstance();
+    service.cleanupOldRecords(-1);
+    const db = OracleDatabase.getInstance();
+
+    // success case
+    db.saveSecretKey("gameSuccess", "secret", "hash");
+    db.trackGame("gameSuccess");
+
+    // not ready case
+    db.saveSecretKey("gamePending", "secret", "hash");
+    db.trackGame("gamePending");
+
+    // game removed from chain
+    db.saveSecretKey("gameGone", "secret", "hash");
+    db.trackGame("gameGone");
+
+    // error during completion
+    db.saveSecretKey("gameError", "secret", "hash");
+    db.trackGame("gameError");
+
+    const originalExists = (service as any).gameExistsOnChain;
+    const originalComplete = (service as any).completeGame;
+
+    (service as any).gameExistsOnChain = async (addr: string) => {
+      if (addr === "gameGone") return false;
+      return true;
+    };
+
+    (service as any).completeGame = async (addr: string) => {
+      if (addr === "gameSuccess") {
+        db.markGameCompleted(addr);
+        return { success: true };
+      }
+      if (addr === "gamePending") {
+        return { success: false, notReady: true };
+      }
+      if (addr === "gameError") {
+        throw new Error("boom");
+      }
+      throw new Error("unexpected game");
+    };
+
+    const stats = await service.scanAndCompleteActiveGames();
+    expect(stats).toEqual({ completed: 1, errors: 1, notReady: 1 });
+
+    // gameGone should be marked completed due to missing on-chain account
+    const pending = db.getPendingGames().map((g) => g.game_address);
+    expect(pending).not.toContain("gameGone");
+
+    (service as any).gameExistsOnChain = originalExists;
+    (service as any).completeGame = originalComplete;
+  });
 });
 
