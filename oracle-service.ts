@@ -326,51 +326,37 @@ export class OracleService {
     return txHash;
   }
 
-  private calculateWinnerIndex(secretKeyBuffer: Buffer, lastSlot: number, nPlayers: number): number {
-    if (nPlayers <= 1) {
-      return 0;
-    }
+  private calculateWinnerIndex(
+    secretKeyBuffer: Buffer,
+    lastSlot: number,
+    nPlayers: number
+  ): number {
+    if (nPlayers <= 1) return 0;
 
-    // Hash combination of secret key and last_slot for additional entropy (matching contract logic)
-    const combinedData = Buffer.alloc(40); // 32 bytes secret + 8 bytes last_slot
-    secretKeyBuffer.copy(combinedData, 0, 0, 32);
-
-  // Convert number to little-endian bytes (matching contract's to_le_bytes())
     const lastSlotBytes = Buffer.alloc(8);
-  const lastSlotNum = Number(lastSlot);
-    lastSlotBytes.writeUInt32LE(lastSlotNum & 0xffffffff, 0);
-    lastSlotBytes.writeUInt32LE(Math.floor(lastSlotNum / 0x100000000), 4);
-    lastSlotBytes.copy(combinedData, 32);
+    lastSlotBytes.writeBigUInt64LE(BigInt(lastSlot));
 
-    // Hash the combined data (matching contract's hash() function)
-    const entropyHash = createHash('sha256').update(combinedData).digest();
+    const combinedData = Buffer.concat([
+      secretKeyBuffer.subarray(0, 32),
+      lastSlotBytes,
+    ]);
 
-    const maxU64 = BigInt('0xFFFFFFFFFFFFFFFF');
+    const entropyHash = createHash("sha256").update(combinedData).digest();
+
+    const maxU64 = 0xffff_ffff_ffff_ffffn;
     const nPlayersBig = BigInt(nPlayers);
     const maxValid = maxU64 - (maxU64 % nPlayersBig);
 
-    // Try sliding 8-byte windows through the hashed entropy
-    for (let startPos = 0; startPos <= (32 - 8); startPos++) {
-      // Extract 8 bytes and convert to u64 using little-endian (matching contract)
-      const window = entropyHash.subarray(startPos, startPos + 8);
-
-      // Convert to BigInt using little-endian format
-      let randomU64 = BigInt(0);
-      for (let i = 0; i < 8; i++) {
-        const byte = window[i];
-        if (byte === undefined) {
-          throw new Error("Invalid entropy hash buffer size");
-        }
-        randomU64 |= BigInt(byte) << (BigInt(i) * BigInt(8));
-      }
-
-      // Use this value if it's in the unbiased range
+    for (let startPos = 0; startPos <= entropyHash.length - 8; startPos++) {
+      const randomU64 = entropyHash.readBigUInt64LE(startPos);
       if (randomU64 < maxValid) {
         return Number(randomU64 % nPlayersBig);
       }
     }
 
-    throw new Error("Unable to generate unbiased random number - game must be cancelled");
+    throw new Error(
+      "Unable to generate unbiased random number - game must be cancelled"
+    );
   }
 
   private async getBlockchainTime(): Promise<number> {
