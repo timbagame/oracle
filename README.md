@@ -249,10 +249,11 @@ This prevents normal "not ready" states from being reported as errors in logs an
 
 ### Testing
 
-Run the test suite and TypeScript checks to verify changes:
+Run the test suite, optionally with coverage, and TypeScript checks to verify changes:
 
 ```bash
 bun test
+bun test --coverage  # view coverage
 bunx tsc --noEmit
 ```
 
