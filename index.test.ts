@@ -93,5 +93,39 @@ describe("OracleDatabase", () => {
     expect(cleanup.deletedSecrets).toBeGreaterThanOrEqual(1);
     expect(cleanup.deletedGames).toBeGreaterThanOrEqual(1);
   });
+
+  it("retrieves game type and tracks completion attempts", () => {
+    const db = OracleDatabase.getInstance();
+    db.trackGame("game6", "giveaway");
+    expect(db.getGameType("game6")).toBe("giveaway");
+
+    db.incrementCompletionAttempts("game6");
+    db.incrementCompletionAttempts("game6");
+
+    const pending = db
+      .getPendingGames()
+      .find((g) => g.game_address === "game6");
+    expect(pending?.completion_attempts).toBe(2);
+  });
+
+  it("manages game players list", () => {
+    const db = OracleDatabase.getInstance();
+    db.addPlayerToGame("game7", "player1");
+    db.addPlayerToGame("game7", "player2");
+    expect(db.getGamePlayers("game7")).toEqual(["player1", "player2"]);
+
+    db.removePlayerFromGame("game7", "player1");
+    expect(db.getGamePlayers("game7")).toEqual(["player2"]);
+
+    db.clearStalePlayersForGame("game7");
+    expect(db.getGamePlayers("game7")).toEqual([]);
+  });
+
+  it("reports database connection info", () => {
+    const db = OracleDatabase.getInstance();
+    const info = db.getConnectionInfo();
+    expect(info.file).toBe(process.env["DATABASE_FILE"]!);
+    expect(info.isOpen).toBe(true);
+  });
 });
 
