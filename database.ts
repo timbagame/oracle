@@ -1,9 +1,12 @@
 import { Database } from "bun:sqlite";
 
 // Constants
-const DATABASE_FILE = process.env["DATABASE_FILE"] || "oracle.sqlite";
 const DEFAULT_STATUS = "pending";
 const PENDING_SCAN_LIMIT = 50;
+
+function getDatabaseFile(): string {
+  return process.env["DATABASE_FILE"] || "oracle.sqlite";
+}
 
 // Types
 interface SecretKeyData {
@@ -32,7 +35,7 @@ export class OracleDatabase {
   private db: Database;
 
   private constructor() {
-    this.db = new Database(DATABASE_FILE, { create: true });
+    this.db = new Database(getDatabaseFile(), { create: true });
     this.initializeDatabase();
   }
 
@@ -318,7 +321,7 @@ export class OracleDatabase {
 
   public getConnectionInfo(): { file: string; isOpen: boolean } {
     return {
-      file: DATABASE_FILE,
+      file: getDatabaseFile(),
       isOpen: this.db !== null,
     };
   }
