@@ -1,4 +1,3 @@
-import { PublicKey, Connection, Keypair } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
 import { randomBytes, createHash } from 'crypto';
 import { OracleDatabase } from "./database.ts";
@@ -52,8 +51,8 @@ interface CompletionStats {
 export class OracleService {
   private static instance: OracleService;
   private program: anchor.Program<Coinflip>;
-  private connection: Connection;
-  private adminKeypair: Keypair;
+  private connection: anchor.web3.Connection;
+  private adminKeypair: anchor.web3.Keypair;
   private db: OracleDatabase;
   private eventListeners: number[] = [];
   private isListening: boolean = false;
@@ -72,19 +71,19 @@ export class OracleService {
     return OracleService.instance;
   }
 
-  private initializeConnection(): Connection {
+  private initializeConnection(): anchor.web3.Connection {
     const networkUrl = process.env["SOLANA_NETWORK"];
     if (!networkUrl) {
       throw new Error("SOLANA_NETWORK environment variable is required");
     }
-    return new Connection(networkUrl, "confirmed");
+    return new anchor.web3.Connection(networkUrl, "confirmed");
   }
 
-  private loadAdminKeypair(): Keypair {
+  private loadAdminKeypair(): anchor.web3.Keypair {
     try {
       const keypairPath = path.join(process.cwd(), KEYPAIR_FILE);
       const keypairData = JSON.parse(fs.readFileSync(keypairPath, "utf-8"));
-      const keypair = Keypair.fromSecretKey(new Uint8Array(keypairData));
+      const keypair = anchor.web3.Keypair.fromSecretKey(new Uint8Array(keypairData));
       console.log(`✅ Loaded admin keypair: ${keypair.publicKey.toBase58()}`);
       return keypair;
     } catch (error) {
@@ -93,9 +92,9 @@ export class OracleService {
   }
 
   private initializeProgram(): anchor.Program<Coinflip> {
-    const adminWallet = new anchor.Wallet(this.adminKeypair as anchor.web3.Keypair);
+    const adminWallet = new anchor.Wallet(this.adminKeypair);
     const provider = new anchor.AnchorProvider(
-      this.connection as anchor.web3.Connection,
+      this.connection,
       adminWallet,
       { commitment: "confirmed" }
     );
@@ -204,7 +203,7 @@ export class OracleService {
     };
   }
 
-  private async tryAutoComplete(gamePda: PublicKey, gameAddress: string, trigger: string): Promise<void> {
+  private async tryAutoComplete(gamePda: anchor.web3.PublicKey, gameAddress: string, trigger: string): Promise<void> {
     if (await this.isGameReadyForCompletion(gamePda)) {
       console.log(`🎯 Auto-completing game ${gameAddress} after ${trigger}`);
       const result = await this.completeGame(gameAddress);
@@ -233,7 +232,7 @@ export class OracleService {
     return secrets;
   }
 
-  public async isGameReadyForCompletion(gamePda: PublicKey): Promise<boolean> {
+  public async isGameReadyForCompletion(gamePda: anchor.web3.PublicKey): Promise<boolean> {
     try {
       const gameAccount = await this.program.account.game.fetch(gamePda);
       const blockTime = await this.getBlockchainTime();
@@ -285,7 +284,7 @@ export class OracleService {
         return { success: false, error: "Unable to determine winner" };
       }
 
-      const winnerAddress = new PublicKey(winnerPlayerAddress);
+      const winnerAddress = new anchor.web3.PublicKey(winnerPlayerAddress);
 
       const txHash = await this.executeGameCompletion({
         gamePda,
@@ -307,9 +306,9 @@ export class OracleService {
   }
 
   private async executeGameCompletion(args: {
-    gamePda: PublicKey;
+    gamePda: anchor.web3.PublicKey;
     gameAccount: any;
-    winnerAddress: PublicKey;
+    winnerAddress: anchor.web3.PublicKey;
     randomHashBuffer: Buffer;
     secretKeyBuffer: Buffer;
     winnerIndex: number;
@@ -318,7 +317,7 @@ export class OracleService {
 
   const txHash = await this.program.methods
       .completeGame([...randomHashBuffer], [...secretKeyBuffer], winnerIndex)
-  .accounts({ oracleOperator: this.adminKeypair.publicKey, winner: winnerAddress, creator: gameAccount.creator as PublicKey })
+  .accounts({ oracleOperator: this.adminKeypair.publicKey, winner: winnerAddress, creator: gameAccount.creator as anchor.web3.PublicKey })
       .signers([this.adminKeypair])
       .rpc();
 
@@ -476,15 +475,15 @@ export class OracleService {
     }
   }
 
-  private getGamePDA(randomHash: Buffer): PublicKey {
-    const [pda] = PublicKey.findProgramAddressSync(
+  private getGamePDA(randomHash: Buffer): anchor.web3.PublicKey {
+    const [pda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("game", 'utf8'), randomHash],
       this.program.programId
     );
     return pda;
   }
 
-  private getGamePDAFromAddress(gameAddress: string): PublicKey {
+  private getGamePDAFromAddress(gameAddress: string): anchor.web3.PublicKey {
     // Since we can predict PDAs now, we can reverse engineer from the stored secret
     const secretData = this.db.getSecretKey(gameAddress);
     if (!secretData) {
