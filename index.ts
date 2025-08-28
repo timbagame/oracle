@@ -106,7 +106,6 @@ const API_DOCUMENTATION = `
  */
 
 const PORT = Number(process.env["ORACLE_PORT"]) || DEFAULT_PORT;
-const oracle = OracleService.getInstance();
 
 let server: Server | undefined;
 
@@ -123,49 +122,63 @@ function createErrorResponse(error: string, status: number = 500): Response {
   return createResponse({ success: false, error }, status);
 }
 
-// Route handlers
-export async function handleHealth(): Promise<Response> {
-  return createResponse({
-    status: "healthy",
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    service: "oracle-api",
-  });
-}
+// Handlers factory for clean DI and testing
+export type OracleApi = Pick<
+  OracleService,
+  | "generateGameSecrets"
+  | "getStats"
+  | "scanAndCompleteActiveGames"
+  | "startEventListening"
+  | "stopEventListening"
+  | "cleanupOldRecords"
+>;
 
-export async function handleGenerateHash(): Promise<Response> {
-  try {
-    const secrets = oracle.generateGameSecrets();
-    const response = {
-      success: true,
-      randomHash: secrets.randomHash,
-      gameAddress: secrets.gameAddress,
-    };
-
-    return createResponse(response);
-  } catch (error: any) {
-    console.error("❌ Error generating hash:", error);
-    return createErrorResponse("Failed to generate hash", 500);
-  }
-}
-
-export async function handleStats(): Promise<Response> {
-  const stats = oracle.getStats();
-  return createResponse({
-    success: true,
-    timestamp: new Date().toISOString(),
-    stats,
-    service: {
-      name: "oracle-api",
-      version: "1.0.0",
-      uptime: process.uptime(),
-      environment: process.env.NODE_ENV || "development",
+export function buildHandlers(oracle: OracleApi) {
+  return {
+    async handleHealth(): Promise<Response> {
+      return createResponse({
+        status: "healthy",
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        service: "oracle-api",
+      });
     },
-  });
+
+    async handleGenerateHash(): Promise<Response> {
+      try {
+        const secrets = oracle.generateGameSecrets();
+        return createResponse({
+          success: true,
+          randomHash: secrets.randomHash,
+          gameAddress: secrets.gameAddress,
+        });
+      } catch (error: any) {
+        console.error("❌ Error generating hash:", error);
+        return createErrorResponse("Failed to generate hash", 500);
+      }
+    },
+
+    async handleStats(): Promise<Response> {
+      const stats = oracle.getStats();
+      return createResponse({
+        success: true,
+        timestamp: new Date().toISOString(),
+        stats,
+        service: {
+          name: "oracle-api",
+          version: "1.0.0",
+          uptime: process.uptime(),
+          environment: process.env.NODE_ENV || "development",
+        },
+      });
+    },
+  };
 }
 
 // Main server
 if (process.env.NODE_ENV !== "test") {
+  const realOracle = OracleService.getInstance();
+  const { handleHealth, handleGenerateHash, handleStats } = buildHandlers(realOracle);
   server = Bun.serve({
     port: PORT,
     async fetch(request: Request): Promise<Response> {
@@ -202,15 +215,15 @@ if (process.env.NODE_ENV !== "test") {
 
   console.log(`🔮 Oracle API running on http://localhost:${PORT}`);
 
-  initialize();
+  initialize(realOracle);
 
   // Background scanning
   setInterval(async () => {
     try {
-      await oracle.scanAndCompleteActiveGames();
+      await realOracle.scanAndCompleteActiveGames();
 
       // Clean up old records periodically (every scan cycle)
-      const cleanupResult = oracle.cleanupOldRecords(48);
+      const cleanupResult = realOracle.cleanupOldRecords(48);
       if (cleanupResult.deletedSecrets > 0 || cleanupResult.deletedGames > 0) {
         console.log("🧹 Background cleanup completed");
       }
@@ -219,12 +232,12 @@ if (process.env.NODE_ENV !== "test") {
     }
   }, FALLBACK_SCAN_INTERVAL);
 
-  process.once("SIGINT", () => shutdown("SIGINT"));
-  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => shutdown(realOracle, "SIGINT"));
+  process.once("SIGTERM", () => shutdown(realOracle, "SIGTERM"));
 }
 
 // Initialize and start services
-async function initialize(): Promise<void> {
+async function initialize(oracle: OracleApi): Promise<void> {
   try {
     await oracle.startEventListening();
     console.log("✅ Oracle services initialized");
@@ -234,7 +247,7 @@ async function initialize(): Promise<void> {
 }
 
 // Graceful shutdown
-async function shutdown(signal: string): Promise<void> {
+async function shutdown(oracle: OracleApi, signal: string): Promise<void> {
   console.log(`\n🛑 Shutting down (${signal})...`);
   try {
     await oracle.stopEventListening();

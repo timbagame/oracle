@@ -1,9 +1,6 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
 import { unlinkSync } from "fs";
-
-let handleHealth: () => Promise<Response>;
-let handleGenerateHash: () => Promise<Response>;
-let handleStats: () => Promise<Response>;
+import { buildHandlers, type OracleApi } from "./index.ts";
 let OracleDatabase: typeof import("./database.ts").OracleDatabase;
 let OracleService: typeof import("./oracle-service.ts").OracleService;
 
@@ -12,7 +9,6 @@ beforeAll(async () => {
   process.env["SOLANA_NETWORK"] = "http://localhost";
   process.env["DATABASE_FILE"] = "test.sqlite";
 
-  ({ handleHealth, handleGenerateHash, handleStats } = await import("./index.ts"));
   ({ OracleDatabase } = await import("./database.ts"));
   ({ OracleService } = await import("./oracle-service.ts"));
 });
@@ -25,10 +21,13 @@ afterAll(() => {
   } catch {
     // ignore
   }
+  (OracleService as any).instance = undefined;
+  (OracleDatabase as any).instance = undefined;
 });
 
 describe("API handlers", () => {
   it("returns health status", async () => {
+    const { handleHealth } = buildHandlers(newFakeOracle());
     const res = await handleHealth();
     expect(res.status).toBe(200);
     const data = (await res.json()) as { status: string };
@@ -36,6 +35,7 @@ describe("API handlers", () => {
   });
 
   it("generates game secrets", async () => {
+    const { handleGenerateHash } = buildHandlers(newFakeOracle());
     const res = await handleGenerateHash();
     expect(res.status).toBe(200);
     const data = (await res.json()) as {
@@ -49,6 +49,7 @@ describe("API handlers", () => {
   });
 
   it("provides stats", async () => {
+    const { handleStats } = buildHandlers(newFakeOracle());
     const res = await handleStats();
     expect(res.status).toBe(200);
     const data = (await res.json()) as { success: boolean; stats: unknown };
@@ -57,18 +58,37 @@ describe("API handlers", () => {
   });
 
   it("handles generate hash errors", async () => {
-    const service = OracleService.getInstance();
-    const original = service.generateGameSecrets;
-    (service as any).generateGameSecrets = () => {
-      throw new Error("boom");
-    };
+    const { handleGenerateHash } = buildHandlers({
+      ...newFakeOracle(),
+      generateGameSecrets: () => {
+        throw new Error("boom");
+      },
+    });
     const res = await handleGenerateHash();
     expect(res.status).toBe(500);
     const data = (await res.json()) as { success: boolean };
     expect(data.success).toBe(false);
-    (service as any).generateGameSecrets = original;
   });
 });
+
+function newFakeOracle(): OracleApi {
+  return {
+    generateGameSecrets: () => ({ randomHash: "abcd", gameAddress: "game-1" }),
+    getStats: () => ({
+      totalSecrets: 0,
+      usedSecrets: 0,
+      pendingGames: 0,
+      completedGames: 0,
+      cancelledGames: 0,
+      eventListening: false,
+      activeListeners: 0,
+    }),
+    scanAndCompleteActiveGames: async () => ({ completed: 0, errors: 0, notReady: 0 }),
+    startEventListening: async () => {},
+    stopEventListening: async () => {},
+    cleanupOldRecords: () => ({ deletedSecrets: 0, deletedGames: 0 }),
+  } as any;
+}
 
 describe("OracleDatabase", () => {
   it("stores and retrieves secret keys", () => {
@@ -143,4 +163,3 @@ describe("OracleDatabase", () => {
     expect(info.isOpen).toBe(true);
   });
 });
-

@@ -1,5 +1,5 @@
 import { expect, test, beforeAll, afterAll } from "bun:test";
-import { handleHealth, handleStats } from "./index";
+import { buildHandlers } from "./index";
 import { unlinkSync } from "fs";
 import { OracleDatabase } from "./database";
 
@@ -21,20 +21,30 @@ afterAll(() => {
   }
   // @ts-ignore
   OracleDatabase["instance"] = undefined;
+  // Also reset OracleService singleton to avoid holding closed DB
+  try {
+    // dynamic import to avoid side effects at module load
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const svc = require("./oracle-service.ts");
+    svc.OracleService.instance = undefined;
+  } catch {}
 });
 
 test("GET / returns API HTML and unknown endpoints 404", async () => {
-  // Simulate the public fetch handler indirectly via exported handlers
-  const htmlRes = await (async () => {
-    // index.ts serves HTML for "/" path via createHtmlResponse; we mimic by ensuring the HTML contains title
-    // We cannot call Bun.serve's fetch directly in tests, so validate handlers we can call
-    const health = await handleHealth();
-    const stats = await handleStats();
-    expect(health.status).toBe(200);
-    expect(stats.status).toBe(200);
-    // As a smoke test for documentation, just ensure request object exists
-    return new Response("<!DOCTYPE html><title>Oracle API Documentation</title>");
-  })();
+  const { handleHealth, handleStats } = buildHandlers({
+    generateGameSecrets: () => ({ randomHash: "abcd", gameAddress: "addr" }),
+    getStats: () => ({ totalSecrets: 0, usedSecrets: 0, pendingGames: 0, completedGames: 0, cancelledGames: 0, eventListening: false, activeListeners: 0 }),
+    scanAndCompleteActiveGames: async () => ({ completed: 0, errors: 0, notReady: 0 }),
+    startEventListening: async () => {},
+    stopEventListening: async () => {},
+    cleanupOldRecords: () => ({ deletedSecrets: 0, deletedGames: 0 }),
+  } as any);
+
+  const htmlRes = new Response("<!DOCTYPE html><title>Oracle API Documentation</title>");
+  const health = await handleHealth();
+  const stats = await handleStats();
+  expect(health.status).toBe(200);
+  expect(stats.status).toBe(200);
 
   expect(htmlRes.headers.get("Content-Type")).toBeNull();
   const body = await htmlRes.text();

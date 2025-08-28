@@ -33,6 +33,7 @@ interface DatabaseStats {
 export class OracleDatabase {
   private static instance: OracleDatabase;
   private db: Database;
+  private closed: boolean = false;
 
   private constructor() {
     this.db = new Database(getDatabaseFile(), { create: true });
@@ -40,7 +41,7 @@ export class OracleDatabase {
   }
 
   public static getInstance(): OracleDatabase {
-    if (!OracleDatabase.instance) {
+    if (!OracleDatabase.instance || OracleDatabase.instance.closed) {
       OracleDatabase.instance = new OracleDatabase();
     }
     return OracleDatabase.instance;
@@ -314,6 +315,7 @@ export class OracleDatabase {
   public close(): void {
     try {
       this.db.close();
+      this.closed = true;
     } catch (error) {
       console.error("❌ Failed to close database:", error);
     }
