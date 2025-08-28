@@ -57,8 +57,8 @@ export class OracleService {
   private eventListeners: number[] = [];
   private isListening: boolean = false;
 
-  private constructor() {
-    this.db = OracleDatabase.getInstance();
+  private constructor(db?: OracleDatabase) {
+    this.db = db ?? OracleDatabase.getInstance();
     this.connection = this.initializeConnection();
     this.adminKeypair = this.loadAdminKeypair();
     this.program = this.initializeProgram();
@@ -69,6 +69,11 @@ export class OracleService {
       OracleService.instance = new OracleService();
     }
     return OracleService.instance;
+  }
+
+  // Factory for tests or custom wiring: does not affect the singleton
+  public static createWith(db: OracleDatabase): OracleService {
+    return new OracleService(db);
   }
 
   private initializeConnection(): anchor.web3.Connection {
