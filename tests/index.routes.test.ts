@@ -1,7 +1,7 @@
 import { expect, test, beforeAll, afterAll } from "bun:test";
-import { buildHandlers } from "./index";
+import { buildHandlers } from "../index";
 import { unlinkSync } from "fs";
-import { OracleDatabase } from "./database";
+import { OracleDatabase } from "../database";
 
 // Ensure an RPC URL is set for OracleService dependencies used by handlers
 beforeAll(() => {
@@ -25,7 +25,7 @@ afterAll(() => {
   try {
     // dynamic import to avoid side effects at module load
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const svc = require("./oracle-service.ts");
+    const svc = require("../oracle-service.ts");
     svc.OracleService.instance = undefined;
   } catch {}
 });

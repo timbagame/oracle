@@ -2,16 +2,16 @@ import { beforeAll, afterAll, describe, it, expect } from "bun:test";
 import { unlinkSync } from "fs";
 import { Keypair } from "@solana/web3.js";
 
-let OracleService: typeof import("./oracle-service.ts").OracleService;
-let OracleDatabase: typeof import("./database.ts").OracleDatabase;
+let OracleService: typeof import("../oracle-service.ts").OracleService;
+let OracleDatabase: typeof import("../database.ts").OracleDatabase;
 
 beforeAll(async () => {
   process.env["NODE_ENV"] = "test";
   process.env["SOLANA_NETWORK"] = "http://localhost";
   process.env["DATABASE_FILE"] = "oracle-service-test.sqlite";
 
-  ({ OracleService } = await import("./oracle-service.ts"));
-  ({ OracleDatabase } = await import("./database.ts"));
+  ({ OracleService } = await import("../oracle-service.ts"));
+  ({ OracleDatabase } = await import("../database.ts"));
   (OracleService as any).instance = undefined;
   (OracleDatabase as any).instance = undefined;
 });
@@ -153,4 +153,3 @@ describe("OracleService", () => {
     (service as any).completeGame = originalComplete;
   });
 });
-
