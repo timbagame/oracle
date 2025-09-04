@@ -22,7 +22,7 @@
 
 ## Testing Guidelines
 - Framework: Use Bun’s built-in runner.
-- Location: co-locate as `*.test.ts` beside source (e.g., `oracle-service.test.ts`) or under `tests/`.
+- Location: `tests/**/*.test.ts` (all tests consolidated under `tests/`).
 - Scope: unit tests for database and winner-index logic; lightweight API tests for `/health`, `/stats`, `/generate-hash`.
 - Run: `bun test`; aim to cover edge cases (empty players, max tickets, expiry logic). No coverage threshold enforced yet.
 
