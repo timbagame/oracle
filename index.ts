@@ -237,7 +237,7 @@ if (process.env.NODE_ENV !== "test") {
 }
 
 // Initialize and start services
-async function initialize(oracle: OracleApi): Promise<void> {
+export async function initialize(oracle: OracleApi): Promise<void> {
   try {
     await oracle.startEventListening();
     console.log("✅ Oracle services initialized");
@@ -247,7 +247,7 @@ async function initialize(oracle: OracleApi): Promise<void> {
 }
 
 // Graceful shutdown
-async function shutdown(oracle: OracleApi, signal: string): Promise<void> {
+export async function shutdown(oracle: OracleApi, signal: string): Promise<void> {
   console.log(`\n🛑 Shutting down (${signal})...`);
   try {
     await oracle.stopEventListening();
@@ -256,5 +256,8 @@ async function shutdown(oracle: OracleApi, signal: string): Promise<void> {
   } catch (error) {
     console.error("❌ Shutdown error:", error);
   }
-  process.exit(0);
+  // Avoid killing test process
+  if (process.env.NODE_ENV !== "test") {
+    process.exit(0);
+  }
 }
