@@ -85,14 +85,17 @@ export class OracleService {
   }
 
   private loadAdminKeypair(): anchor.web3.Keypair {
+    const configured = process.env["ORACLE_KEYPAIR_PATH"];
+    const filename = configured && configured.trim().length > 0 ? configured : KEYPAIR_FILE;
+    const keypairPath = path.isAbsolute(filename) ? filename : path.join(process.cwd(), filename);
     try {
-      const keypairPath = path.join(process.cwd(), KEYPAIR_FILE);
       const keypairData = JSON.parse(fs.readFileSync(keypairPath, "utf-8"));
       const keypair = anchor.web3.Keypair.fromSecretKey(new Uint8Array(keypairData));
       console.log(`✅ Loaded admin keypair: ${keypair.publicKey.toBase58()}`);
       return keypair;
-    } catch (error) {
-      throw new Error(`Failed to load admin keypair from ${KEYPAIR_FILE}`);
+    } catch (error: any) {
+      console.error(`❌ Failed to load admin keypair from ${keypairPath}:`, error?.message || error);
+      throw new Error(`Failed to load admin keypair from ${filename}`);
     }
   }
 
