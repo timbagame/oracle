@@ -175,42 +175,56 @@ export function buildHandlers(oracle: OracleApi) {
   };
 }
 
+// Build a reusable fetch router for easier testing
+export function buildFetchRouter({
+  handleHealth,
+  handleGenerateHash,
+  handleStats,
+}: ReturnType<typeof buildHandlers> & {
+  handleHealth: () => Promise<Response>;
+  handleGenerateHash: () => Promise<Response>;
+  handleStats: () => Promise<Response>;
+}) {
+  return async function fetchRouter(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const { pathname: path, method } = {
+      pathname: url.pathname,
+      method: request.method,
+    };
+
+    // CORS preflight
+    if (method === "OPTIONS") return createResponse(null, 200);
+
+    try {
+      switch (true) {
+        case path === "/health" && method === "GET":
+          return await handleHealth();
+        case path === "/generate-hash" && method === "POST":
+          return await handleGenerateHash();
+        case path === "/stats" && method === "GET":
+          return await handleStats();
+        // current-winner endpoint not implemented in current service version
+
+        case path === "/" && method === "GET":
+          return createHtmlResponse(API_DOCUMENTATION);
+        default:
+          return createErrorResponse("Endpoint not found", 404);
+      }
+    } catch (error: any) {
+      console.error("❌ Server error:", error);
+      return createErrorResponse("Internal server error", 500);
+    }
+  };
+}
+
 // Main server
 if (process.env.NODE_ENV !== "test") {
   const realOracle = OracleService.getInstance();
-  const { handleHealth, handleGenerateHash, handleStats } = buildHandlers(realOracle);
+  const handlers = buildHandlers(realOracle);
+  const fetchRouter = buildFetchRouter(handlers);
   server = Bun.serve({
     port: PORT,
-    async fetch(request: Request): Promise<Response> {
-      const url = new URL(request.url);
-      const { pathname: path, method } = {
-        pathname: url.pathname,
-        method: request.method,
-      };
-
-      // CORS preflight
-      if (method === "OPTIONS") return createResponse(null, 200);
-
-      try {
-        switch (true) {
-          case path === "/health" && method === "GET":
-            return await handleHealth();
-          case path === "/generate-hash" && method === "POST":
-            return await handleGenerateHash();
-          case path === "/stats" && method === "GET":
-            return await handleStats();
-          // current-winner endpoint not implemented in current service version
-
-          case path === "/" && method === "GET":
-            return createHtmlResponse(API_DOCUMENTATION);
-          default:
-            return createErrorResponse("Endpoint not found", 404);
-        }
-      } catch (error: any) {
-        console.error("❌ Server error:", error);
-        return createErrorResponse("Internal server error", 500);
-      }
-    },
+    fetch: fetchRouter,
   });
 
   console.log(`🔮 Oracle API running on http://localhost:${PORT}`);
