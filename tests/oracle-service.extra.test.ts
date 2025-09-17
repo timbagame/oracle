@@ -224,4 +224,172 @@ describe("OracleService internals", () => {
     const approx = await (service as any).getBlockchainTime();
     expect(Math.abs(approx - Math.floor(Date.now() / 1000))).toBeLessThanOrEqual(1);
   });
+
+  it("extractEventData returns base58 addresses", () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const gameKey = Keypair.generate().publicKey;
+    const playerKey = Keypair.generate().publicKey;
+
+    const extracted = (service as any).extractEventData({
+      gameKey,
+      player: playerKey,
+    });
+    expect(extracted.gameAddress).toBe(gameKey.toBase58());
+    expect(extracted.playerAddress).toBe(playerKey.toBase58());
+
+    const noPlayer = (service as any).extractEventData({ gameKey });
+    expect(noPlayer.playerAddress).toBe("");
+  });
+
+  it("tryAutoComplete triggers completion and logs failures", async () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const originalReady = (service as any).isGameReadyForCompletion;
+    const originalComplete = (service as any).completeGame;
+    const originalError = console.error;
+
+    (service as any).isGameReadyForCompletion = async () => true;
+
+    let invocation = 0;
+    const errors: string[] = [];
+    console.error = (...args: any[]) => {
+      errors.push(args.join(" "));
+    };
+
+    try {
+      (service as any).completeGame = async () => {
+        invocation++;
+        if (invocation === 1) {
+          return { success: false, error: "nope" };
+        }
+        if (invocation === 2) {
+          return { success: false, notReady: true };
+        }
+        return { success: true };
+      };
+
+      const gamePda = new PublicKey(Keypair.generate().publicKey.toBytes());
+      await (service as any).tryAutoComplete(gamePda, "auto-game", "joined");
+      await (service as any).tryAutoComplete(gamePda, "auto-game", "joined");
+      await (service as any).tryAutoComplete(gamePda, "auto-game", "joined");
+
+      expect(invocation).toBe(3);
+      expect(errors.some((entry) => entry.includes("Auto-completion failed"))).toBe(true);
+    } finally {
+      (service as any).isGameReadyForCompletion = originalReady;
+      (service as any).completeGame = originalComplete;
+      console.error = originalError;
+    }
+  });
+
+  it("completeGame increments attempts when execution fails", async () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const db = OracleDatabase.getInstance();
+    service.cleanupOldRecords(-1);
+
+    const gameAddr = "failing-game";
+    db.saveSecretKey(gameAddr, "a".repeat(64), "b".repeat(64));
+    db.trackGame(gameAddr);
+    db.addPlayerToGame(gameAddr, Keypair.generate().publicKey.toBase58());
+
+    const originalReady = (service as any).isGameReadyForCompletion;
+    const originalExecute = (service as any).executeGameCompletion;
+    const originalProgram = (service as any).program;
+    (service as any).isGameReadyForCompletion = async () => true;
+    (service as any).program = {
+      programId: Keypair.generate().publicKey,
+      account: { game: { fetch: async () => ({ ticketsCount: 1, maxTickets: 1, minTickets: 1, lastSlot: 1 }) } },
+    };
+    (service as any).executeGameCompletion = async () => {
+      throw new Error("rpc fail");
+    };
+
+    try {
+      const result = await service.completeGame(gameAddr);
+      expect(result.success).toBe(false);
+      expect(String(result.error || "")).toContain("rpc fail");
+      const pending = db.getPendingGames().find((g) => g.game_address === gameAddr);
+      expect(pending?.completion_attempts).toBe(1);
+    } finally {
+      (service as any).isGameReadyForCompletion = originalReady;
+      (service as any).executeGameCompletion = originalExecute;
+      (service as any).program = originalProgram;
+    }
+  });
+
+  it("executeGameCompletion invokes RPC and confirms transaction", async () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const originalProgram = (service as any).program;
+    const originalConfirm = (service as any).confirmTransaction;
+    const winner = Keypair.generate().publicKey;
+    const creator = Keypair.generate().publicKey;
+    const calls: { accounts?: any; signers?: any[]; confirmed?: string } = {};
+
+    (service as any).program = {
+      methods: {
+        completeGame: (_rand: number[], _secret: number[], winnerIndex: number) => {
+          expect(winnerIndex).toBe(5);
+          return {
+            accounts: (accs: any) => {
+              calls.accounts = accs;
+              return {
+                signers: (signers: any[]) => {
+                  calls.signers = signers;
+                  return {
+                    rpc: async () => "tx-abc",
+                  };
+                },
+              };
+            },
+          };
+        },
+      },
+    };
+
+    (service as any).confirmTransaction = async (sig: string) => {
+      calls.confirmed = sig;
+    };
+
+    const randomHashBuffer = Buffer.alloc(32, 1);
+    const secretKeyBuffer = Buffer.alloc(32, 2);
+
+    try {
+      const tx = await (service as any).executeGameCompletion({
+        gamePda: Keypair.generate().publicKey,
+        gameAccount: { creator },
+        winnerAddress: winner,
+        randomHashBuffer,
+        secretKeyBuffer,
+        winnerIndex: 5,
+      });
+
+      expect(tx).toBe("tx-abc");
+      expect(calls.accounts?.winner.toBase58()).toBe(winner.toBase58());
+      expect(calls.accounts?.creator.toBase58()).toBe(creator.toBase58());
+      expect(calls.signers).toEqual([(service as any).adminKeypair]);
+      expect(calls.confirmed).toBe("tx-abc");
+    } finally {
+      (service as any).program = originalProgram;
+      (service as any).confirmTransaction = originalConfirm;
+    }
+  });
+
+  it("confirmTransaction forwards latest blockhash params", async () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const originalConnection = (service as any).connection;
+    const calls: any[] = [];
+
+    (service as any).connection = {
+      getLatestBlockhash: async () => ({ blockhash: "bh", lastValidBlockHeight: 42 }),
+      confirmTransaction: async (params: any) => {
+        calls.push(params);
+      },
+    };
+
+    try {
+      await (service as any).confirmTransaction("sig-1");
+      expect(calls[0]).toEqual({ signature: "sig-1", blockhash: "bh", lastValidBlockHeight: 42 });
+    } finally {
+      (service as any).connection = originalConnection;
+    }
+  });
 });
