@@ -72,4 +72,30 @@ describe("index router", () => {
     const res = await badRouter(new Request("http://localhost:3001/generate-hash", { method: "POST" }));
     expect(res.status).toBe(500);
   });
+
+  test("router logs unexpected errors and returns generic 500", async () => {
+    const originalError = console.error;
+    const errors: any[] = [];
+    console.error = (...args: any[]) => {
+      errors.push(args.join(" "));
+    };
+
+    try {
+      const failingRouter = buildFetchRouter({
+        handleHealth: async () => {
+          throw new Error("explode");
+        },
+        handleGenerateHash: async () => new Response("ok"),
+        handleStats: async () => new Response("ok"),
+      });
+
+      const res = await failingRouter(new Request("http://localhost:3001/health", { method: "GET" }));
+      expect(res.status).toBe(500);
+      const json: any = await res.json();
+      expect(json.error).toBe("Internal server error");
+      expect(errors.some((entry) => entry.includes("Server error"))).toBe(true);
+    } finally {
+      console.error = originalError;
+    }
+  });
 });
