@@ -67,9 +67,14 @@ describe("OracleService internals", () => {
     const event = {
       gameKey: new PublicKey(Keypair.generate().publicKey.toBytes()),
       player: new PublicKey(Keypair.generate().publicKey.toBytes()),
+      ticketIndex: 0,
     };
     // override extractor to force deterministic addresses
-    (service as any).extractEventData = () => ({ gameAddress: gameAddr, playerAddress: player1 });
+    (service as any).extractEventData = () => ({
+      gameAddress: gameAddr,
+      playerAddress: player1,
+      ticketIndex: 0,
+    });
 
     await (service as any).handlePlayerEvent("joined", event);
     expect(db.getGamePlayers(gameAddr)).toEqual([player1]);
@@ -82,12 +87,12 @@ describe("OracleService internals", () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     const gameAddr = "game-status";
-    (service as any).extractEventData = () => ({ gameAddress: gameAddr, playerAddress: "" });
+    (service as any).extractEventData = () => ({ gameAddress: gameAddr, playerAddress: "", ticketIndex: 0 });
 
     (service as any).handleGameStatusChange("completed", { gameKey: Keypair.generate().publicKey });
     (service as any).handleGameStatusChange("closed", { gameKey: Keypair.generate().publicKey });
     // Not asserting DB state here beyond no-throw; mark closed clears players
-    db.addPlayerToGame(gameAddr, "p1");
+    db.addPlayerToGame(gameAddr, "p1", 0);
     (service as any).handleGameStatusChange("closed", { gameKey: Keypair.generate().publicKey });
     expect(db.getGamePlayers(gameAddr)).toEqual([]);
 
@@ -160,8 +165,8 @@ describe("OracleService internals", () => {
     const gameAddr = "ok-game";
     db.saveSecretKey(gameAddr, "a".repeat(64), "b".repeat(64));
     db.trackGame(gameAddr);
-    db.addPlayerToGame(gameAddr, Keypair.generate().publicKey.toBase58());
-    db.addPlayerToGame(gameAddr, Keypair.generate().publicKey.toBase58());
+    db.addPlayerToGame(gameAddr, Keypair.generate().publicKey.toBase58(), 0);
+    db.addPlayerToGame(gameAddr, Keypair.generate().publicKey.toBase58(), 1);
     (service as any).isGameReadyForCompletion = async () => true;
     (service as any).program = {
       programId: Keypair.generate().publicKey,
@@ -174,6 +179,31 @@ describe("OracleService internals", () => {
     expect(res.txHash).toBe("tx123");
     // secret should be marked used
     expect(db.getSecretKey(gameAddr)).toBeNull();
+  });
+
+  it("completeGame aborts when ticket registry is out of sync", async () => {
+    const service = OracleService.getInstance();
+    const db = OracleDatabase.getInstance();
+    service.cleanupOldRecords(-1);
+
+    const gameAddr = "mismatch-game";
+    db.saveSecretKey(gameAddr, "a".repeat(64), "c".repeat(64));
+    db.trackGame(gameAddr);
+    db.addPlayerToGame(gameAddr, Keypair.generate().publicKey.toBase58(), 0);
+
+    (service as any).isGameReadyForCompletion = async () => true;
+    (service as any).program = {
+      programId: Keypair.generate().publicKey,
+      account: {
+        game: {
+          fetch: async () => ({ ticketsCount: 2, maxTickets: 2, minTickets: 1, lastSlot: 456 }),
+        },
+      },
+    };
+
+    const res = await service.completeGame(gameAddr);
+    expect(res.success).toBe(false);
+    expect(String(res.error || "")).toContain("Ticket registry out of sync");
   });
 
   it("gameExistsOnChain reflects DB and chain state", async () => {
@@ -238,7 +268,7 @@ describe("OracleService internals", () => {
     expect(extracted.playerAddress).toBe(playerKey.toBase58());
 
     const noPlayer = (service as any).extractEventData({ gameKey });
-    expect(noPlayer.playerAddress).toBe("");
+    expect(noPlayer.playerAddress).toBeUndefined();
   });
 
   it("tryAutoComplete triggers completion and logs failures", async () => {
@@ -289,7 +319,7 @@ describe("OracleService internals", () => {
     const gameAddr = "failing-game";
     db.saveSecretKey(gameAddr, "a".repeat(64), "b".repeat(64));
     db.trackGame(gameAddr);
-    db.addPlayerToGame(gameAddr, Keypair.generate().publicKey.toBase58());
+    db.addPlayerToGame(gameAddr, Keypair.generate().publicKey.toBase58(), 0);
 
     const originalReady = (service as any).isGameReadyForCompletion;
     const originalExecute = (service as any).executeGameCompletion;

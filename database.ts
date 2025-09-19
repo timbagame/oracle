@@ -81,16 +81,38 @@ export class OracleDatabase {
       )
     `);
 
-    // Game players table
+    // Game players table (per-ticket entries)
     this.db.run(`
       CREATE TABLE IF NOT EXISTS game_players (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         game_address TEXT NOT NULL,
         player_address TEXT NOT NULL,
+        ticket_index INTEGER NOT NULL,
         joined_at INTEGER NOT NULL,
-        UNIQUE(game_address, player_address)
+        UNIQUE(game_address, ticket_index)
       )
     `);
+
+    this.ensureTicketSchema();
+  }
+
+  private ensureTicketSchema(): void {
+    const tableInfo = this.db
+      .query("PRAGMA table_info('game_players')")
+      .all() as Array<{ name: string }>;
+    const hasTicketIndex = tableInfo.some((column) => column.name === "ticket_index");
+
+    if (!hasTicketIndex) {
+      this.db.run("ALTER TABLE game_players ADD COLUMN ticket_index INTEGER");
+      this.db.run("DELETE FROM game_players");
+    }
+
+    this.db.run(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_game_players_ticket ON game_players (game_address, ticket_index)"
+    );
+    this.db.run(
+      "CREATE INDEX IF NOT EXISTS idx_game_players_game ON game_players (game_address)"
+    );
   }
 
   private executeDbOperation<T>(
@@ -279,22 +301,27 @@ export class OracleDatabase {
     try {
       const cutoffTime = Date.now() - hoursOld * 60 * 60 * 1000;
 
-      // Clean up old secret keys
+      // Clean up old secret keys that have already been used or whose game is finished.
       const secretsStmt = this.db.prepare(
-        "DELETE FROM secret_keys WHERE created_at < ?"
+        `DELETE FROM secret_keys
+         WHERE created_at < ?
+           AND (
+             used = TRUE OR
+             game_address IN (
+               SELECT game_address FROM game_tracking WHERE status != ?
+             )
+           )`
       );
-      const secretsResult = secretsStmt.run(cutoffTime);
+      const secretsResult = secretsStmt.run(cutoffTime, DEFAULT_STATUS);
 
       // Clean up old game tracking records (completed/cancelled games older than cutoff)
       const trackingStmt = this.db.prepare(
-        "DELETE FROM game_tracking WHERE (status != ? AND completed_at IS NOT NULL AND completed_at < ?) OR (status = ? AND last_checked < ?)"
+        `DELETE FROM game_tracking
+         WHERE status != ?
+           AND completed_at IS NOT NULL
+           AND completed_at < ?`
       );
-      const trackingResult = trackingStmt.run(
-        "pending",
-        cutoffTime,
-        "pending",
-        cutoffTime
-      );
+      const trackingResult = trackingStmt.run(DEFAULT_STATUS, cutoffTime);
 
       const deletedCounts = {
         deletedSecrets: secretsResult.changes,
@@ -328,24 +355,28 @@ export class OracleDatabase {
     };
   }
 
-  public addPlayerToGame(gameAddress: string, playerAddress: string): void {
+  public addPlayerToGame(
+    gameAddress: string,
+    playerAddress: string,
+    ticketIndex: number
+  ): void {
     this.executeDbOperation(() => {
       const stmt = this.db.prepare(
-        "INSERT OR IGNORE INTO game_players (game_address, player_address, joined_at) VALUES (?, ?, ?)"
+        "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)"
       );
-      stmt.run(gameAddress, playerAddress, Date.now());
+      stmt.run(gameAddress, playerAddress, ticketIndex, Date.now());
     }, "Failed to add player to game");
   }
 
   public removePlayerFromGame(
     gameAddress: string,
-    playerAddress: string
+    ticketIndex: number
   ): void {
     this.executeDbOperation(() => {
       const stmt = this.db.prepare(
-        "DELETE FROM game_players WHERE game_address = ? AND player_address = ?"
+        "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?"
       );
-      stmt.run(gameAddress, playerAddress);
+      stmt.run(gameAddress, ticketIndex);
     }, "Failed to remove player from game");
   }
 
@@ -363,7 +394,7 @@ export class OracleDatabase {
     return this.executeDbOperation(
       () => {
         const stmt = this.db.prepare(
-          "SELECT player_address FROM game_players WHERE game_address = ? ORDER BY joined_at ASC"
+          "SELECT player_address FROM game_players WHERE game_address = ? ORDER BY ticket_index ASC"
         );
         const results = stmt.all(gameAddress) as { player_address: string }[];
         return results.map((row) => row.player_address);

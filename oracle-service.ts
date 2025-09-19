@@ -149,16 +149,30 @@ export class OracleService {
   }
 
   private async handlePlayerEvent(action: 'joined' | 'unjoined', event: any): Promise<void> {
-    const { gameAddress, playerAddress } = this.extractEventData(event);
+    const { gameAddress, playerAddress, ticketIndex } = this.extractEventData(event);
 
     try {
+      if (!gameAddress) {
+        console.warn(`⚠️  Missing game address in ${action} event`);
+        return;
+      }
+
+      if (ticketIndex === undefined) {
+        console.warn(`⚠️  Missing ticket index in ${action} event for ${gameAddress}`);
+        return;
+      }
+
       // Handle player database operations
       switch (action) {
         case 'joined':
-          this.db.addPlayerToGame(gameAddress, playerAddress);
+          if (!playerAddress) {
+            console.warn(`⚠️  Missing player address in join event for ${gameAddress}`);
+            return;
+          }
+          this.db.addPlayerToGame(gameAddress, playerAddress, ticketIndex);
           break;
         case 'unjoined':
-          this.db.removePlayerFromGame(gameAddress, playerAddress);
+          this.db.removePlayerFromGame(gameAddress, ticketIndex);
           break;
 
       }
@@ -204,10 +218,39 @@ export class OracleService {
   }
 
 
-  private extractEventData(event: any): { gameAddress: string; playerAddress: string } {
+  private extractEventData(event: any): {
+    gameAddress: string;
+    playerAddress?: string;
+    ticketIndex?: number;
+  } {
+    const gameKey = event.gameKey;
+    const playerKey = event.player;
+
+    const resolvePubkey = (key: any): string | undefined => {
+      if (!key) return undefined;
+      if (typeof key === "string") return key;
+      if (key instanceof anchor.web3.PublicKey) return key.toBase58();
+      if (typeof key.toBase58 === "function") return key.toBase58();
+      if (typeof key.toString === "function") return key.toString();
+      return undefined;
+    };
+
+    const resolveIndex = (value: any): number | undefined => {
+      if (value === undefined || value === null) return undefined;
+      if (typeof value === "number") return value;
+      if (typeof value === "bigint") return Number(value);
+      if (typeof value.toNumber === "function") return value.toNumber();
+      if (typeof value.valueOf === "function") {
+        const raw = value.valueOf();
+        if (typeof raw === "number") return raw;
+      }
+      return undefined;
+    };
+
     return {
-      gameAddress: event.gameKey.toBase58(),
-      playerAddress: event.player?.toBase58() || ''
+      gameAddress: resolvePubkey(gameKey) ?? "",
+      playerAddress: resolvePubkey(playerKey),
+      ticketIndex: resolveIndex(event.ticketIndex ?? event.ticket_index),
     };
   }
 
@@ -275,18 +318,27 @@ export class OracleService {
 
       const gameAccount = await this.program.account.game.fetch(gamePda);
       const players = this.db.getGamePlayers(gameAddress);
+      const nEntries = Number(gameAccount.ticketsCount);
 
       if (players.length === 0) {
         return { success: false, error: "No players found for game" };
       }
 
-  // Contract uses tickets_count for winner selection across all modes
-  const nEntries = Number(gameAccount.ticketsCount);
+      if (players.length !== nEntries) {
+        console.error(
+          `❌ Ticket registry mismatch for ${gameAddress}: expected ${nEntries}, found ${players.length}`
+        );
+        return { success: false, error: "Ticket registry out of sync" };
+      }
 
       const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
       const randomHashBuffer = Buffer.from(secretData.randomHash, "hex");
-  const winnerIndex = this.calculateWinnerIndex(secretKeyBuffer, Number(gameAccount.lastSlot), nEntries);
-  const winnerPlayerAddress = players[winnerIndex] || players[winnerIndex % players.length];
+      const winnerIndex = this.calculateWinnerIndex(
+        secretKeyBuffer,
+        Number(gameAccount.lastSlot),
+        nEntries
+      );
+      const winnerPlayerAddress = players[winnerIndex];
 
       if (!winnerPlayerAddress) {
         return { success: false, error: "Unable to determine winner" };

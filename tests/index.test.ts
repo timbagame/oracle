@@ -145,12 +145,13 @@ describe("OracleDatabase", () => {
 
   it("manages game players list", () => {
     const db = OracleDatabase.getInstance();
-    db.addPlayerToGame("game7", "player1");
-    db.addPlayerToGame("game7", "player2");
-    expect(db.getGamePlayers("game7")).toEqual(["player1", "player2"]);
+    db.addPlayerToGame("game7", "player1", 0);
+    db.addPlayerToGame("game7", "player1", 1);
+    db.addPlayerToGame("game7", "player2", 2);
+    expect(db.getGamePlayers("game7")).toEqual(["player1", "player1", "player2"]);
 
-    db.removePlayerFromGame("game7", "player1");
-    expect(db.getGamePlayers("game7")).toEqual(["player2"]);
+    db.removePlayerFromGame("game7", 1);
+    expect(db.getGamePlayers("game7")).toEqual(["player1", "player2"]);
 
     db.clearStalePlayersForGame("game7");
     expect(db.getGamePlayers("game7")).toEqual([]);

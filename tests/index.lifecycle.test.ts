@@ -15,28 +15,42 @@ afterAll(() => {
 });
 
 describe("lifecycle helpers", () => {
-  it("initialize resolves and logs even on failure", async () => {
-    await initialize({
-      // success path
-      startEventListening: async () => {},
-      stopEventListening: async () => {},
-      scanAndCompleteActiveGames: async () => ({ completed: 0, errors: 0, notReady: 0 }),
-      generateGameSecrets: () => ({ randomHash: "", gameAddress: "" }),
-      getStats: () => ({ totalSecrets: 0, usedSecrets: 0, pendingGames: 0, completedGames: 0, cancelledGames: 0 }),
-      cleanupOldRecords: () => ({ deletedSecrets: 0, deletedGames: 0 }),
-    } as any);
+  it("initialize propagates listener failures", async () => {
+    await expect(
+      initialize({
+        startEventListening: async () => {},
+        stopEventListening: async () => {},
+        scanAndCompleteActiveGames: async () => ({ completed: 0, errors: 0, notReady: 0 }),
+        generateGameSecrets: () => ({ randomHash: "", gameAddress: "" }),
+        getStats: () => ({
+          totalSecrets: 0,
+          usedSecrets: 0,
+          pendingGames: 0,
+          completedGames: 0,
+          cancelledGames: 0,
+        }),
+        cleanupOldRecords: () => ({ deletedSecrets: 0, deletedGames: 0 }),
+      } as any)
+    ).resolves.toBeUndefined();
 
-    await initialize({
-      // failure path: should be caught internally
-      startEventListening: async () => {
-        throw new Error("boom");
-      },
-      stopEventListening: async () => {},
-      scanAndCompleteActiveGames: async () => ({ completed: 0, errors: 0, notReady: 0 }),
-      generateGameSecrets: () => ({ randomHash: "", gameAddress: "" }),
-      getStats: () => ({ totalSecrets: 0, usedSecrets: 0, pendingGames: 0, completedGames: 0, cancelledGames: 0 }),
-      cleanupOldRecords: () => ({ deletedSecrets: 0, deletedGames: 0 }),
-    } as any);
+    await expect(
+      initialize({
+        startEventListening: async () => {
+          throw new Error("boom");
+        },
+        stopEventListening: async () => {},
+        scanAndCompleteActiveGames: async () => ({ completed: 0, errors: 0, notReady: 0 }),
+        generateGameSecrets: () => ({ randomHash: "", gameAddress: "" }),
+        getStats: () => ({
+          totalSecrets: 0,
+          usedSecrets: 0,
+          pendingGames: 0,
+          completedGames: 0,
+          cancelledGames: 0,
+        }),
+        cleanupOldRecords: () => ({ deletedSecrets: 0, deletedGames: 0 }),
+      } as any)
+    ).rejects.toThrow("boom");
   });
 
   it("shutdown stops listeners and does not exit in tests", async () => {
@@ -54,4 +68,3 @@ describe("lifecycle helpers", () => {
     expect(stopped).toBe(true);
   });
 });
-

@@ -44,12 +44,15 @@ describe("OracleService", () => {
   it("cleans up records and reports stats", () => {
     const service = OracleService.getInstance();
     service.cleanupOldRecords(-1);
-    service.generateGameSecrets();
+    const { gameAddress } = service.generateGameSecrets();
+    const db = OracleDatabase.getInstance();
+    db.markSecretKeyUsed(gameAddress);
+    db.markGameCompleted(gameAddress);
     const cleanup = service.cleanupOldRecords(-1);
     expect(cleanup.deletedSecrets).toBeGreaterThan(0);
 
     const stats = service.getStats();
-    expect(stats.totalSecrets).toBe(0);
+    expect(stats.usedSecrets).toBe(0);
     expect(stats.eventListening).toBe(false);
     expect(stats.activeListeners).toBe(0);
   });
@@ -93,6 +96,11 @@ describe("OracleService", () => {
 
   it("returns zero stats when no games are pending", async () => {
     const service = OracleService.getInstance();
+    const db = OracleDatabase.getInstance();
+    for (const game of db.getPendingGames()) {
+      db.markGameCompleted(game.game_address);
+      db.markSecretKeyUsed(game.game_address);
+    }
     service.cleanupOldRecords(-1);
 
     const stats = await service.scanAndCompleteActiveGames();
@@ -101,8 +109,12 @@ describe("OracleService", () => {
 
   it("scans pending games and records outcomes", async () => {
     const service = OracleService.getInstance();
-    service.cleanupOldRecords(-1);
     const db = OracleDatabase.getInstance();
+    for (const game of db.getPendingGames()) {
+      db.markGameCompleted(game.game_address);
+      db.markSecretKeyUsed(game.game_address);
+    }
+    service.cleanupOldRecords(-1);
 
     // success case
     db.saveSecretKey("gameSuccess", "secret", "hash");
@@ -155,8 +167,12 @@ describe("OracleService", () => {
 
   it("skips games that exceed max completion attempts", async () => {
     const service = OracleService.getInstance();
-    service.cleanupOldRecords(-1);
     const db = OracleDatabase.getInstance();
+    for (const game of db.getPendingGames()) {
+      db.markGameCompleted(game.game_address);
+      db.markSecretKeyUsed(game.game_address);
+    }
+    service.cleanupOldRecords(-1);
 
     db.saveSecretKey("stubborn", "c".repeat(64), "d".repeat(64));
     db.trackGame("stubborn");

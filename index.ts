@@ -108,6 +108,7 @@ const API_DOCUMENTATION = `
 const PORT = Number(process.env["ORACLE_PORT"]) || DEFAULT_PORT;
 
 let server: Server | undefined;
+let backgroundTask: ReturnType<typeof setInterval> | undefined;
 
 // Response helpers
 function createResponse(data: any, status: number = 200): Response {
@@ -229,22 +230,43 @@ if (process.env.NODE_ENV !== "test") {
 
   console.log(`🔮 Oracle API running on http://localhost:${PORT}`);
 
-  initialize(realOracle);
+  const startBackgroundTasks = () => {
+    backgroundTask = setInterval(async () => {
+      try {
+        await realOracle.scanAndCompleteActiveGames();
 
-  // Background scanning
-  setInterval(async () => {
-    try {
-      await realOracle.scanAndCompleteActiveGames();
-
-      // Clean up old records periodically (every scan cycle)
-      const cleanupResult = realOracle.cleanupOldRecords(48);
-      if (cleanupResult.deletedSecrets > 0 || cleanupResult.deletedGames > 0) {
-        console.log("🧹 Background cleanup completed");
+        // Clean up old records periodically (every scan cycle)
+        const cleanupResult = realOracle.cleanupOldRecords(48);
+        if (cleanupResult.deletedSecrets > 0 || cleanupResult.deletedGames > 0) {
+          console.log("🧹 Background cleanup completed");
+        }
+      } catch (error) {
+        console.error("❌ Background scan error:", error);
       }
-    } catch (error) {
-      console.error("❌ Background scan error:", error);
-    }
-  }, FALLBACK_SCAN_INTERVAL);
+    }, FALLBACK_SCAN_INTERVAL);
+  };
+
+  initialize(realOracle)
+    .then(() => {
+      startBackgroundTasks();
+    })
+    .catch(async (error) => {
+      console.error("❌ Oracle initialization failed. Stopping server.");
+      try {
+        await realOracle.stopEventListening();
+      } catch (listenerError) {
+        console.error("⚠️  Failed to stop event listeners after startup error:", listenerError);
+      }
+      if (backgroundTask) {
+        clearInterval(backgroundTask);
+        backgroundTask = undefined;
+      }
+      server?.stop();
+
+      if (process.env.NODE_ENV !== "test") {
+        process.exit(1);
+      }
+    });
 
   process.once("SIGINT", () => shutdown(realOracle, "SIGINT"));
   process.once("SIGTERM", () => shutdown(realOracle, "SIGTERM"));
@@ -257,6 +279,7 @@ export async function initialize(oracle: OracleApi): Promise<void> {
     console.log("✅ Oracle services initialized");
   } catch (error) {
     console.error("❌ Failed to start event listeners:", error);
+    throw error;
   }
 }
 
@@ -265,6 +288,10 @@ export async function shutdown(oracle: OracleApi, signal: string): Promise<void>
   console.log(`\n🛑 Shutting down (${signal})...`);
   try {
     await oracle.stopEventListening();
+    if (backgroundTask) {
+      clearInterval(backgroundTask);
+      backgroundTask = undefined;
+    }
     server?.stop();
     console.log("✅ Shutdown complete");
   } catch (error) {
