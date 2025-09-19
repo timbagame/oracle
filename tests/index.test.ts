@@ -162,4 +162,15 @@ describe("OracleDatabase", () => {
     expect(info.file).toBe(process.env["DATABASE_FILE"]!);
     expect(info.isOpen).toBe(true);
   });
+
+  it("recreates the singleton after closing the database", () => {
+    const first = OracleDatabase.getInstance();
+    const file = process.env["DATABASE_FILE"]!;
+
+    first.close();
+
+    const reopened = OracleDatabase.getInstance();
+    expect(reopened).not.toBe(first);
+    expect(reopened.getConnectionInfo().file).toBe(file);
+  });
 });

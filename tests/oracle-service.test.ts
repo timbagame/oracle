@@ -152,4 +152,51 @@ describe("OracleService", () => {
     (service as any).gameExistsOnChain = originalExists;
     (service as any).completeGame = originalComplete;
   });
+
+  it("skips games that exceed max completion attempts", async () => {
+    const service = OracleService.getInstance();
+    service.cleanupOldRecords(-1);
+    const db = OracleDatabase.getInstance();
+
+    db.saveSecretKey("stubborn", "c".repeat(64), "d".repeat(64));
+    db.trackGame("stubborn");
+    for (let i = 0; i < 5; i++) {
+      db.incrementCompletionAttempts("stubborn");
+    }
+
+    db.saveSecretKey("active", "e".repeat(64), "f".repeat(64));
+    db.trackGame("active");
+
+    const originalExists = (service as any).gameExistsOnChain;
+    const originalComplete = (service as any).completeGame;
+    const originalDelay = (service as any).delay;
+
+    const processed: string[] = [];
+    let delayCalls = 0;
+
+    (service as any).gameExistsOnChain = async () => true;
+    (service as any).completeGame = async (addr: string) => {
+      processed.push(addr);
+      return { success: true };
+    };
+    (service as any).delay = async () => {
+      delayCalls++;
+    };
+
+    try {
+      const stats = await service.scanAndCompleteActiveGames();
+      expect(processed).toEqual(["active"]);
+      expect(stats).toEqual({ completed: 1, errors: 0, notReady: 0 });
+      expect(delayCalls).toBe(1);
+
+      const stubbornEntry = db
+        .getPendingGames()
+        .find((g) => g.game_address === "stubborn");
+      expect(stubbornEntry?.completion_attempts).toBeGreaterThanOrEqual(5);
+    } finally {
+      (service as any).gameExistsOnChain = originalExists;
+      (service as any).completeGame = originalComplete;
+      (service as any).delay = originalDelay;
+    }
+  });
 });
