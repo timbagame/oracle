@@ -237,7 +237,10 @@ if (process.env.NODE_ENV !== "test") {
 
         // Clean up old records periodically (every scan cycle)
         const cleanupResult = realOracle.cleanupOldRecords(48);
-        if (cleanupResult.deletedSecrets > 0 || cleanupResult.deletedGames > 0) {
+        if (
+          cleanupResult.deletedSecrets > 0 ||
+          cleanupResult.deletedGames > 0
+        ) {
           console.log("🧹 Background cleanup completed");
         }
       } catch (error) {
@@ -251,11 +254,14 @@ if (process.env.NODE_ENV !== "test") {
       startBackgroundTasks();
     })
     .catch(async (error) => {
-      console.error("❌ Oracle initialization failed. Stopping server.");
+      console.error("❌ Oracle initialization failed. Stopping server.", error);
       try {
         await realOracle.stopEventListening();
       } catch (listenerError) {
-        console.error("⚠️  Failed to stop event listeners after startup error:", listenerError);
+        console.error(
+          "⚠️  Failed to stop event listeners after startup error:",
+          listenerError
+        );
       }
       if (backgroundTask) {
         clearInterval(backgroundTask);
@@ -284,7 +290,10 @@ export async function initialize(oracle: OracleApi): Promise<void> {
 }
 
 // Graceful shutdown
-export async function shutdown(oracle: OracleApi, signal: string): Promise<void> {
+export async function shutdown(
+  oracle: OracleApi,
+  signal: string
+): Promise<void> {
   console.log(`\n🛑 Shutting down (${signal})...`);
   try {
     await oracle.stopEventListening();
