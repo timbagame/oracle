@@ -126,16 +126,20 @@ export class OracleService {
 
   private async setupEventListeners(): Promise<number[]> {
     const eventMap: Array<[keyof EventMap, EventHandler]> = [
-      ['playerJoined', this.handlePlayerEvent.bind(this, 'joined')],
-      ['playerUnjoined', this.handlePlayerEvent.bind(this, 'unjoined')],
-      ['gameInitialized', this.handleGameInitialized.bind(this)],
-      ['gameCompleted', this.handleGameStatusChange.bind(this, 'completed')],
-      ['gameClosed', this.handleGameStatusChange.bind(this, 'closed')]
+      ["playerJoined", this.handlePlayerEvent.bind(this, "joined")],
+      ["playerUnjoined", this.handlePlayerEvent.bind(this, "unjoined")],
+      ["gameInitialized", this.handleGameInitialized.bind(this)],
+      ["gameCompleted", this.handleGameStatusChange.bind(this, "completed")],
+      ["gameClosed", this.handleGameStatusChange.bind(this, "closed")],
     ];
 
-    return eventMap.map(([eventName, handler]) =>
-      this.program.addEventListener(eventName, handler)
+    const listenerIds = await Promise.all(
+      eventMap.map(([eventName, handler]) =>
+        Promise.resolve(this.program.addEventListener(eventName, handler))
+      )
     );
+
+    return listenerIds;
   }
 
   public async stopEventListening(): Promise<void> {
