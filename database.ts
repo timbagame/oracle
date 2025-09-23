@@ -351,7 +351,7 @@ export class OracleDatabase {
   public getConnectionInfo(): { file: string; isOpen: boolean } {
     return {
       file: getDatabaseFile(),
-      isOpen: this.db !== null,
+      isOpen: !this.closed,
     };
   }
 

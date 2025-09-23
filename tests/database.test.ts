@@ -131,6 +131,7 @@ describe("OracleDatabase", () => {
     expect(info.isOpen).toBe(true);
 
     db.close();
+    expect(db.getConnectionInfo().isOpen).toBe(false);
 
     const reopened = OracleDatabase.getInstance();
     expect(reopened.getConnectionInfo().isOpen).toBe(true);
