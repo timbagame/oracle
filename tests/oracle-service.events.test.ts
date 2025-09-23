@@ -34,6 +34,20 @@ describe("OracleService event handling", () => {
     expect(programStub.removeCalls).toEqual([1, 2, 3, 4, 5]);
   });
 
+  it("awaits asynchronous event listener registration", async () => {
+    const { db } = createDbStub();
+    const programStub = createProgramStub(true);
+    const service = createService(db, programStub);
+
+    await service.startEventListening();
+
+    const listeners = (service as any).eventListeners as Array<number>;
+    expect(listeners.every((id) => typeof id === "number")).toBe(true);
+
+    await service.stopEventListening();
+    expect(programStub.removeCalls).toEqual([1, 2, 3, 4, 5]);
+  });
+
   it("processes player join and unjoin events", async () => {
     const { db, callLog } = createDbStub();
     const programStub = createProgramStub();
@@ -312,7 +326,7 @@ type ProgramStub = {
   fetchCalls: PublicKey[];
   fetchImpl: (pda: PublicKey) => Promise<any>;
   listeners: Map<number, { event: string; handler: (event: any) => void }>;
-  addEventListener(event: string, handler: (event: any) => void): number;
+  addEventListener(event: string, handler: (event: any) => void): number | Promise<number>;
   removeEventListener(id: number): Promise<void>;
   account: {
     game: {
@@ -322,7 +336,7 @@ type ProgramStub = {
   programId: PublicKey;
 };
 
-function createProgramStub(): ProgramStub {
+function createProgramStub(asyncRegistration: boolean = false): ProgramStub {
   let nextId = 1;
   const listeners = new Map<number, { event: string; handler: (event: any) => void }>();
   const addCalls: Array<{ event: string; handler: (event: any) => void }> = [];
@@ -342,6 +356,11 @@ function createProgramStub(): ProgramStub {
       const id = nextId++;
       addCalls.push({ event, handler });
       listeners.set(id, { event, handler });
+      if (asyncRegistration) {
+        return new Promise<number>((resolve) => {
+          setTimeout(() => resolve(id), 0);
+        });
+      }
       return id;
     },
     removeEventListener(id) {
