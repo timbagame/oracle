@@ -311,6 +311,39 @@ describe("OracleService internals", () => {
     }
   });
 
+  it("completeGame increments attempts for validation failures", async () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const db = OracleDatabase.getInstance();
+    service.cleanupOldRecords(-1);
+
+    const gameAddr = "validation-failure-game";
+    db.saveSecretKey(gameAddr, "a".repeat(64), "b".repeat(64));
+    db.trackGame(gameAddr);
+
+    const originalReady = (service as any).isGameReadyForCompletion;
+    const originalProgram = (service as any).program;
+
+    (service as any).isGameReadyForCompletion = async () => true;
+    (service as any).program = {
+      programId: Keypair.generate().publicKey,
+      account: { game: { fetch: async () => ({ ticketsCount: 2, maxTickets: 2, minTickets: 1, lastSlot: 99 }) } },
+    };
+
+    try {
+      const result = await service.completeGame(gameAddr);
+      expect(result.success).toBe(false);
+      expect(String(result.error ?? "")).toContain("No players");
+      const pending = db.getPendingGames().find((g) => g.game_address === gameAddr);
+      expect(pending?.completion_attempts).toBe(1);
+    } finally {
+      (service as any).isGameReadyForCompletion = originalReady;
+      (service as any).program = originalProgram;
+      db.markGameCompleted(gameAddr);
+      db.markSecretKeyUsed(gameAddr);
+      service.cleanupOldRecords(-1);
+    }
+  });
+
   it("completeGame increments attempts when execution fails", async () => {
     const service = OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();

@@ -309,10 +309,15 @@ export class OracleService {
   }
 
   public async completeGame(gameAddress: string): Promise<GameCompletionResult> {
+    const recordFailure = (error: string): GameCompletionResult => {
+      this.db.incrementCompletionAttempts(gameAddress);
+      return { success: false, error };
+    };
+
     try {
       const secretData = this.db.getSecretKey(gameAddress);
       if (!secretData) {
-        return { success: false, error: "No secret key found" };
+        return recordFailure("No secret key found");
       }
 
       const gamePda = this.getGamePDAFromAddress(gameAddress);
@@ -325,14 +330,14 @@ export class OracleService {
       const nEntries = Number(gameAccount.ticketsCount);
 
       if (players.length === 0) {
-        return { success: false, error: "No players found for game" };
+        return recordFailure("No players found for game");
       }
 
       if (players.length !== nEntries) {
         console.error(
           `❌ Ticket registry mismatch for ${gameAddress}: expected ${nEntries}, found ${players.length}`
         );
-        return { success: false, error: "Ticket registry out of sync" };
+        return recordFailure("Ticket registry out of sync");
       }
 
       const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
@@ -345,7 +350,7 @@ export class OracleService {
       const winnerPlayerAddress = players[winnerIndex];
 
       if (!winnerPlayerAddress) {
-        return { success: false, error: "Unable to determine winner" };
+        return recordFailure("Unable to determine winner");
       }
 
       const winnerAddress = new anchor.web3.PublicKey(winnerPlayerAddress);
