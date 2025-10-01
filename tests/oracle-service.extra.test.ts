@@ -125,6 +125,61 @@ describe("OracleService internals", () => {
     expect(pending.includes(addr)).toBe(false);
   });
 
+  it("isGameReadyForCompletion reports readiness for full and expired lobbies", async () => {
+    const service = OracleService.getInstance();
+    const originalProgram = (service as any).program;
+    const originalConnection = (service as any).connection;
+
+    const now = Math.floor(Date.now() / 1000);
+    (service as any).connection = {
+      getSlot: async () => 123,
+      getBlockTime: async () => now,
+    };
+
+    try {
+      (service as any).program = {
+        account: {
+          game: {
+            fetch: async () => ({
+              ticketsCount: 4,
+              maxTickets: 4,
+              minTickets: 1,
+              timeout: 60,
+              createdAt: now - 30,
+            }),
+          },
+        },
+      };
+
+      const fullReady = await service.isGameReadyForCompletion(
+        new PublicKey(Keypair.generate().publicKey.toBytes()),
+      );
+      expect(fullReady).toBe(true);
+
+      (service as any).program = {
+        account: {
+          game: {
+            fetch: async () => ({
+              ticketsCount: 2,
+              maxTickets: 10,
+              minTickets: 2,
+              timeout: 60,
+              createdAt: now - 120,
+            }),
+          },
+        },
+      };
+
+      const expiredReady = await service.isGameReadyForCompletion(
+        new PublicKey(Keypair.generate().publicKey.toBytes()),
+      );
+      expect(expiredReady).toBe(true);
+    } finally {
+      (service as any).program = originalProgram;
+      (service as any).connection = originalConnection;
+    }
+  });
+
   it("completeGame error cases: missing secret, not ready, no players", async () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();
@@ -311,6 +366,33 @@ describe("OracleService internals", () => {
     }
   });
 
+  it("tryAutoComplete skips completion when readiness checks fail", async () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const originalReady = (service as any).isGameReadyForCompletion;
+    const originalComplete = (service as any).completeGame;
+
+    let completions = 0;
+    (service as any).isGameReadyForCompletion = async () => false;
+    (service as any).completeGame = async () => {
+      completions++;
+      return { success: true };
+    };
+
+    const gamePda = new PublicKey(Keypair.generate().publicKey.toBytes());
+
+    try {
+      await (service as any).tryAutoComplete(gamePda, "guarded-game", "joined");
+      expect(completions).toBe(0);
+
+      (service as any).isGameReadyForCompletion = async () => true;
+      await (service as any).tryAutoComplete(gamePda, "guarded-game", "joined");
+      expect(completions).toBe(1);
+    } finally {
+      (service as any).isGameReadyForCompletion = originalReady;
+      (service as any).completeGame = originalComplete;
+    }
+  });
+
   it("completeGame increments attempts for validation failures", async () => {
     const service = OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();
@@ -376,6 +458,43 @@ describe("OracleService internals", () => {
       (service as any).isGameReadyForCompletion = originalReady;
       (service as any).executeGameCompletion = originalExecute;
       (service as any).program = originalProgram;
+    }
+  });
+
+  it("scanAndCompleteActiveGames counts unexpected completion errors", async () => {
+    const service = OracleService.getInstance();
+    const db = OracleDatabase.getInstance();
+
+    for (const game of db.getPendingGames()) {
+      db.markGameCompleted(game.game_address);
+      db.markSecretKeyUsed(game.game_address);
+    }
+    service.cleanupOldRecords(-1);
+
+    const failingGame = "error-prone-game";
+    db.saveSecretKey(failingGame, "a".repeat(64), "b".repeat(64));
+    db.trackGame(failingGame);
+
+    const originalExists = (service as any).gameExistsOnChain;
+    const originalComplete = (service as any).completeGame;
+
+    let attempts = 0;
+    (service as any).gameExistsOnChain = async () => true;
+    (service as any).completeGame = async () => {
+      attempts++;
+      throw new Error("forced failure");
+    };
+
+    try {
+      const stats = await service.scanAndCompleteActiveGames();
+      expect(stats).toEqual({ completed: 0, errors: 1, notReady: 0 });
+      expect(attempts).toBe(1);
+    } finally {
+      (service as any).gameExistsOnChain = originalExists;
+      (service as any).completeGame = originalComplete;
+      db.markGameCompleted(failingGame);
+      db.markSecretKeyUsed(failingGame);
+      service.cleanupOldRecords(-1);
     }
   });
 

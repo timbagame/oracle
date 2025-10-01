@@ -136,4 +136,26 @@ describe("OracleDatabase", () => {
     const reopened = OracleDatabase.getInstance();
     expect(reopened.getConnectionInfo().isOpen).toBe(true);
   });
+
+  it("falls back to safe defaults when sqlite operations fail", () => {
+    const db = OracleDatabase.getInstance();
+    const originalHandle = (db as any).db;
+
+    (db as any).db = {
+      prepare: () => {
+        throw new Error("boom");
+      },
+      run: () => {
+        throw new Error("boom");
+      },
+    };
+
+    try {
+      expect(db.getSecretKey("missing" as string)).toBeNull();
+      expect(db.getPendingGames()).toEqual([]);
+      expect(db.cleanupOldRecords(-1)).toEqual({ deletedSecrets: 0, deletedGames: 0 });
+    } finally {
+      (db as any).db = originalHandle;
+    }
+  });
 });
