@@ -16,6 +16,6 @@
     "@types/bun": "^1.2.23"
   },
   "peerDependencies": {
-    "typescript": "^5.8.3"
+    "typescript": "^5.9.3"
   }
 }
