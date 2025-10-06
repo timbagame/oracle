@@ -504,9 +504,11 @@ describe("OracleService internals", () => {
     const originalConfirm = (service as any).confirmTransaction;
     const winner = Keypair.generate().publicKey;
     const creator = Keypair.generate().publicKey;
+    const programId = Keypair.generate().publicKey;
     const calls: { accounts?: any; signers?: any[]; confirmed?: string } = {};
 
     (service as any).program = {
+      programId,
       methods: {
         completeGame: (_rand: number[], _secret: number[], winnerIndex: number) => {
           expect(winnerIndex).toBe(5);
@@ -536,8 +538,7 @@ describe("OracleService internals", () => {
 
     try {
       const tx = await (service as any).executeGameCompletion({
-        gamePda: Keypair.generate().publicKey,
-        gameAccount: { creator },
+        gameAccount: { creator: creator.toBase58() },
         winnerAddress: winner,
         randomHashBuffer,
         secretKeyBuffer,
@@ -547,6 +548,12 @@ describe("OracleService internals", () => {
       expect(tx).toBe("tx-abc");
       expect(calls.accounts?.winner.toBase58()).toBe(winner.toBase58());
       expect(calls.accounts?.creator.toBase58()).toBe(creator.toBase58());
+      expect(calls.accounts?.oracleOperator.toBase58()).toBe((service as any).adminKeypair.publicKey.toBase58());
+      expect(Object.keys(calls.accounts || {})).toEqual([
+        "oracleOperator",
+        "winner",
+        "creator",
+      ]);
       expect(calls.signers).toEqual([(service as any).adminKeypair]);
       expect(calls.confirmed).toBe("tx-abc");
     } finally {
