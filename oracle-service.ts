@@ -1,7 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { randomBytes, createHash } from 'crypto';
 import { OracleDatabase } from "./database.ts";
-import type { Coinflip } from "./idl/idlType.ts";
+import type { Timba } from "./idl/idlType.ts";
 import idl from "./idl/idl.json" with { type: "json" };
 import * as fs from "fs";
 import * as path from "path";
@@ -50,7 +50,7 @@ interface CompletionStats {
 
 export class OracleService {
   private static instance: OracleService;
-  private program: anchor.Program<Coinflip>;
+  private program: anchor.Program<Timba>;
   private connection: anchor.web3.Connection;
   private adminKeypair: anchor.web3.Keypair;
   private db: OracleDatabase;
@@ -99,7 +99,7 @@ export class OracleService {
     }
   }
 
-  private initializeProgram(): anchor.Program<Coinflip> {
+  private initializeProgram(): anchor.Program<Timba> {
     const adminWallet = new anchor.Wallet(this.adminKeypair);
     const provider = new anchor.AnchorProvider(
       this.connection,
@@ -107,7 +107,7 @@ export class OracleService {
       { commitment: "confirmed" }
     );
     anchor.setProvider(provider);
-    return new anchor.Program(idl as Coinflip, provider) as anchor.Program<Coinflip>;
+    return new anchor.Program(idl as Timba, provider) as anchor.Program<Timba>;
   }
 
   public async startEventListening(): Promise<void> {
