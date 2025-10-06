@@ -2492,6 +2492,11 @@
       "msg": "Oracle buffer time not expired"
     },
     {
+      "code": 7109,
+      "name": "ParticipantStorageExceeded",
+      "msg": "Participant storage exhausted"
+    },
+    {
       "code": 7200,
       "name": "AlreadyJoined",
       "msg": "Player already joined"
@@ -2550,6 +2555,11 @@
       "code": 7304,
       "name": "InvalidConfiguration",
       "msg": "Invalid configuration"
+    },
+    {
+      "code": 7305,
+      "name": "OracleBufferTooSmall",
+      "msg": "Oracle buffer time too small"
     },
     {
       "code": 7400,

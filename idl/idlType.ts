@@ -2498,6 +2498,11 @@ export type Coinflip = {
       "msg": "Oracle buffer time not expired"
     },
     {
+      "code": 7109,
+      "name": "participantStorageExceeded",
+      "msg": "Participant storage exhausted"
+    },
+    {
       "code": 7200,
       "name": "alreadyJoined",
       "msg": "Player already joined"
@@ -2556,6 +2561,11 @@ export type Coinflip = {
       "code": 7304,
       "name": "invalidConfiguration",
       "msg": "Invalid configuration"
+    },
+    {
+      "code": 7305,
+      "name": "oracleBufferTooSmall",
+      "msg": "Oracle buffer time too small"
     },
     {
       "code": 7400,
