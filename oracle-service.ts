@@ -356,7 +356,6 @@ export class OracleService {
       const winnerAddress = new anchor.web3.PublicKey(winnerPlayerAddress);
 
       const txHash = await this.executeGameCompletion({
-        gamePda,
         gameAccount,
         winnerAddress,
         randomHashBuffer,
@@ -375,18 +374,23 @@ export class OracleService {
   }
 
   private async executeGameCompletion(args: {
-    gamePda: anchor.web3.PublicKey;
     gameAccount: any;
     winnerAddress: anchor.web3.PublicKey;
     randomHashBuffer: Buffer;
     secretKeyBuffer: Buffer;
     winnerIndex: number;
   }): Promise<string> {
-  const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
+    const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
 
-  const txHash = await this.program.methods
+    const creatorPublicKey = new anchor.web3.PublicKey(gameAccount.creator);
+
+    const txHash = await this.program.methods
       .completeGame([...randomHashBuffer], [...secretKeyBuffer], winnerIndex)
-  .accounts({ oracleOperator: this.adminKeypair.publicKey, winner: winnerAddress, creator: gameAccount.creator as anchor.web3.PublicKey })
+      .accounts({
+        oracleOperator: this.adminKeypair.publicKey,
+        winner: winnerAddress,
+        creator: creatorPublicKey,
+      })
       .signers([this.adminKeypair])
       .rpc();
 
