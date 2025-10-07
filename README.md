@@ -50,7 +50,7 @@ The Oracle service uses a hybrid approach with performance optimizations:
 
 - [Bun](https://bun.sh/) runtime
 - Solana admin keypair file
-- Access to Solana network (devnet/mainnet)
+- Access to a Solana RPC endpoint (mainnet-beta for production)
 
 ### Installation
 
@@ -87,7 +87,7 @@ Configure via environment variables in `.env`:
 
 ```bash
 # Required: Solana network endpoint
-SOLANA_NETWORK=https://api.devnet.solana.com
+SOLANA_NETWORK=https://api.mainnet-beta.solana.com
 
 # Optional: API server port (default: 3001)
 ORACLE_PORT=3001
