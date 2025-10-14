@@ -1,5 +1,4 @@
 import { OracleService } from "./oracle-service.ts";
-import type { Server } from "bun";
 
 // Constants
 const DEFAULT_PORT = 3001;
@@ -107,7 +106,7 @@ const API_DOCUMENTATION = `
 
 const PORT = Number(process.env["ORACLE_PORT"]) || DEFAULT_PORT;
 
-let server: Server | undefined;
+let server: ReturnType<typeof Bun.serve> | undefined;
 let backgroundTask: ReturnType<typeof setInterval> | undefined;
 
 // Response helpers
