@@ -1,5 +1,15 @@
-import { describe, test, expect } from "bun:test";
-import { buildFetchRouter, buildHandlers, type OracleApi } from "../index.ts";
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import type { OracleApi } from "../index.ts";
+import { createTempDatabaseFile, type TempDatabaseFile } from "./helpers/test-db.ts";
+
+type BuildHandlers = typeof import("../index.ts").buildHandlers;
+type BuildFetchRouter = typeof import("../index.ts").buildFetchRouter;
+
+let buildHandlers: BuildHandlers;
+let buildFetchRouter: BuildFetchRouter;
+let handlers: ReturnType<BuildHandlers>;
+let router: ReturnType<BuildFetchRouter>;
+let tempDb: TempDatabaseFile;
 
 function newFakeOracle(): OracleApi {
   return {
@@ -18,9 +28,20 @@ function newFakeOracle(): OracleApi {
 }
 
 describe("index router", () => {
-  const oracle = newFakeOracle();
-  const handlers = buildHandlers(oracle);
-  const router = buildFetchRouter(handlers);
+  beforeAll(async () => {
+    process.env["NODE_ENV"] = "test";
+    tempDb = createTempDatabaseFile("index-router");
+    process.env["DATABASE_FILE"] = tempDb.path;
+
+    ({ buildHandlers, buildFetchRouter } = await import("../index.ts"));
+    handlers = buildHandlers(newFakeOracle());
+    router = buildFetchRouter(handlers);
+  });
+
+  afterAll(() => {
+    tempDb.cleanup();
+    delete process.env["DATABASE_FILE"];
+  });
 
   test("OPTIONS preflight returns CORS headers", async () => {
     const res = await router(new Request("http://localhost:3001/health", { method: "OPTIONS" }));
@@ -65,7 +86,7 @@ describe("index router", () => {
 
   test("router catches handler errors and returns 500", async () => {
     const badHandlers = buildHandlers({
-      ...oracle,
+      ...newFakeOracle(),
       generateGameSecrets: () => { throw new Error("boom"); },
     } as any);
     const badRouter = buildFetchRouter(badHandlers);

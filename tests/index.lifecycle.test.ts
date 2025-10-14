@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { initialize, shutdown } from "../index.ts";
+
+let initialize: typeof import("../index.ts").initialize;
+let shutdown: typeof import("../index.ts").shutdown;
 
 let exitBackup: any;
 
-beforeAll(() => {
+beforeAll(async () => {
   process.env["NODE_ENV"] = "test";
+  ({ initialize, shutdown } = await import("../index.ts"));
   // stub exit to avoid terminating runner
   exitBackup = (process as any).exit;
   (process as any).exit = () => {};

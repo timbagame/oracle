@@ -1,39 +1,51 @@
 import { expect, test, beforeAll, afterAll } from "bun:test";
-import { buildHandlers } from "../index";
-import { unlinkSync } from "fs";
-import { OracleDatabase } from "../database";
+import { createTempDatabaseFile, type TempDatabaseFile } from "./helpers/test-db.ts";
+
+let buildHandlers: typeof import("../index.ts").buildHandlers;
+let OracleDatabaseClass: typeof import("../database.ts").OracleDatabase;
+let OracleServiceClass: typeof import("../oracle-service.ts").OracleService;
+let tempDb: TempDatabaseFile;
 
 // Ensure an RPC URL is set for OracleService dependencies used by handlers
-beforeAll(() => {
+beforeAll(async () => {
+  process.env["NODE_ENV"] = "test";
   process.env["SOLANA_NETWORK"] = process.env["SOLANA_NETWORK"] || "http://localhost";
-  process.env["DATABASE_FILE"] = "routes-test.sqlite";
+  tempDb = createTempDatabaseFile("routes-test");
+  process.env["DATABASE_FILE"] = tempDb.path;
+
+  ({ buildHandlers } = await import("../index.ts"));
+  ({ OracleDatabase: OracleDatabaseClass } = await import("../database.ts"));
+  ({ OracleService: OracleServiceClass } = await import("../oracle-service.ts"));
   // Reset DB singleton to ensure isolated file
-  // @ts-ignore
-  OracleDatabase["instance"] = undefined;
+  (OracleDatabaseClass as any).instance = undefined;
+  (OracleServiceClass as any).instance = undefined;
+
 });
 
 afterAll(() => {
   try {
-    OracleDatabase.getInstance().close();
-    unlinkSync(process.env["DATABASE_FILE"]!);
+    OracleDatabaseClass.getInstance().close();
   } catch {
     // ignore
   }
-  // @ts-ignore
-  OracleDatabase["instance"] = undefined;
-  // Also reset OracleService singleton to avoid holding closed DB
-  try {
-    // dynamic import to avoid side effects at module load
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const svc = require("../oracle-service.ts");
-    svc.OracleService.instance = undefined;
-  } catch {}
+  (OracleDatabaseClass as any).instance = undefined;
+  (OracleServiceClass as any).instance = undefined;
+  tempDb.cleanup();
+  delete process.env["DATABASE_FILE"];
 });
 
 test("GET / returns API HTML and unknown endpoints 404", async () => {
   const { handleHealth, handleStats } = buildHandlers({
     generateGameSecrets: () => ({ randomHash: "abcd", gameAddress: "addr" }),
-    getStats: () => ({ totalSecrets: 0, usedSecrets: 0, pendingGames: 0, completedGames: 0, cancelledGames: 0, eventListening: false, activeListeners: 0 }),
+    getStats: () => ({
+      totalSecrets: 0,
+      usedSecrets: 0,
+      pendingGames: 0,
+      completedGames: 0,
+      cancelledGames: 0,
+      eventListening: false,
+      activeListeners: 0,
+    }),
     scanAndCompleteActiveGames: async () => ({ completed: 0, errors: 0, notReady: 0 }),
     startEventListening: async () => {},
     stopEventListening: async () => {},

@@ -1,28 +1,30 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
-import { unlinkSync } from "fs";
-import { buildHandlers, type OracleApi } from "../index.ts";
+import type { OracleApi } from "../index.ts";
+import { createTempDatabaseFile, type TempDatabaseFile } from "./helpers/test-db.ts";
+
+let buildHandlers: typeof import("../index.ts").buildHandlers;
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
 let OracleService: typeof import("../oracle-service.ts").OracleService;
+let tempDb: TempDatabaseFile;
 
 beforeAll(async () => {
   process.env["NODE_ENV"] = "test";
   process.env["SOLANA_NETWORK"] = "http://localhost";
-  process.env["DATABASE_FILE"] = "test.sqlite";
+  tempDb = createTempDatabaseFile("index-test");
+  process.env["DATABASE_FILE"] = tempDb.path;
 
   ({ OracleDatabase } = await import("../database.ts"));
   ({ OracleService } = await import("../oracle-service.ts"));
+  ({ buildHandlers } = await import("../index.ts"));
 });
 
 afterAll(() => {
   const db = OracleDatabase.getInstance();
   db.close();
-  try {
-    unlinkSync(process.env["DATABASE_FILE"]!);
-  } catch {
-    // ignore
-  }
+  tempDb.cleanup();
   (OracleService as any).instance = undefined;
   (OracleDatabase as any).instance = undefined;
+  delete process.env["DATABASE_FILE"];
 });
 
 describe("API handlers", () => {

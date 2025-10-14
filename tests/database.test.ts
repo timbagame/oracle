@@ -1,11 +1,11 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from "bun:test";
-import { unlinkSync } from "fs";
-
-const TEST_DB_FILE = "oracle-database-test.sqlite";
+import { rmSync } from "fs";
+import { createTempDatabaseFile, type TempDatabaseFile } from "./helpers/test-db.ts";
 
 type OracleDatabaseInstance = import("../database.ts").OracleDatabase;
 
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
+let tempDb: TempDatabaseFile;
 
 const resetDatabase = () => {
   if (!OracleDatabase) {
@@ -21,17 +21,20 @@ const resetDatabase = () => {
     }
   }
 
-  try {
-    unlinkSync(TEST_DB_FILE);
-  } catch {
-    // ignore missing file during cleanup
+  if (tempDb) {
+    try {
+      rmSync(tempDb.path, { force: true });
+    } catch {
+      // ignore missing file during cleanup
+    }
   }
 
   (OracleDatabase as any).instance = undefined;
 };
 
 beforeAll(async () => {
-  process.env["DATABASE_FILE"] = TEST_DB_FILE;
+  tempDb = createTempDatabaseFile("oracle-database-test");
+  process.env["DATABASE_FILE"] = tempDb.path;
   ({ OracleDatabase } = await import("../database.ts"));
   resetDatabase();
 });
@@ -43,6 +46,7 @@ beforeEach(() => {
 afterAll(() => {
   resetDatabase();
   delete process.env["DATABASE_FILE"];
+  tempDb.cleanup();
 });
 
 describe("OracleDatabase", () => {
@@ -127,7 +131,7 @@ describe("OracleDatabase", () => {
     const db = OracleDatabase.getInstance();
 
     const info = db.getConnectionInfo();
-    expect(info.file).toContain(TEST_DB_FILE);
+    expect(info.file).toBe(tempDb.path);
     expect(info.isOpen).toBe(true);
 
     db.close();

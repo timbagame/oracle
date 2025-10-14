@@ -1,14 +1,16 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
-import { unlinkSync } from "fs";
+import { createTempDatabaseFile, type TempDatabaseFile } from "./helpers/test-db.ts";
 import { Keypair, PublicKey } from "@solana/web3.js";
 
 let OracleService: typeof import("../oracle-service.ts").OracleService;
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
+let tempDb: TempDatabaseFile;
 
 beforeAll(async () => {
   process.env["NODE_ENV"] = "test";
   process.env["SOLANA_NETWORK"] = "http://localhost";
-  process.env["DATABASE_FILE"] = "oracle-service-extra-test.sqlite";
+  tempDb = createTempDatabaseFile("oracle-service-extra-test");
+  process.env["DATABASE_FILE"] = tempDb.path;
 
   ({ OracleService } = await import("../oracle-service.ts"));
   ({ OracleDatabase } = await import("../database.ts"));
@@ -19,9 +21,8 @@ beforeAll(async () => {
 afterAll(() => {
   const db = OracleDatabase.getInstance();
   db.close();
-  try {
-    unlinkSync(process.env["DATABASE_FILE"]!);
-  } catch {}
+  tempDb.cleanup();
+  delete process.env["DATABASE_FILE"];
   (OracleService as any).instance = undefined;
   (OracleDatabase as any).instance = undefined;
 });
