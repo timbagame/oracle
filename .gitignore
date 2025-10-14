@@ -35,4 +35,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # database files
 *.sqlite
+
+# oracle key
 admin-keypair.json
