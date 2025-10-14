@@ -84,6 +84,17 @@ export class OracleService {
     return new anchor.web3.Connection(networkUrl, "confirmed");
   }
 
+  private shouldUseEphemeralKeypair(): boolean {
+    const env = (process.env["NODE_ENV"] || process.env["BUN_ENV"] || "").toLowerCase();
+    if (env.includes("test")) {
+      return true;
+    }
+    if (process.env["CI"] === "true") {
+      return true;
+    }
+    return process.env["USE_FAKE_KEYPAIR"] === "true";
+  }
+
   private loadAdminKeypair(): anchor.web3.Keypair {
     const configured = process.env["ORACLE_KEYPAIR_PATH"];
     const filename = configured && configured.trim().length > 0 ? configured : KEYPAIR_FILE;
@@ -94,6 +105,14 @@ export class OracleService {
       console.log(`✅ Loaded admin keypair: ${keypair.publicKey.toBase58()}`);
       return keypair;
     } catch (error: any) {
+      if ((error?.code === "ENOENT" || error?.message?.includes("ENOENT")) && this.shouldUseEphemeralKeypair()) {
+        const keypair = anchor.web3.Keypair.generate();
+        console.warn(
+          `⚠️  Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${filename} was not found.`
+        );
+        return keypair;
+      }
+
       console.error(`❌ Failed to load admin keypair from ${keypairPath}:`, error?.message || error);
       throw new Error(`Failed to load admin keypair from ${filename}`);
     }

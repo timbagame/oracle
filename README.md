@@ -91,6 +91,11 @@ SOLANA_NETWORK=https://api.mainnet-beta.solana.com
 
 # Optional: API server port (default: 3001)
 ORACLE_PORT=3001
+
+# Optional: allow the service to generate an ephemeral admin keypair when the
+# configured keypair file is missing. This is automatically enabled during tests
+# and CI runs to avoid checking sensitive keys into the repository.
+# USE_FAKE_KEYPAIR=true
 ```
 
 ## 📋 Usage Examples
