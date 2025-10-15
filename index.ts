@@ -1,3 +1,4 @@
+import "./logging";
 import { OracleService } from "./oracle-service.ts";
 
 // Constants
