@@ -2,9 +2,9 @@ name: Oracle CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   oracle:
@@ -23,36 +23,3 @@ jobs:
         run: bun x tsc -p tsconfig.json --noEmit
       - name: Tests
         run: bun test --no-summarize
-      - name: Determine image name
-        id: image-name
-        run: |
-          OWNER="${REPO%%/*}"
-          NAME="${REPO#*/}"
-          IMAGE="ghcr.io/${OWNER,,}/${NAME,,}"
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-        env:
-          REPO: ${{ github.repository }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Log in to GitHub Container Registry
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ steps.image-name.outputs.image }}
-          tags: |
-            type=raw,value=latest
-            type=sha
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
