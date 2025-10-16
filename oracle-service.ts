@@ -6,6 +6,13 @@ import idl from "./idl/idl.json" with { type: "json" };
 import * as fs from "fs";
 import * as path from "path";
 
+class MissingSecretError extends Error {
+  constructor(gameAddress: string) {
+    super(`No secret data found for game ${gameAddress}`);
+    this.name = "MissingSecretError";
+  }
+}
+
 // Constants
 const KEYPAIR_FILE = "admin-keypair.json";
 const SECRET_KEY_LENGTH = 32;
@@ -558,17 +565,14 @@ export class OracleService {
 
   private async gameExistsOnChain(gameAddress: string): Promise<boolean> {
     try {
-      const secretData = this.db.getSecretKey(gameAddress);
-      if (!secretData) {
-        console.log(`⚠️  No secret key found for game ${gameAddress}`);
-        return false;
-      }
-
-      const randomHash = Buffer.from(secretData.randomHash, "hex");
-      const gamePda = this.getGamePDA(randomHash);
+      const gamePda = this.getGamePDAFromAddress(gameAddress);
       await this.program.account.game.fetch(gamePda);
       return true;
     } catch (error: any) {
+      if (error instanceof MissingSecretError) {
+        console.log(`⚠️  No secret key found for game ${gameAddress}`);
+        return false;
+      }
       if (this.isAccountNotFoundError(error)) {
         console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
         return false;
@@ -610,7 +614,7 @@ export class OracleService {
     // Since we can predict PDAs now, we can reverse engineer from the stored secret
     const secretData = this.db.getSecretKey(gameAddress);
     if (!secretData) {
-      throw new Error(`No secret data found for game ${gameAddress}`);
+      throw new MissingSecretError(gameAddress);
     }
     const randomHash = Buffer.from(secretData.randomHash, "hex");
     return this.getGamePDA(randomHash);
