@@ -1,5 +1,5 @@
 import * as anchor from "@coral-xyz/anchor";
-import { randomBytes, createHash } from 'crypto';
+import { randomBytes, createHash } from "crypto";
 import { OracleDatabase } from "./database.ts";
 import type { Timba } from "./idl/idlType.ts";
 import idl from "./idl/idl.json" with { type: "json" };
@@ -48,6 +48,11 @@ interface CompletionStats {
   notReady: number;
 }
 
+interface GameReadinessSnapshot {
+  ready: boolean;
+  gameAccount: any | null;
+}
+
 export class OracleService {
   private static instance: OracleService;
   private program: anchor.Program<Timba>;
@@ -56,6 +61,7 @@ export class OracleService {
   private db: OracleDatabase;
   private eventListeners: number[] = [];
   private isListening: boolean = false;
+  private readinessCache: Map<string, GameReadinessSnapshot> = new Map();
 
   private constructor(db?: OracleDatabase) {
     this.db = db ?? OracleDatabase.getInstance();
@@ -277,13 +283,23 @@ export class OracleService {
     };
   }
 
-  private async tryAutoComplete(gamePda: anchor.web3.PublicKey, gameAddress: string, trigger: string): Promise<void> {
-    if (await this.isGameReadyForCompletion(gamePda)) {
-      console.log(`🎯 Auto-completing game ${gameAddress} after ${trigger}`);
-      const result = await this.completeGame(gameAddress);
-      if (!result.success && !result.notReady) {
-        console.error(`❌ Auto-completion failed: ${result.error}`);
-      }
+  private async tryAutoComplete(
+    gamePda: anchor.web3.PublicKey,
+    gameAddress: string,
+    trigger: string
+  ): Promise<void> {
+    if (!(await this.isGameReadyForCompletion(gamePda))) {
+      return;
+    }
+
+    const result = await this.completeGame(gameAddress);
+    if (result.success) {
+      console.log(`🎯 Auto-completed game ${gameAddress} after ${trigger}`);
+      return;
+    }
+
+    if (!result.notReady) {
+      console.error(`❌ Auto-completion failed: ${result.error}`);
     }
   }
 
@@ -307,27 +323,20 @@ export class OracleService {
   }
 
   public async isGameReadyForCompletion(gamePda: anchor.web3.PublicKey): Promise<boolean> {
-    try {
-      const gameAccount = await this.program.account.game.fetch(gamePda);
-      const blockTime = await this.getBlockchainTime();
-
-      const expiresAt = Number(gameAccount.createdAt) + Number(gameAccount.timeout);
-      const isExpired = blockTime > expiresAt;
-      const isFull = gameAccount.ticketsCount >= gameAccount.maxTickets;
-      const hasMinTickets = gameAccount.ticketsCount >= gameAccount.minTickets;
-
-      return isFull || (isExpired && hasMinTickets);
-    } catch (error: any) {
-      if (this.isAccountNotFoundError(error)) {
-        const gameAddress = gamePda.toBase58();
-        this.db.markGameCompleted(gameAddress);
-        return false;
-      }
-      throw error;
+    const gameAddress = gamePda.toBase58();
+    const readiness = await this.evaluateGameReadiness(gamePda, gameAddress);
+    if (readiness.ready) {
+      this.readinessCache.set(gameAddress, readiness);
+    } else {
+      this.readinessCache.delete(gameAddress);
     }
+    return readiness.ready;
   }
 
-  public async completeGame(gameAddress: string): Promise<GameCompletionResult> {
+  public async completeGame(
+    gameAddress: string,
+    cachedReadiness?: GameReadinessSnapshot
+  ): Promise<GameCompletionResult> {
     const recordFailure = (error: string): GameCompletionResult => {
       this.db.incrementCompletionAttempts(gameAddress);
       return { success: false, error };
@@ -339,12 +348,34 @@ export class OracleService {
         return recordFailure("No secret key found");
       }
 
-      const gamePda = this.getGamePDAFromAddress(gameAddress);
-      if (!(await this.isGameReadyForCompletion(gamePda))) {
+      const randomHashBuffer = Buffer.from(secretData.randomHash, "hex");
+      const gamePda = this.getGamePDA(randomHashBuffer);
+
+      let readiness = cachedReadiness ?? this.consumeReadiness(gameAddress);
+      let shouldAttempt: boolean | undefined;
+
+      if (!readiness) {
+        shouldAttempt = await this.isGameReadyForCompletion(gamePda);
+        readiness = this.consumeReadiness(gameAddress);
+      }
+
+      if (!readiness) {
+        if (shouldAttempt === false) {
+          return { success: false, notReady: true };
+        }
+
+        const gameAccount = await this.fetchGameAccount(gamePda, gameAddress);
+        if (!gameAccount) {
+          return { success: false, notReady: true };
+        }
+        readiness = { ready: true, gameAccount };
+      }
+
+      if (!readiness.ready || !readiness.gameAccount) {
         return { success: false, notReady: true };
       }
 
-      const gameAccount = await this.program.account.game.fetch(gamePda);
+      const gameAccount = readiness.gameAccount;
       const players = this.db.getGamePlayers(gameAddress);
       const nEntries = Number(gameAccount.ticketsCount);
 
@@ -360,7 +391,6 @@ export class OracleService {
       }
 
       const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
-      const randomHashBuffer = Buffer.from(secretData.randomHash, "hex");
       const winnerIndex = this.calculateWinnerIndex(
         secretKeyBuffer,
         Number(gameAccount.lastSlot),
@@ -534,7 +564,8 @@ export class OracleService {
         return false;
       }
 
-      const gamePda = this.getGamePDAFromAddress(gameAddress);
+      const randomHash = Buffer.from(secretData.randomHash, "hex");
+      const gamePda = this.getGamePDA(randomHash);
       await this.program.account.game.fetch(gamePda);
       return true;
     } catch (error: any) {
@@ -583,6 +614,51 @@ export class OracleService {
     }
     const randomHash = Buffer.from(secretData.randomHash, "hex");
     return this.getGamePDA(randomHash);
+  }
+
+  private async evaluateGameReadiness(
+    gamePda: anchor.web3.PublicKey,
+    gameAddress: string
+  ): Promise<GameReadinessSnapshot> {
+    const gameAccount = await this.fetchGameAccount(gamePda, gameAddress);
+    if (!gameAccount) {
+      return { ready: false, gameAccount: null };
+    }
+
+    const blockTime = await this.getBlockchainTime();
+    const expiresAt = Number(gameAccount.createdAt) + Number(gameAccount.timeout);
+    const isExpired = blockTime > expiresAt;
+    const ticketsCount = Number(gameAccount.ticketsCount);
+    const isFull = ticketsCount >= Number(gameAccount.maxTickets);
+    const hasMinTickets = ticketsCount >= Number(gameAccount.minTickets);
+
+    return {
+      ready: isFull || (isExpired && hasMinTickets),
+      gameAccount,
+    };
+  }
+
+  private async fetchGameAccount(
+    gamePda: anchor.web3.PublicKey,
+    gameAddress: string
+  ): Promise<any | null> {
+    try {
+      return await this.program.account.game.fetch(gamePda);
+    } catch (error: any) {
+      if (this.isAccountNotFoundError(error)) {
+        this.db.markGameCompleted(gameAddress);
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  private consumeReadiness(gameAddress: string): GameReadinessSnapshot | undefined {
+    const readiness = this.readinessCache.get(gameAddress);
+    if (readiness) {
+      this.readinessCache.delete(gameAddress);
+    }
+    return readiness;
   }
 
 }
