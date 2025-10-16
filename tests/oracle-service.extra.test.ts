@@ -291,6 +291,37 @@ describe("OracleService internals", () => {
     expect(await (service as any).gameExistsOnChain("missing")).toBe(true);
   });
 
+  it("scanAndCompleteActiveGames clears tracked games lacking secrets", async () => {
+    const service = OracleService.getInstance();
+    const db = OracleDatabase.getInstance();
+
+    for (const pending of db.getPendingGames()) {
+      db.markGameCompleted(pending.game_address);
+      db.markSecretKeyUsed(pending.game_address);
+    }
+    service.cleanupOldRecords(-1);
+
+    const orphanGame = "orphaned-game";
+    db.trackGame(orphanGame);
+
+    const originalMarkCompleted = db.markGameCompleted.bind(db);
+    const marked: string[] = [];
+    (db as any).markGameCompleted = (address: string) => {
+      marked.push(address);
+      originalMarkCompleted(address);
+    };
+
+    try {
+      const stats = await service.scanAndCompleteActiveGames();
+      expect(stats).toEqual({ completed: 0, errors: 0, notReady: 0 });
+      expect(marked).toContain(orphanGame);
+      const remaining = db.getPendingGames().map((entry) => entry.game_address);
+      expect(remaining).not.toContain(orphanGame);
+    } finally {
+      (db as any).markGameCompleted = originalMarkCompleted;
+    }
+  });
+
   it("getBlockchainTime uses network and falls back to wall clock", async () => {
     const service = OracleService.getInstance();
     // happy path
