@@ -36,7 +36,7 @@ afterAll(() => {
 
 async function runExecuteGameCompletionScenario({
   tokenProgram,
-}: { tokenProgram?: PublicKey } = {}) {
+}: { tokenProgram?: PublicKey | string | null } = {}) {
   const service = OracleService.createWith(OracleDatabase.getInstance());
   const originalProgram = (service as any).program;
   const originalConfirm = (service as any).confirmTransaction;
@@ -48,7 +48,23 @@ async function runExecuteGameCompletionScenario({
   const randomHashBuffer = Buffer.alloc(32, 1);
   const secretKeyBuffer = Buffer.alloc(32, 2);
   const calls: { accounts?: any; signers?: any[]; confirmed?: string } = {};
-  const tokenProgramId = tokenProgram ?? TOKEN_PROGRAM_ID;
+  let expectedTokenProgram: PublicKey;
+
+  if (tokenProgram instanceof PublicKey) {
+    expectedTokenProgram = tokenProgram;
+  } else if (typeof tokenProgram === "string") {
+    expectedTokenProgram = new PublicKey(tokenProgram);
+  } else if (tokenProgram) {
+    expectedTokenProgram = new PublicKey(tokenProgram);
+  } else {
+    expectedTokenProgram = TOKEN_PROGRAM_ID;
+  }
+
+  if (expectedTokenProgram.equals(PublicKey.default)) {
+    expectedTokenProgram = TOKEN_PROGRAM_ID;
+  }
+
+  const tokenProgramId = expectedTokenProgram;
 
   (service as any).program = {
     programId,
@@ -84,8 +100,8 @@ async function runExecuteGameCompletionScenario({
       tokenMint: tokenMint.toBase58(),
     };
 
-    if (tokenProgram) {
-      gameAccount["tokenProgram"] = tokenProgram.toBase58();
+    if (tokenProgram !== undefined) {
+      gameAccount["tokenProgram"] = tokenProgram;
     }
 
     tx = await (service as any).executeGameCompletion({
@@ -688,6 +704,21 @@ describe("OracleService internals", () => {
     expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_2022_PROGRAM_ID.toBase58());
     expect(result.calls.accounts?.tokenProgram.toBase58()).toBe(
       TOKEN_2022_PROGRAM_ID.toBase58(),
+    );
+    expect(result.calls.accounts?.winnerTokenAccount.toBase58()).toBe(
+      result.expectedWinnerAta.toBase58(),
+    );
+    expect(result.calls.accounts?.gameTokenAccount.toBase58()).toBe(
+      result.expectedGameAta.toBase58(),
+    );
+  });
+
+  it("executeGameCompletion treats zeroed token program as SPL default", async () => {
+    const result = await runExecuteGameCompletionScenario({ tokenProgram: PublicKey.default });
+
+    expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
+    expect(result.calls.accounts?.tokenProgram.toBase58()).toBe(
+      TOKEN_PROGRAM_ID.toBase58(),
     );
     expect(result.calls.accounts?.winnerTokenAccount.toBase58()).toBe(
       result.expectedWinnerAta.toBase58(),

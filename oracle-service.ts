@@ -501,19 +501,25 @@ export class OracleService {
   private resolveTokenProgram(
     tokenProgram?: anchor.web3.PublicKey | string | null
   ): anchor.web3.PublicKey {
+    if (!tokenProgram) {
+      return TOKEN_PROGRAM_ID;
+    }
+
+    let resolvedProgram: anchor.web3.PublicKey;
+
     if (tokenProgram instanceof anchor.web3.PublicKey) {
-      return tokenProgram;
+      resolvedProgram = tokenProgram;
+    } else if (typeof tokenProgram === "string") {
+      resolvedProgram = new anchor.web3.PublicKey(tokenProgram);
+    } else {
+      resolvedProgram = new anchor.web3.PublicKey(tokenProgram as any);
     }
 
-    if (typeof tokenProgram === "string") {
-      return new anchor.web3.PublicKey(tokenProgram);
+    if (resolvedProgram.equals(anchor.web3.PublicKey.default)) {
+      return TOKEN_PROGRAM_ID;
     }
 
-    if (tokenProgram) {
-      return new anchor.web3.PublicKey(tokenProgram as any);
-    }
-
-    return TOKEN_PROGRAM_ID;
+    return resolvedProgram;
   }
 
   private calculateWinnerIndex(
