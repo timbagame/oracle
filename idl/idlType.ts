@@ -1259,7 +1259,10 @@ export type Timba = {
         },
         {
           "name": "player",
-          "writable": true,
+          "writable": true
+        },
+        {
+          "name": "authority",
           "signer": true
         },
         {
