@@ -1,5 +1,10 @@
 import * as anchor from "@coral-xyz/anchor";
 import { randomBytes, createHash } from "crypto";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import { OracleDatabase } from "./database.ts";
 import type { Timba } from "./idl/idlType.ts";
 import idl from "./idl/idl.json" with { type: "json" };
@@ -439,19 +444,82 @@ export class OracleService {
     const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
 
     const creatorPublicKey = new anchor.web3.PublicKey(gameAccount.creator);
+    const gamePda = this.getGamePDA(randomHashBuffer);
+    const tokenMint = new anchor.web3.PublicKey(gameAccount.tokenMint);
+    const tokenProgramId = this.resolveTokenProgram(gameAccount.tokenProgram);
+    const [oraclePda] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("oracle", "utf8")],
+      this.program.programId
+    );
+    const [gameTokenPda] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("game_token", "utf8"), tokenMint.toBuffer()],
+      this.program.programId
+    );
+    const [gameVaultPda] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("game_vault", "utf8"), tokenMint.toBuffer()],
+      this.program.programId
+    );
+    const winnerTokenAccount = getAssociatedTokenAddressSync(
+      tokenMint,
+      winnerAddress,
+      false,
+      tokenProgramId,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+    const gameTokenAccount = getAssociatedTokenAddressSync(
+      tokenMint,
+      gameVaultPda,
+      true,
+      tokenProgramId,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
 
     const txHash = await this.program.methods
       .completeGame([...randomHashBuffer], [...secretKeyBuffer], winnerIndex)
-      .accounts({
+      .accountsPartial({
+        game: gamePda,
+        tokenMint,
+        oracle: oraclePda,
         oracleOperator: this.adminKeypair.publicKey,
         winner: winnerAddress,
         creator: creatorPublicKey,
+        gameToken: gameTokenPda,
+        gameVault: gameVaultPda,
+        tokenProgram: tokenProgramId,
+        gameTokenAccount,
+        systemProgram: anchor.web3.SystemProgram.programId,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        winnerTokenAccount,
       })
       .signers([this.adminKeypair])
       .rpc();
 
     await this.confirmTransaction(txHash);
     return txHash;
+  }
+
+  private resolveTokenProgram(
+    tokenProgram?: anchor.web3.PublicKey | string | null
+  ): anchor.web3.PublicKey {
+    if (!tokenProgram) {
+      return TOKEN_PROGRAM_ID;
+    }
+
+    let resolvedProgram: anchor.web3.PublicKey;
+
+    if (tokenProgram instanceof anchor.web3.PublicKey) {
+      resolvedProgram = tokenProgram;
+    } else if (typeof tokenProgram === "string") {
+      resolvedProgram = new anchor.web3.PublicKey(tokenProgram);
+    } else {
+      resolvedProgram = new anchor.web3.PublicKey(tokenProgram as any);
+    }
+
+    if (resolvedProgram.equals(anchor.web3.PublicKey.default)) {
+      return TOKEN_PROGRAM_ID;
+    }
+
+    return resolvedProgram;
   }
 
   private calculateWinnerIndex(

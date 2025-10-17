@@ -5,10 +5,10 @@
  * IDL can be found at `target/idl/timba.json`.
  */
 export type Timba = {
-  "address": "9MmCPEForkbt1L4Dk5BCd9ttErJiehwtdD4mM5J8YbFd",
+  "address": "7GWv6X48imfr7SonQRCgka8XSh42J4UP74DyhP1RWNP6",
   "metadata": {
     "name": "timba",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "spec": "0.1.0",
     "description": "Created with Anchor"
   },
@@ -37,6 +37,9 @@ export type Timba = {
           "name": "creator",
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "tokenMint"
         },
         {
           "name": "oracle",
@@ -78,8 +81,7 @@ export type Timba = {
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ]
           }
@@ -105,8 +107,7 @@ export type Timba = {
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ]
           }
@@ -121,46 +122,12 @@ export type Timba = {
                 "path": "creator"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ],
             "program": {
@@ -212,46 +179,12 @@ export type Timba = {
                 "path": "gameVault"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ],
             "program": {
@@ -298,8 +231,7 @@ export type Timba = {
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "name": "tokenProgram"
         },
         {
           "name": "associatedTokenProgram",
@@ -344,6 +276,9 @@ export type Timba = {
               }
             ]
           }
+        },
+        {
+          "name": "tokenMint"
         },
         {
           "name": "oracle",
@@ -397,8 +332,7 @@ export type Timba = {
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ]
           }
@@ -424,8 +358,7 @@ export type Timba = {
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ]
           }
@@ -440,46 +373,12 @@ export type Timba = {
                 "path": "winner"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ],
             "program": {
@@ -531,46 +430,12 @@ export type Timba = {
                 "path": "gameVault"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ],
             "program": {
@@ -617,8 +482,7 @@ export type Timba = {
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "name": "tokenProgram"
         },
         {
           "name": "associatedTokenProgram",
@@ -776,41 +640,8 @@ export type Timba = {
                 "path": "creator"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -866,41 +697,8 @@ export type Timba = {
                 "path": "gameVault"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -951,8 +749,7 @@ export type Timba = {
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "name": "tokenProgram"
         },
         {
           "name": "associatedTokenProgram",
@@ -1116,41 +913,8 @@ export type Timba = {
                 "path": "gameVault"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -1224,8 +988,7 @@ export type Timba = {
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "name": "tokenProgram"
         },
         {
           "name": "associatedTokenProgram",
@@ -1269,6 +1032,9 @@ export type Timba = {
           "signer": true
         },
         {
+          "name": "tokenMint"
+        },
+        {
           "name": "oracleOperator",
           "signer": true,
           "optional": true
@@ -1294,8 +1060,7 @@ export type Timba = {
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ]
           }
@@ -1321,8 +1086,7 @@ export type Timba = {
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ]
           }
@@ -1337,46 +1101,12 @@ export type Timba = {
                 "path": "player"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ],
             "program": {
@@ -1428,46 +1158,12 @@ export type Timba = {
                 "path": "gameVault"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ],
             "program": {
@@ -1532,8 +1228,7 @@ export type Timba = {
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "name": "tokenProgram"
         },
         {
           "name": "associatedTokenProgram",
@@ -1564,8 +1259,14 @@ export type Timba = {
         },
         {
           "name": "player",
-          "writable": true,
+          "writable": true
+        },
+        {
+          "name": "authority",
           "signer": true
+        },
+        {
+          "name": "tokenMint"
         },
         {
           "name": "oracle",
@@ -1607,8 +1308,7 @@ export type Timba = {
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ]
           }
@@ -1634,8 +1334,7 @@ export type Timba = {
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ]
           }
@@ -1650,46 +1349,12 @@ export type Timba = {
                 "path": "player"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ],
             "program": {
@@ -1741,46 +1406,12 @@ export type Timba = {
                 "path": "gameVault"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
-                "path": "game.token_mint",
-                "account": "game"
+                "path": "tokenMint"
               }
             ],
             "program": {
@@ -1827,8 +1458,7 @@ export type Timba = {
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "name": "tokenProgram"
         },
         {
           "name": "associatedTokenProgram",
@@ -2077,41 +1707,8 @@ export type Timba = {
                 "path": "oracleOperator"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -2167,41 +1764,8 @@ export type Timba = {
                 "path": "gameVault"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -2252,8 +1816,7 @@ export type Timba = {
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "name": "tokenProgram"
         },
         {
           "name": "associatedTokenProgram",
@@ -2440,42 +2003,42 @@ export type Timba = {
     {
       "code": 7000,
       "name": "unauthorizedOperator",
-      "msg": "Unauthorized operator"
+      "msg": "Unauthorized access"
     },
     {
       "code": 7001,
       "name": "unauthorizedPlayer",
-      "msg": "Unauthorized player"
+      "msg": "Unauthorized access"
     },
     {
       "code": 7002,
       "name": "invalidCreator",
-      "msg": "Invalid creator"
+      "msg": "Creator mismatch"
     },
     {
       "code": 7100,
       "name": "gameFull",
-      "msg": "Game already full"
+      "msg": "Game full"
     },
     {
       "code": 7101,
       "name": "gameWaitingForOracle",
-      "msg": "Game waiting for oracle"
+      "msg": "Awaiting oracle"
     },
     {
       "code": 7102,
       "name": "gameNotReadyForOracle",
-      "msg": "Game not ready for oracle"
+      "msg": "Oracle not ready"
     },
     {
       "code": 7103,
       "name": "gameHasActivePlayers",
-      "msg": "Cannot cancel game with active players"
+      "msg": "Active players remain"
     },
     {
       "code": 7104,
       "name": "gameNotCompleted",
-      "msg": "Game not completed"
+      "msg": "Game incomplete"
     },
     {
       "code": 7105,
@@ -2490,22 +2053,22 @@ export type Timba = {
     {
       "code": 7107,
       "name": "gameAlreadyCompleted",
-      "msg": "Game already completed"
+      "msg": "Game already settled"
     },
     {
       "code": 7108,
       "name": "oracleBufferNotExpired",
-      "msg": "Oracle buffer time not expired"
+      "msg": "Oracle buffer active"
     },
     {
       "code": 7109,
       "name": "participantStorageExceeded",
-      "msg": "Participant storage exhausted"
+      "msg": "Participant store full"
     },
     {
       "code": 7200,
       "name": "alreadyJoined",
-      "msg": "Player already joined"
+      "msg": "Already joined"
     },
     {
       "code": 7201,
@@ -2525,52 +2088,62 @@ export type Timba = {
     {
       "code": 7204,
       "name": "winnerPubkeyHashMismatch",
-      "msg": "Winner pubkey hash mismatch"
+      "msg": "Winner hash mismatch"
     },
     {
       "code": 7205,
       "name": "privateGameAccessDenied",
-      "msg": "Private game access denied"
+      "msg": "Private access denied"
     },
     {
       "code": 7206,
       "name": "randomnessGenerationFailed",
-      "msg": "Randomness generation failed"
+      "msg": "Randomness failed"
     },
     {
       "code": 7300,
       "name": "invalidTicketsCount",
-      "msg": "Invalid tickets count"
+      "msg": "Invalid config value"
     },
     {
       "code": 7301,
       "name": "invalidTimeout",
-      "msg": "Invalid timeout"
+      "msg": "Invalid config value"
     },
     {
       "code": 7302,
       "name": "invalidAmount",
-      "msg": "Invalid amount"
+      "msg": "Invalid config value"
     },
     {
       "code": 7303,
       "name": "invalidSecretKey",
-      "msg": "Invalid secret key"
+      "msg": "Secret key mismatch"
     },
     {
       "code": 7304,
       "name": "invalidConfiguration",
-      "msg": "Invalid configuration"
+      "msg": "Bad configuration"
     },
     {
       "code": 7305,
       "name": "oracleBufferTooSmall",
-      "msg": "Oracle buffer time too small"
+      "msg": "Oracle buffer short"
     },
     {
       "code": 7400,
       "name": "tokenNotEnabled",
-      "msg": "Token not enabled"
+      "msg": "Token disabled"
+    },
+    {
+      "code": 7401,
+      "name": "invalidTokenMint",
+      "msg": "Token mint mismatch"
+    },
+    {
+      "code": 7402,
+      "name": "unsupportedTokenProgram",
+      "msg": "Token program unsupported"
     }
   ],
   "types": [
