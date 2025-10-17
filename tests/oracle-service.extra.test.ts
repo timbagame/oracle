@@ -1,6 +1,12 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
 import { createTempDatabaseFile, type TempDatabaseFile } from "./helpers/test-db.ts";
+import * as anchor from "@coral-xyz/anchor";
 import { Keypair, PublicKey } from "@solana/web3.js";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 
 let OracleService: typeof import("../oracle-service.ts").OracleService;
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
@@ -537,6 +543,7 @@ describe("OracleService internals", () => {
     const winner = Keypair.generate().publicKey;
     const creator = Keypair.generate().publicKey;
     const programId = Keypair.generate().publicKey;
+    const tokenMint = Keypair.generate().publicKey;
     const calls: { accounts?: any; signers?: any[]; confirmed?: string } = {};
 
     (service as any).program = {
@@ -545,7 +552,7 @@ describe("OracleService internals", () => {
         completeGame: (_rand: number[], _secret: number[], winnerIndex: number) => {
           expect(winnerIndex).toBe(5);
           return {
-            accounts: (accs: any) => {
+            accountsPartial: (accs: any) => {
               calls.accounts = accs;
               return {
                 signers: (signers: any[]) => {
@@ -570,7 +577,7 @@ describe("OracleService internals", () => {
 
     try {
       const tx = await (service as any).executeGameCompletion({
-        gameAccount: { creator: creator.toBase58() },
+        gameAccount: { creator: creator.toBase58(), tokenMint: tokenMint.toBase58() },
         winnerAddress: winner,
         randomHashBuffer,
         secretKeyBuffer,
@@ -581,11 +588,48 @@ describe("OracleService internals", () => {
       expect(calls.accounts?.winner.toBase58()).toBe(winner.toBase58());
       expect(calls.accounts?.creator.toBase58()).toBe(creator.toBase58());
       expect(calls.accounts?.oracleOperator.toBase58()).toBe((service as any).adminKeypair.publicKey.toBase58());
-      expect(Object.keys(calls.accounts || {})).toEqual([
-        "oracleOperator",
-        "winner",
-        "creator",
-      ]);
+      const expectedGamePda = (service as any).getGamePDA(randomHashBuffer);
+      const [expectedOraclePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("oracle", "utf8")],
+        programId,
+      );
+      const [expectedGameTokenPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("game_token", "utf8"), tokenMint.toBuffer()],
+        programId,
+      );
+      const [expectedGameVaultPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("game_vault", "utf8"), tokenMint.toBuffer()],
+        programId,
+      );
+      const expectedWinnerAta = getAssociatedTokenAddressSync(
+        tokenMint,
+        winner,
+        false,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      );
+      const expectedGameAta = getAssociatedTokenAddressSync(
+        tokenMint,
+        expectedGameVaultPda,
+        true,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      );
+
+      expect(calls.accounts?.game.toBase58()).toBe(expectedGamePda.toBase58());
+      expect(calls.accounts?.tokenMint.toBase58()).toBe(tokenMint.toBase58());
+      expect(calls.accounts?.oracle.toBase58()).toBe(expectedOraclePda.toBase58());
+      expect(calls.accounts?.gameToken.toBase58()).toBe(expectedGameTokenPda.toBase58());
+      expect(calls.accounts?.gameVault.toBase58()).toBe(expectedGameVaultPda.toBase58());
+      expect(calls.accounts?.tokenProgram.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
+      expect(calls.accounts?.associatedTokenProgram.toBase58()).toBe(
+        ASSOCIATED_TOKEN_PROGRAM_ID.toBase58(),
+      );
+      expect(calls.accounts?.winnerTokenAccount.toBase58()).toBe(expectedWinnerAta.toBase58());
+      expect(calls.accounts?.gameTokenAccount.toBase58()).toBe(expectedGameAta.toBase58());
+      expect(calls.accounts?.systemProgram.toBase58()).toBe(
+        anchor.web3.SystemProgram.programId.toBase58(),
+      );
       expect(calls.signers).toEqual([(service as any).adminKeypair]);
       expect(calls.confirmed).toBe("tx-abc");
     } finally {
