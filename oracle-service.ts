@@ -1,5 +1,10 @@
 import * as anchor from "@coral-xyz/anchor";
 import { randomBytes, createHash } from "crypto";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import { OracleDatabase } from "./database.ts";
 import type { Timba } from "./idl/idlType.ts";
 import idl from "./idl/idl.json" with { type: "json" };
@@ -439,13 +444,51 @@ export class OracleService {
     const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
 
     const creatorPublicKey = new anchor.web3.PublicKey(gameAccount.creator);
+    const gamePda = this.getGamePDA(randomHashBuffer);
+    const tokenMint = new anchor.web3.PublicKey(gameAccount.tokenMint);
+    const [oraclePda] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("oracle", "utf8")],
+      this.program.programId
+    );
+    const [gameTokenPda] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("game_token", "utf8"), tokenMint.toBuffer()],
+      this.program.programId
+    );
+    const [gameVaultPda] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("game_vault", "utf8"), tokenMint.toBuffer()],
+      this.program.programId
+    );
+    const winnerTokenAccount = getAssociatedTokenAddressSync(
+      tokenMint,
+      winnerAddress,
+      false,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+    const gameTokenAccount = getAssociatedTokenAddressSync(
+      tokenMint,
+      gameVaultPda,
+      true,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
 
     const txHash = await this.program.methods
       .completeGame([...randomHashBuffer], [...secretKeyBuffer], winnerIndex)
-      .accounts({
+      .accountsPartial({
+        game: gamePda,
+        tokenMint,
+        oracle: oraclePda,
         oracleOperator: this.adminKeypair.publicKey,
         winner: winnerAddress,
         creator: creatorPublicKey,
+        gameToken: gameTokenPda,
+        gameVault: gameVaultPda,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        gameTokenAccount,
+        systemProgram: anchor.web3.SystemProgram.programId,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        winnerTokenAccount,
       })
       .signers([this.adminKeypair])
       .rpc();
