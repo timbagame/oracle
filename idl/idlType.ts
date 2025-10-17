@@ -5,7 +5,7 @@
  * IDL can be found at `target/idl/timba.json`.
  */
 export type Timba = {
-  "address": "9MmCPEForkbt1L4Dk5BCd9ttErJiehwtdD4mM5J8YbFd",
+  "address": "7GWv6X48imfr7SonQRCgka8XSh42J4UP74DyhP1RWNP6",
   "metadata": {
     "name": "timba",
     "version": "0.1.1",
