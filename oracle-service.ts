@@ -446,6 +446,7 @@ export class OracleService {
     const creatorPublicKey = new anchor.web3.PublicKey(gameAccount.creator);
     const gamePda = this.getGamePDA(randomHashBuffer);
     const tokenMint = new anchor.web3.PublicKey(gameAccount.tokenMint);
+    const tokenProgramId = this.resolveTokenProgram(gameAccount.tokenProgram);
     const [oraclePda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("oracle", "utf8")],
       this.program.programId
@@ -462,14 +463,14 @@ export class OracleService {
       tokenMint,
       winnerAddress,
       false,
-      TOKEN_PROGRAM_ID,
+      tokenProgramId,
       ASSOCIATED_TOKEN_PROGRAM_ID
     );
     const gameTokenAccount = getAssociatedTokenAddressSync(
       tokenMint,
       gameVaultPda,
       true,
-      TOKEN_PROGRAM_ID,
+      tokenProgramId,
       ASSOCIATED_TOKEN_PROGRAM_ID
     );
 
@@ -484,7 +485,7 @@ export class OracleService {
         creator: creatorPublicKey,
         gameToken: gameTokenPda,
         gameVault: gameVaultPda,
-        tokenProgram: TOKEN_PROGRAM_ID,
+        tokenProgram: tokenProgramId,
         gameTokenAccount,
         systemProgram: anchor.web3.SystemProgram.programId,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -495,6 +496,24 @@ export class OracleService {
 
     await this.confirmTransaction(txHash);
     return txHash;
+  }
+
+  private resolveTokenProgram(
+    tokenProgram?: anchor.web3.PublicKey | string | null
+  ): anchor.web3.PublicKey {
+    if (tokenProgram instanceof anchor.web3.PublicKey) {
+      return tokenProgram;
+    }
+
+    if (typeof tokenProgram === "string") {
+      return new anchor.web3.PublicKey(tokenProgram);
+    }
+
+    if (tokenProgram) {
+      return new anchor.web3.PublicKey(tokenProgram as any);
+    }
+
+    return TOKEN_PROGRAM_ID;
   }
 
   private calculateWinnerIndex(

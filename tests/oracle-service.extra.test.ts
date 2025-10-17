@@ -4,6 +4,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
@@ -32,6 +33,121 @@ afterAll(() => {
   (OracleService as any).instance = undefined;
   (OracleDatabase as any).instance = undefined;
 });
+
+async function runExecuteGameCompletionScenario({
+  tokenProgram,
+}: { tokenProgram?: PublicKey } = {}) {
+  const service = OracleService.createWith(OracleDatabase.getInstance());
+  const originalProgram = (service as any).program;
+  const originalConfirm = (service as any).confirmTransaction;
+  const adminKeypair = (service as any).adminKeypair;
+  const winner = Keypair.generate().publicKey;
+  const creator = Keypair.generate().publicKey;
+  const programId = Keypair.generate().publicKey;
+  const tokenMint = Keypair.generate().publicKey;
+  const randomHashBuffer = Buffer.alloc(32, 1);
+  const secretKeyBuffer = Buffer.alloc(32, 2);
+  const calls: { accounts?: any; signers?: any[]; confirmed?: string } = {};
+  const tokenProgramId = tokenProgram ?? TOKEN_PROGRAM_ID;
+
+  (service as any).program = {
+    programId,
+    methods: {
+      completeGame: (_rand: number[], _secret: number[], winnerIndex: number) => {
+        expect(winnerIndex).toBe(5);
+        return {
+          accountsPartial: (accs: any) => {
+            calls.accounts = accs;
+            return {
+              signers: (signers: any[]) => {
+                calls.signers = signers;
+                return {
+                  rpc: async () => "tx-abc",
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+
+  (service as any).confirmTransaction = async (sig: string) => {
+    calls.confirmed = sig;
+  };
+
+  let tx = "";
+
+  try {
+    const gameAccount: Record<string, unknown> = {
+      creator: creator.toBase58(),
+      tokenMint: tokenMint.toBase58(),
+    };
+
+    if (tokenProgram) {
+      gameAccount["tokenProgram"] = tokenProgram.toBase58();
+    }
+
+    tx = await (service as any).executeGameCompletion({
+      gameAccount,
+      winnerAddress: winner,
+      randomHashBuffer,
+      secretKeyBuffer,
+      winnerIndex: 5,
+    });
+  } finally {
+    (service as any).program = originalProgram;
+    (service as any).confirmTransaction = originalConfirm;
+  }
+
+  const [expectedGamePda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("game", "utf8"), randomHashBuffer],
+    programId,
+  );
+  const [expectedOraclePda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("oracle", "utf8")],
+    programId,
+  );
+  const [expectedGameTokenPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("game_token", "utf8"), tokenMint.toBuffer()],
+    programId,
+  );
+  const [expectedGameVaultPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("game_vault", "utf8"), tokenMint.toBuffer()],
+    programId,
+  );
+  const expectedWinnerAta = getAssociatedTokenAddressSync(
+    tokenMint,
+    winner,
+    false,
+    tokenProgramId,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  );
+  const expectedGameAta = getAssociatedTokenAddressSync(
+    tokenMint,
+    expectedGameVaultPda,
+    true,
+    tokenProgramId,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  );
+
+  return {
+    tx,
+    calls,
+    expectedGamePda,
+    expectedOraclePda,
+    expectedGameTokenPda,
+    expectedGameVaultPda,
+    expectedWinnerAta,
+    expectedGameAta,
+    expectedTokenProgram: tokenProgramId,
+    oracleOperator: adminKeypair.publicKey,
+    winner,
+    creator,
+    tokenMint,
+    adminKeypair,
+  };
+}
 
 describe("OracleService internals", () => {
   it("start/stop event listening manages listener ids", async () => {
@@ -537,105 +653,48 @@ describe("OracleService internals", () => {
   });
 
   it("executeGameCompletion invokes RPC and confirms transaction", async () => {
-    const service = OracleService.createWith(OracleDatabase.getInstance());
-    const originalProgram = (service as any).program;
-    const originalConfirm = (service as any).confirmTransaction;
-    const winner = Keypair.generate().publicKey;
-    const creator = Keypair.generate().publicKey;
-    const programId = Keypair.generate().publicKey;
-    const tokenMint = Keypair.generate().publicKey;
-    const calls: { accounts?: any; signers?: any[]; confirmed?: string } = {};
+    const result = await runExecuteGameCompletionScenario();
 
-    (service as any).program = {
-      programId,
-      methods: {
-        completeGame: (_rand: number[], _secret: number[], winnerIndex: number) => {
-          expect(winnerIndex).toBe(5);
-          return {
-            accountsPartial: (accs: any) => {
-              calls.accounts = accs;
-              return {
-                signers: (signers: any[]) => {
-                  calls.signers = signers;
-                  return {
-                    rpc: async () => "tx-abc",
-                  };
-                },
-              };
-            },
-          };
-        },
-      },
-    };
+    expect(result.tx).toBe("tx-abc");
+    expect(result.calls.accounts?.winner.toBase58()).toBe(result.winner.toBase58());
+    expect(result.calls.accounts?.creator.toBase58()).toBe(result.creator.toBase58());
+    expect(result.calls.accounts?.oracleOperator.toBase58()).toBe(result.oracleOperator.toBase58());
+    expect(result.calls.accounts?.game.toBase58()).toBe(result.expectedGamePda.toBase58());
+    expect(result.calls.accounts?.tokenMint.toBase58()).toBe(result.tokenMint.toBase58());
+    expect(result.calls.accounts?.oracle.toBase58()).toBe(result.expectedOraclePda.toBase58());
+    expect(result.calls.accounts?.gameToken.toBase58()).toBe(result.expectedGameTokenPda.toBase58());
+    expect(result.calls.accounts?.gameVault.toBase58()).toBe(result.expectedGameVaultPda.toBase58());
+    expect(result.calls.accounts?.tokenProgram.toBase58()).toBe(
+      result.expectedTokenProgram.toBase58(),
+    );
+    expect(result.calls.accounts?.associatedTokenProgram.toBase58()).toBe(
+      ASSOCIATED_TOKEN_PROGRAM_ID.toBase58(),
+    );
+    expect(result.calls.accounts?.winnerTokenAccount.toBase58()).toBe(
+      result.expectedWinnerAta.toBase58(),
+    );
+    expect(result.calls.accounts?.gameTokenAccount.toBase58()).toBe(result.expectedGameAta.toBase58());
+    expect(result.calls.accounts?.systemProgram.toBase58()).toBe(
+      anchor.web3.SystemProgram.programId.toBase58(),
+    );
+    expect(result.calls.signers).toEqual([result.adminKeypair]);
+    expect(result.calls.confirmed).toBe("tx-abc");
+  });
 
-    (service as any).confirmTransaction = async (sig: string) => {
-      calls.confirmed = sig;
-    };
+  it("executeGameCompletion derives Token-2022 accounts when provided", async () => {
+    const result = await runExecuteGameCompletionScenario({ tokenProgram: TOKEN_2022_PROGRAM_ID });
 
-    const randomHashBuffer = Buffer.alloc(32, 1);
-    const secretKeyBuffer = Buffer.alloc(32, 2);
-
-    try {
-      const tx = await (service as any).executeGameCompletion({
-        gameAccount: { creator: creator.toBase58(), tokenMint: tokenMint.toBase58() },
-        winnerAddress: winner,
-        randomHashBuffer,
-        secretKeyBuffer,
-        winnerIndex: 5,
-      });
-
-      expect(tx).toBe("tx-abc");
-      expect(calls.accounts?.winner.toBase58()).toBe(winner.toBase58());
-      expect(calls.accounts?.creator.toBase58()).toBe(creator.toBase58());
-      expect(calls.accounts?.oracleOperator.toBase58()).toBe((service as any).adminKeypair.publicKey.toBase58());
-      const expectedGamePda = (service as any).getGamePDA(randomHashBuffer);
-      const [expectedOraclePda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("oracle", "utf8")],
-        programId,
-      );
-      const [expectedGameTokenPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("game_token", "utf8"), tokenMint.toBuffer()],
-        programId,
-      );
-      const [expectedGameVaultPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("game_vault", "utf8"), tokenMint.toBuffer()],
-        programId,
-      );
-      const expectedWinnerAta = getAssociatedTokenAddressSync(
-        tokenMint,
-        winner,
-        false,
-        TOKEN_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID,
-      );
-      const expectedGameAta = getAssociatedTokenAddressSync(
-        tokenMint,
-        expectedGameVaultPda,
-        true,
-        TOKEN_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID,
-      );
-
-      expect(calls.accounts?.game.toBase58()).toBe(expectedGamePda.toBase58());
-      expect(calls.accounts?.tokenMint.toBase58()).toBe(tokenMint.toBase58());
-      expect(calls.accounts?.oracle.toBase58()).toBe(expectedOraclePda.toBase58());
-      expect(calls.accounts?.gameToken.toBase58()).toBe(expectedGameTokenPda.toBase58());
-      expect(calls.accounts?.gameVault.toBase58()).toBe(expectedGameVaultPda.toBase58());
-      expect(calls.accounts?.tokenProgram.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
-      expect(calls.accounts?.associatedTokenProgram.toBase58()).toBe(
-        ASSOCIATED_TOKEN_PROGRAM_ID.toBase58(),
-      );
-      expect(calls.accounts?.winnerTokenAccount.toBase58()).toBe(expectedWinnerAta.toBase58());
-      expect(calls.accounts?.gameTokenAccount.toBase58()).toBe(expectedGameAta.toBase58());
-      expect(calls.accounts?.systemProgram.toBase58()).toBe(
-        anchor.web3.SystemProgram.programId.toBase58(),
-      );
-      expect(calls.signers).toEqual([(service as any).adminKeypair]);
-      expect(calls.confirmed).toBe("tx-abc");
-    } finally {
-      (service as any).program = originalProgram;
-      (service as any).confirmTransaction = originalConfirm;
-    }
+    expect(result.tx).toBe("tx-abc");
+    expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_2022_PROGRAM_ID.toBase58());
+    expect(result.calls.accounts?.tokenProgram.toBase58()).toBe(
+      TOKEN_2022_PROGRAM_ID.toBase58(),
+    );
+    expect(result.calls.accounts?.winnerTokenAccount.toBase58()).toBe(
+      result.expectedWinnerAta.toBase58(),
+    );
+    expect(result.calls.accounts?.gameTokenAccount.toBase58()).toBe(
+      result.expectedGameAta.toBase58(),
+    );
   });
 
   it("confirmTransaction forwards latest blockhash params", async () => {
