@@ -36,10 +36,12 @@ afterAll(() => {
 
 async function runExecuteGameCompletionScenario({
   tokenProgram,
-}: { tokenProgram?: PublicKey | string | null } = {}) {
+  mintOwner,
+}: { tokenProgram?: PublicKey | string | null; mintOwner?: PublicKey } = {}) {
   const service = OracleService.createWith(OracleDatabase.getInstance());
   const originalProgram = (service as any).program;
   const originalConfirm = (service as any).confirmTransaction;
+  const originalConnection = (service as any).connection;
   const adminKeypair = (service as any).adminKeypair;
   const winner = Keypair.generate().publicKey;
   const creator = Keypair.generate().publicKey;
@@ -48,23 +50,26 @@ async function runExecuteGameCompletionScenario({
   const randomHashBuffer = Buffer.alloc(32, 1);
   const secretKeyBuffer = Buffer.alloc(32, 2);
   const calls: { accounts?: any; signers?: any[]; confirmed?: string } = {};
-  let expectedTokenProgram: PublicKey;
+  let directProgram: PublicKey | null = null;
 
   if (tokenProgram instanceof PublicKey) {
-    expectedTokenProgram = tokenProgram;
+    directProgram = tokenProgram;
   } else if (typeof tokenProgram === "string") {
-    expectedTokenProgram = new PublicKey(tokenProgram);
+    directProgram = new PublicKey(tokenProgram);
   } else if (tokenProgram) {
-    expectedTokenProgram = new PublicKey(tokenProgram);
-  } else {
-    expectedTokenProgram = TOKEN_PROGRAM_ID;
+    directProgram = new PublicKey(tokenProgram);
   }
 
-  if (expectedTokenProgram.equals(PublicKey.default)) {
-    expectedTokenProgram = TOKEN_PROGRAM_ID;
+  if (directProgram?.equals(PublicKey.default)) {
+    directProgram = null;
   }
 
-  const tokenProgramId = expectedTokenProgram;
+  const inferredMintOwner = mintOwner ?? TOKEN_PROGRAM_ID;
+  const tokenProgramId = directProgram ?? inferredMintOwner;
+
+  (service as any).connection = {
+    getAccountInfo: async (_pubkey: PublicKey) => ({ owner: inferredMintOwner }),
+  };
 
   (service as any).program = {
     programId,
@@ -114,6 +119,7 @@ async function runExecuteGameCompletionScenario({
   } finally {
     (service as any).program = originalProgram;
     (service as any).confirmTransaction = originalConfirm;
+    (service as any).connection = originalConnection;
   }
 
   const [expectedGamePda] = PublicKey.findProgramAddressSync(
@@ -699,6 +705,22 @@ describe("OracleService internals", () => {
 
   it("executeGameCompletion derives Token-2022 accounts when provided", async () => {
     const result = await runExecuteGameCompletionScenario({ tokenProgram: TOKEN_2022_PROGRAM_ID });
+
+    expect(result.tx).toBe("tx-abc");
+    expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_2022_PROGRAM_ID.toBase58());
+    expect(result.calls.accounts?.tokenProgram.toBase58()).toBe(
+      TOKEN_2022_PROGRAM_ID.toBase58(),
+    );
+    expect(result.calls.accounts?.winnerTokenAccount.toBase58()).toBe(
+      result.expectedWinnerAta.toBase58(),
+    );
+    expect(result.calls.accounts?.gameTokenAccount.toBase58()).toBe(
+      result.expectedGameAta.toBase58(),
+    );
+  });
+
+  it("executeGameCompletion infers Token-2022 accounts from mint owner", async () => {
+    const result = await runExecuteGameCompletionScenario({ mintOwner: TOKEN_2022_PROGRAM_ID });
 
     expect(result.tx).toBe("tx-abc");
     expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_2022_PROGRAM_ID.toBase58());

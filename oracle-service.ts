@@ -2,6 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { randomBytes, createHash } from "crypto";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
@@ -446,7 +447,10 @@ export class OracleService {
     const creatorPublicKey = new anchor.web3.PublicKey(gameAccount.creator);
     const gamePda = this.getGamePDA(randomHashBuffer);
     const tokenMint = new anchor.web3.PublicKey(gameAccount.tokenMint);
-    const tokenProgramId = this.resolveTokenProgram(gameAccount.tokenProgram);
+    const tokenProgramId = await this.resolveTokenProgram(
+      gameAccount.tokenProgram,
+      tokenMint
+    );
     const [oraclePda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("oracle", "utf8")],
       this.program.programId
@@ -498,28 +502,87 @@ export class OracleService {
     return txHash;
   }
 
-  private resolveTokenProgram(
-    tokenProgram?: anchor.web3.PublicKey | string | null
-  ): anchor.web3.PublicKey {
-    if (!tokenProgram) {
-      return TOKEN_PROGRAM_ID;
+  private async resolveTokenProgram(
+    tokenProgram: anchor.web3.PublicKey | string | null | undefined,
+    tokenMint: anchor.web3.PublicKey
+  ): Promise<anchor.web3.PublicKey> {
+    const directProgram = this.coercePublicKey(tokenProgram);
+
+    if (directProgram && !directProgram.equals(anchor.web3.PublicKey.default)) {
+      if (directProgram.equals(TOKEN_PROGRAM_ID)) {
+        return TOKEN_PROGRAM_ID;
+      }
+
+      if (directProgram.equals(TOKEN_2022_PROGRAM_ID)) {
+        return TOKEN_2022_PROGRAM_ID;
+      }
+
+      return directProgram;
     }
 
-    let resolvedProgram: anchor.web3.PublicKey;
+    try {
+      const mintAccount = await this.connection.getAccountInfo(tokenMint);
+      const owner = mintAccount?.owner;
 
-    if (tokenProgram instanceof anchor.web3.PublicKey) {
-      resolvedProgram = tokenProgram;
-    } else if (typeof tokenProgram === "string") {
-      resolvedProgram = new anchor.web3.PublicKey(tokenProgram);
-    } else {
-      resolvedProgram = new anchor.web3.PublicKey(tokenProgram as any);
+      if (owner?.equals(TOKEN_2022_PROGRAM_ID)) {
+        return TOKEN_2022_PROGRAM_ID;
+      }
+
+      if (owner?.equals(TOKEN_PROGRAM_ID)) {
+        return TOKEN_PROGRAM_ID;
+      }
+    } catch (error) {
+      console.warn(
+        `⚠️  Unable to resolve token program for mint ${tokenMint.toBase58()}:`,
+        error instanceof Error ? error.message : error
+      );
     }
 
-    if (resolvedProgram.equals(anchor.web3.PublicKey.default)) {
-      return TOKEN_PROGRAM_ID;
+    return TOKEN_PROGRAM_ID;
+  }
+
+  private coercePublicKey(
+    value: anchor.web3.PublicKey | string | { [key: string]: any } | null | undefined
+  ): anchor.web3.PublicKey | null {
+    if (!value) {
+      return null;
     }
 
-    return resolvedProgram;
+    if (value instanceof anchor.web3.PublicKey) {
+      return value;
+    }
+
+    if (typeof value === "string") {
+      try {
+        return new anchor.web3.PublicKey(value);
+      } catch {
+        return null;
+      }
+    }
+
+    if (typeof value === "object") {
+      if (typeof (value as any).toBase58 === "function") {
+        try {
+          return new anchor.web3.PublicKey((value as any).toBase58());
+        } catch {
+          return null;
+        }
+      }
+
+      if ("value" in (value as any)) {
+        return this.coercePublicKey((value as any).value);
+      }
+
+      if ("some" in (value as any)) {
+        return this.coercePublicKey((value as any).some);
+      }
+    }
+
+    try {
+      return new anchor.web3.PublicKey(value as any);
+    } catch {
+      return null;
+    }
   }
 
   private calculateWinnerIndex(
