@@ -1,8 +1,6 @@
 import { createTempDatabaseFile, type TempDatabaseFile } from "./test-db.ts";
 
-type SingletonModule = {
-  instance?: { close?: () => void } | undefined;
-};
+type SingletonModule = { [key: string]: unknown } | Function;
 
 type SetupOptions = {
   prefix?: string;
@@ -21,7 +19,11 @@ function resetSingleton(singleton: SingletonModule) {
     return;
   }
 
-  const instance = singleton.instance as { close?: () => void } | undefined;
+  const target = singleton as {
+    instance?: { close?: () => void } | undefined;
+  };
+
+  const { instance } = target;
   if (instance && typeof instance.close === "function") {
     try {
       instance.close();
@@ -30,8 +32,8 @@ function resetSingleton(singleton: SingletonModule) {
     }
   }
 
-  if ("instance" in singleton) {
-    (singleton as { instance?: unknown }).instance = undefined;
+  if ("instance" in target) {
+    target.instance = undefined;
   }
 }
 
@@ -42,12 +44,12 @@ export function setupTestEnvironment(options: SetupOptions = {}): SetupResult {
   const originalEnv = new Map<string, string | undefined>();
   let cleanedUp = false;
 
-  const nodeEnv = additionalEnv.NODE_ENV ?? "test";
-  delete additionalEnv.NODE_ENV;
+  const nodeEnv = additionalEnv["NODE_ENV"] ?? "test";
+  delete additionalEnv["NODE_ENV"];
 
   const solanaNetwork =
-    additionalEnv.SOLANA_NETWORK ?? process.env["SOLANA_NETWORK"] ?? "http://localhost";
-  delete additionalEnv.SOLANA_NETWORK;
+    additionalEnv["SOLANA_NETWORK"] ?? process.env["SOLANA_NETWORK"] ?? "http://localhost";
+  delete additionalEnv["SOLANA_NETWORK"];
 
   const envUpdates: Record<string, string | undefined> = {
     NODE_ENV: nodeEnv,

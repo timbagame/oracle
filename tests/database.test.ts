@@ -2,8 +2,6 @@ import { beforeAll, afterAll, beforeEach, describe, expect, it } from "bun:test"
 import { rmSync } from "fs";
 import { setupTestEnvironment } from "./helpers/setup-env.ts";
 
-type OracleDatabaseInstance = import("../database.ts").OracleDatabase;
-
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
 let testEnv: ReturnType<typeof setupTestEnvironment>;
 
