@@ -425,7 +425,7 @@ export class OracleService {
         return { success: false, notReady: true };
       }
 
-      const { secretData, randomHashBuffer, gamePda } = context;
+      const { secretData, randomHashBuffer } = context;
       const gameAccount = readiness.gameAccount;
       const players = this.db.getGamePlayers(gameAddress);
       const nEntries = Number(gameAccount.ticketsCount);
