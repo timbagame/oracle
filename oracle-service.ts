@@ -829,19 +829,6 @@ export class OracleService {
     return pda;
   }
 
-  private getGamePDAFromAddress(
-    gameAddress: string,
-    secretData?: { secretKey: string; randomHash: string }
-  ): PublicKey {
-    if (secretData) {
-      const randomHash = Buffer.from(secretData.randomHash, "hex");
-      return this.getGamePDA(randomHash);
-    }
-
-    const resolved = this.resolveStoredGame(gameAddress, { throwIfMissing: true });
-    return resolved.gamePda;
-  }
-
   private async evaluateGameReadiness(
     gamePda: PublicKey,
     gameAddress: string
