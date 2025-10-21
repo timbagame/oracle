@@ -1,38 +1,26 @@
 import { expect, test, beforeAll, afterAll } from "bun:test";
-import { createTempDatabaseFile, type TempDatabaseFile } from "./helpers/test-db.ts";
+import { setupTestEnvironment } from "./helpers/setup-env.ts";
 import { createBasicOracle } from "./helpers/fake-oracle.ts";
 
 let buildHandlers: typeof import("../index.ts").buildHandlers;
 let OracleDatabaseClass: typeof import("../database.ts").OracleDatabase;
 let OracleServiceClass: typeof import("../oracle-service.ts").OracleService;
-let tempDb: TempDatabaseFile;
+let testEnv: ReturnType<typeof setupTestEnvironment>;
 
 // Ensure an RPC URL is set for OracleService dependencies used by handlers
 beforeAll(async () => {
-  process.env["NODE_ENV"] = "test";
-  process.env["SOLANA_NETWORK"] = process.env["SOLANA_NETWORK"] || "http://localhost";
-  tempDb = createTempDatabaseFile("routes-test");
-  process.env["DATABASE_FILE"] = tempDb.path;
-
+  testEnv = setupTestEnvironment({ prefix: "routes-test" });
   ({ buildHandlers } = await import("../index.ts"));
   ({ OracleDatabase: OracleDatabaseClass } = await import("../database.ts"));
   ({ OracleService: OracleServiceClass } = await import("../oracle-service.ts"));
-  // Reset DB singleton to ensure isolated file
-  (OracleDatabaseClass as any).instance = undefined;
-  (OracleServiceClass as any).instance = undefined;
+
+  testEnv.registerSingleton(OracleDatabaseClass);
+  testEnv.registerSingleton(OracleServiceClass);
 
 });
 
 afterAll(() => {
-  try {
-    OracleDatabaseClass.getInstance().close();
-  } catch {
-    // ignore
-  }
-  (OracleDatabaseClass as any).instance = undefined;
-  (OracleServiceClass as any).instance = undefined;
-  tempDb.cleanup();
-  delete process.env["DATABASE_FILE"];
+  testEnv.cleanup();
 });
 
 test("GET / returns API HTML and unknown endpoints 404", async () => {

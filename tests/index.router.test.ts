@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { createTempDatabaseFile, type TempDatabaseFile } from "./helpers/test-db.ts";
+import { setupTestEnvironment } from "./helpers/setup-env.ts";
 import { createBasicOracle, createBasicStats } from "./helpers/fake-oracle.ts";
 
 type BuildHandlers = typeof import("../index.ts").buildHandlers;
@@ -9,14 +9,11 @@ let buildHandlers: BuildHandlers;
 let buildFetchRouter: BuildFetchRouter;
 let handlers: ReturnType<BuildHandlers>;
 let router: ReturnType<BuildFetchRouter>;
-let tempDb: TempDatabaseFile;
+let testEnv: ReturnType<typeof setupTestEnvironment>;
 
 describe("index router", () => {
   beforeAll(async () => {
-    process.env["NODE_ENV"] = "test";
-    tempDb = createTempDatabaseFile("index-router");
-    process.env["DATABASE_FILE"] = tempDb.path;
-
+    testEnv = setupTestEnvironment({ prefix: "index-router" });
     ({ buildHandlers, buildFetchRouter } = await import("../index.ts"));
     handlers = buildHandlers(
       createBasicOracle({
@@ -33,8 +30,7 @@ describe("index router", () => {
   });
 
   afterAll(() => {
-    tempDb.cleanup();
-    delete process.env["DATABASE_FILE"];
+    testEnv.cleanup();
   });
 
   test("OPTIONS preflight returns CORS headers", async () => {

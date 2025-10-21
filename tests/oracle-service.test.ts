@@ -1,30 +1,21 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
-import { createTempDatabaseFile, type TempDatabaseFile } from "./helpers/test-db.ts";
+import { setupTestEnvironment } from "./helpers/setup-env.ts";
 import { Keypair } from "@solana/web3.js";
 
 let OracleService: typeof import("../oracle-service.ts").OracleService;
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
-let tempDb: TempDatabaseFile;
+let testEnv: ReturnType<typeof setupTestEnvironment>;
 
 beforeAll(async () => {
-  process.env["NODE_ENV"] = "test";
-  process.env["SOLANA_NETWORK"] = "http://localhost";
-  tempDb = createTempDatabaseFile("oracle-service-test");
-  process.env["DATABASE_FILE"] = tempDb.path;
-
+  testEnv = setupTestEnvironment({ prefix: "oracle-service-test" });
   ({ OracleService } = await import("../oracle-service.ts"));
   ({ OracleDatabase } = await import("../database.ts"));
-  (OracleService as any).instance = undefined;
-  (OracleDatabase as any).instance = undefined;
+  testEnv.registerSingleton(OracleService);
+  testEnv.registerSingleton(OracleDatabase);
 });
 
 afterAll(() => {
-  const db = OracleDatabase.getInstance();
-  db.close();
-  tempDb.cleanup();
-  delete process.env["DATABASE_FILE"];
-  (OracleService as any).instance = undefined;
-  (OracleDatabase as any).instance = undefined;
+  testEnv.cleanup();
 });
 
 describe("OracleService", () => {
