@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
-import type { OracleApi } from "../index.ts";
 import { createTempDatabaseFile, type TempDatabaseFile } from "./helpers/test-db.ts";
+import { createBasicOracle } from "./helpers/fake-oracle.ts";
 
 let buildHandlers: typeof import("../index.ts").buildHandlers;
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
@@ -29,7 +29,7 @@ afterAll(() => {
 
 describe("API handlers", () => {
   it("returns health status", async () => {
-    const { handleHealth } = buildHandlers(newFakeOracle());
+    const { handleHealth } = buildHandlers(createBasicOracle());
     const res = await handleHealth();
     expect(res.status).toBe(200);
     const data = (await res.json()) as { status: string };
@@ -37,7 +37,7 @@ describe("API handlers", () => {
   });
 
   it("generates game secrets", async () => {
-    const { handleGenerateHash } = buildHandlers(newFakeOracle());
+    const { handleGenerateHash } = buildHandlers(createBasicOracle());
     const res = await handleGenerateHash();
     expect(res.status).toBe(200);
     const data = (await res.json()) as {
@@ -51,7 +51,7 @@ describe("API handlers", () => {
   });
 
   it("provides stats", async () => {
-    const { handleStats } = buildHandlers(newFakeOracle());
+    const { handleStats } = buildHandlers(createBasicOracle());
     const res = await handleStats();
     expect(res.status).toBe(200);
     const data = (await res.json()) as { success: boolean; stats: unknown };
@@ -60,37 +60,19 @@ describe("API handlers", () => {
   });
 
   it("handles generate hash errors", async () => {
-    const { handleGenerateHash } = buildHandlers({
-      ...newFakeOracle(),
-      generateGameSecrets: () => {
-        throw new Error("boom");
-      },
-    });
+    const { handleGenerateHash } = buildHandlers(
+      createBasicOracle({
+        generateGameSecrets: () => {
+          throw new Error("boom");
+        },
+      })
+    );
     const res = await handleGenerateHash();
     expect(res.status).toBe(500);
     const data = (await res.json()) as { success: boolean };
     expect(data.success).toBe(false);
   });
 });
-
-function newFakeOracle(): OracleApi {
-  return {
-    generateGameSecrets: () => ({ randomHash: "abcd", gameAddress: "game-1" }),
-    getStats: () => ({
-      totalSecrets: 0,
-      usedSecrets: 0,
-      pendingGames: 0,
-      completedGames: 0,
-      cancelledGames: 0,
-      eventListening: false,
-      activeListeners: 0,
-    }),
-    scanAndCompleteActiveGames: async () => ({ completed: 0, errors: 0, notReady: 0 }),
-    startEventListening: async () => {},
-    stopEventListening: async () => {},
-    cleanupOldRecords: () => ({ deletedSecrets: 0, deletedGames: 0 }),
-  } as any;
-}
 
 describe("OracleDatabase", () => {
   it("stores and retrieves secret keys", () => {

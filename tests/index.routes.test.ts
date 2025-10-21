@@ -1,5 +1,6 @@
 import { expect, test, beforeAll, afterAll } from "bun:test";
 import { createTempDatabaseFile, type TempDatabaseFile } from "./helpers/test-db.ts";
+import { createBasicOracle } from "./helpers/fake-oracle.ts";
 
 let buildHandlers: typeof import("../index.ts").buildHandlers;
 let OracleDatabaseClass: typeof import("../database.ts").OracleDatabase;
@@ -35,22 +36,11 @@ afterAll(() => {
 });
 
 test("GET / returns API HTML and unknown endpoints 404", async () => {
-  const { handleHealth, handleStats } = buildHandlers({
-    generateGameSecrets: () => ({ randomHash: "abcd", gameAddress: "addr" }),
-    getStats: () => ({
-      totalSecrets: 0,
-      usedSecrets: 0,
-      pendingGames: 0,
-      completedGames: 0,
-      cancelledGames: 0,
-      eventListening: false,
-      activeListeners: 0,
-    }),
-    scanAndCompleteActiveGames: async () => ({ completed: 0, errors: 0, notReady: 0 }),
-    startEventListening: async () => {},
-    stopEventListening: async () => {},
-    cleanupOldRecords: () => ({ deletedSecrets: 0, deletedGames: 0 }),
-  } as any);
+  const { handleHealth, handleStats } = buildHandlers(
+    createBasicOracle({
+      generateGameSecrets: () => ({ randomHash: "abcd", gameAddress: "addr" }),
+    })
+  );
 
   const htmlRes = new Response("<!DOCTYPE html><title>Oracle API Documentation</title>");
   const health = await handleHealth();
