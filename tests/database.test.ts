@@ -48,6 +48,8 @@ describe("OracleDatabase", () => {
     });
     expect(db.getGameType("game-lifecycle")).toBe("raffle");
 
+    expect(db.getStats().usedSecrets).toBe(0);
+
     db.markSecretKeyUsed("game-lifecycle");
     expect(db.getSecretKey("game-lifecycle")).toBeNull();
 
@@ -101,13 +103,17 @@ describe("OracleDatabase", () => {
     const db = OracleDatabase.getInstance();
 
     db.addPlayerToGame("game-players", "player-one", 0);
-    db.addPlayerToGame("game-players", "player-two", 1);
-    db.addPlayerToGame("game-players", "player-two", 1);
+    db.addPlayerToGame("game-players", "player-one", 1);
+    db.addPlayerToGame("game-players", "player-two", 2);
 
-    expect(db.getGamePlayers("game-players")).toEqual(["player-one", "player-two"]);
+    expect(db.getGamePlayers("game-players")).toEqual([
+      "player-one",
+      "player-one",
+      "player-two",
+    ]);
 
     db.removePlayerFromGame("game-players", 0);
-    expect(db.getGamePlayers("game-players")).toEqual(["player-two"]);
+    expect(db.getGamePlayers("game-players")).toEqual(["player-one", "player-two"]);
 
     db.clearStalePlayersForGame("game-players");
     expect(db.getGamePlayers("game-players")).toEqual([]);
@@ -124,7 +130,9 @@ describe("OracleDatabase", () => {
     expect(db.getConnectionInfo().isOpen).toBe(false);
 
     const reopened = OracleDatabase.getInstance();
+    expect(reopened).not.toBe(db);
     expect(reopened.getConnectionInfo().isOpen).toBe(true);
+    expect(reopened.getConnectionInfo().file).toBe(testEnv.tempDb.path);
   });
 
   it("falls back to safe defaults when sqlite operations fail", () => {
