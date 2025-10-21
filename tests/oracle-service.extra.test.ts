@@ -1,6 +1,7 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
 import { createTestEnv } from "./helpers/create-test-env.ts";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
+import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import * as anchor from "@coral-xyz/anchor";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import {
@@ -283,12 +284,18 @@ describe("OracleService internals", () => {
   it("completeGame success path marks DB and returns tx hash", async () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();
-    service.cleanupOldRecords(-1);
     const gameAddr = "ok-game";
-    db.saveSecretKey(gameAddr, "a".repeat(64), "b".repeat(64));
-    db.trackGame(gameAddr);
-    db.addPlayerToGame(gameAddr, Keypair.generate().publicKey.toBase58(), 0);
-    db.addPlayerToGame(gameAddr, Keypair.generate().publicKey.toBase58(), 1);
+    const players = [
+      { address: Keypair.generate().publicKey.toBase58(), ticketIndex: 0 },
+      { address: Keypair.generate().publicKey.toBase58(), ticketIndex: 1 },
+    ];
+    seedTrackedGame(db, {
+      service,
+      address: gameAddr,
+      secret: "a".repeat(64),
+      randomHash: "b".repeat(64),
+      players,
+    });
     (service as any).isGameReadyForCompletion = async () => true;
     (service as any).program = {
       programId: Keypair.generate().publicKey,
@@ -306,12 +313,16 @@ describe("OracleService internals", () => {
   it("completeGame aborts when ticket registry is out of sync", async () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();
-    service.cleanupOldRecords(-1);
-
     const gameAddr = "mismatch-game";
-    db.saveSecretKey(gameAddr, "a".repeat(64), "c".repeat(64));
-    db.trackGame(gameAddr);
-    db.addPlayerToGame(gameAddr, Keypair.generate().publicKey.toBase58(), 0);
+    seedTrackedGame(db, {
+      service,
+      address: gameAddr,
+      secret: "a".repeat(64),
+      randomHash: "c".repeat(64),
+      players: [
+        { address: Keypair.generate().publicKey.toBase58(), ticketIndex: 0 },
+      ],
+    });
 
     (service as any).isGameReadyForCompletion = async () => true;
     (service as any).program = {
@@ -445,11 +456,13 @@ describe("OracleService internals", () => {
   it("completeGame increments attempts for validation failures", async () => {
     const service = OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();
-    service.cleanupOldRecords(-1);
-
     const gameAddr = "validation-failure-game";
-    db.saveSecretKey(gameAddr, "a".repeat(64), "b".repeat(64));
-    db.trackGame(gameAddr);
+    seedTrackedGame(db, {
+      service,
+      address: gameAddr,
+      secret: "a".repeat(64),
+      randomHash: "b".repeat(64),
+    });
 
     const originalReady = (service as any).isGameReadyForCompletion;
     const originalProgram = (service as any).program;
@@ -478,12 +491,16 @@ describe("OracleService internals", () => {
   it("completeGame increments attempts when execution fails", async () => {
     const service = OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();
-    service.cleanupOldRecords(-1);
-
     const gameAddr = "failing-game";
-    db.saveSecretKey(gameAddr, "a".repeat(64), "b".repeat(64));
-    db.trackGame(gameAddr);
-    db.addPlayerToGame(gameAddr, Keypair.generate().publicKey.toBase58(), 0);
+    seedTrackedGame(db, {
+      service,
+      address: gameAddr,
+      secret: "a".repeat(64),
+      randomHash: "b".repeat(64),
+      players: [
+        { address: Keypair.generate().publicKey.toBase58(), ticketIndex: 0 },
+      ],
+    });
 
     const originalReady = (service as any).isGameReadyForCompletion;
     const originalExecute = (service as any).executeGameCompletion;
@@ -517,8 +534,11 @@ describe("OracleService internals", () => {
     resetPendingGames(db, { service });
 
     const failingGame = "error-prone-game";
-    db.saveSecretKey(failingGame, "a".repeat(64), "b".repeat(64));
-    db.trackGame(failingGame);
+    seedTrackedGame(db, {
+      address: failingGame,
+      secret: "a".repeat(64),
+      randomHash: "b".repeat(64),
+    });
 
     const originalExists = (service as any).gameExistsOnChain;
     const originalComplete = (service as any).completeGame;
