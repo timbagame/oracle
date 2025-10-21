@@ -1,17 +1,18 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
-import { setupTestEnvironment } from "./helpers/setup-env.ts";
+import { createTestEnv } from "./helpers/create-test-env.ts";
 import { createBasicOracle } from "./helpers/fake-oracle.ts";
 
 let buildHandlers: typeof import("../index.ts").buildHandlers;
-let OracleService: typeof import("../oracle-service.ts").OracleService;
-let testEnv: ReturnType<typeof setupTestEnvironment>;
+let testEnv: Awaited<ReturnType<typeof createTestEnv>>;
 
 beforeAll(async () => {
-  testEnv = setupTestEnvironment({ prefix: "index-test" });
-  ({ OracleService } = await import("../oracle-service.ts"));
+  testEnv = await createTestEnv({
+    prefix: "index-test",
+    singletons: {
+      OracleService: async () => (await import("../oracle-service.ts")).OracleService,
+    },
+  });
   ({ buildHandlers } = await import("../index.ts"));
-
-  testEnv.registerSingleton(OracleService);
 });
 
 afterAll(() => {

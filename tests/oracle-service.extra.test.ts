@@ -1,5 +1,5 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
-import { setupTestEnvironment } from "./helpers/setup-env.ts";
+import { createTestEnv } from "./helpers/create-test-env.ts";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import * as anchor from "@coral-xyz/anchor";
 import { Keypair, PublicKey } from "@solana/web3.js";
@@ -12,14 +12,19 @@ import {
 
 let OracleService: typeof import("../oracle-service.ts").OracleService;
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
-let testEnv: ReturnType<typeof setupTestEnvironment>;
+let testEnv: Awaited<ReturnType<typeof createTestEnv>>;
 
 beforeAll(async () => {
-  testEnv = setupTestEnvironment({ prefix: "oracle-service-extra-test" });
-  ({ OracleService } = await import("../oracle-service.ts"));
-  ({ OracleDatabase } = await import("../database.ts"));
-  testEnv.registerSingleton(OracleService);
-  testEnv.registerSingleton(OracleDatabase);
+  const env = await createTestEnv({
+    prefix: "oracle-service-extra-test",
+    singletons: {
+      OracleService: async () => (await import("../oracle-service.ts")).OracleService,
+      OracleDatabase: async () => (await import("../database.ts")).OracleDatabase,
+    },
+  });
+
+  testEnv = env;
+  ({ OracleService, OracleDatabase } = env.singletons);
 });
 
 afterAll(() => {

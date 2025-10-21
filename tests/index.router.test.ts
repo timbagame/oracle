@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { setupTestEnvironment } from "./helpers/setup-env.ts";
+import { createTestEnv } from "./helpers/create-test-env.ts";
 import { createBasicOracle, createBasicStats } from "./helpers/fake-oracle.ts";
 
 type BuildHandlers = typeof import("../index.ts").buildHandlers;
@@ -9,11 +9,11 @@ let buildHandlers: BuildHandlers;
 let buildFetchRouter: BuildFetchRouter;
 let handlers: ReturnType<BuildHandlers>;
 let router: ReturnType<BuildFetchRouter>;
-let testEnv: ReturnType<typeof setupTestEnvironment>;
+let testEnv: Awaited<ReturnType<typeof createTestEnv>>;
 
 describe("index router", () => {
   beforeAll(async () => {
-    testEnv = setupTestEnvironment({ prefix: "index-router" });
+    testEnv = await createTestEnv({ prefix: "index-router" });
     ({ buildHandlers, buildFetchRouter } = await import("../index.ts"));
     handlers = buildHandlers(
       createBasicOracle({
