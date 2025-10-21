@@ -79,6 +79,7 @@ interface GameReadinessSnapshot {
 interface GameOnChainContext {
   gamePda: PublicKey;
   secretData: { secretKey: string; randomHash: string };
+  randomHashBuffer: Buffer;
   readiness?: GameReadinessSnapshot;
 }
 
@@ -370,14 +371,21 @@ export class OracleService {
     };
 
     try {
-      const secretData = sharedContext?.secretData ?? this.db.getSecretKey(gameAddress);
-      if (!secretData) {
+      const resolvedContext = sharedContext
+        ? {
+            secretData: sharedContext.secretData,
+            randomHashBuffer:
+              sharedContext.randomHashBuffer ??
+              Buffer.from(sharedContext.secretData.randomHash, "hex"),
+            gamePda: sharedContext.gamePda,
+          }
+        : this.resolveStoredGame(gameAddress);
+
+      if (!resolvedContext) {
         return recordFailure("No secret key found");
       }
 
-      const randomHashBuffer = Buffer.from(secretData.randomHash, "hex");
-      const gamePda =
-        sharedContext?.gamePda ?? this.getGamePDAFromAddress(gameAddress, secretData);
+      const { secretData, randomHashBuffer, gamePda } = resolvedContext;
 
       let readiness =
         cachedReadiness ?? sharedContext?.readiness ?? this.consumeReadiness(gameAddress);
@@ -746,15 +754,9 @@ export class OracleService {
   private async gameExistsOnChain(
     gameAddress: string
   ): Promise<GameOnChainContext | null> {
-    let secretData: { secretKey: string; randomHash: string };
-    let gamePda: PublicKey;
+    let resolved: ReturnType<OracleService["resolveStoredGame"]> = null;
     try {
-      const resolvedSecret = this.db.getSecretKey(gameAddress);
-      if (!resolvedSecret) {
-        throw new MissingSecretError(gameAddress);
-      }
-      secretData = resolvedSecret;
-      gamePda = this.getGamePDAFromAddress(gameAddress, resolvedSecret);
+      resolved = this.resolveStoredGame(gameAddress, { throwIfMissing: true });
     } catch (error: any) {
       if (error instanceof MissingSecretError) {
         console.log(`⚠️  No secret key found for game ${gameAddress}`);
@@ -763,13 +765,20 @@ export class OracleService {
       throw error;
     }
 
+    if (!resolved) {
+      console.log(`⚠️  No secret key found for game ${gameAddress}`);
+      return null;
+    }
+
+    const { gamePda, secretData, randomHashBuffer } = resolved;
+
     const readiness = await this.evaluateGameReadiness(gamePda, gameAddress);
     if (!readiness.gameAccount) {
       console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
       return null;
     }
 
-    return { gamePda, secretData, readiness };
+    return { gamePda, secretData, randomHashBuffer, readiness };
   }
 
   private updateScanStats(stats: CompletionStats, result: GameCompletionResult): void {
@@ -793,6 +802,24 @@ export class OracleService {
     }
   }
 
+  private resolveStoredGame(
+    gameAddress: string,
+    options: { throwIfMissing?: boolean } = {}
+  ): { secretData: { secretKey: string; randomHash: string }; randomHashBuffer: Buffer; gamePda: PublicKey } | null {
+    const secretData = this.db.getSecretKey(gameAddress);
+    if (!secretData) {
+      if (options.throwIfMissing) {
+        throw new MissingSecretError(gameAddress);
+      }
+      return null;
+    }
+
+    const randomHashBuffer = Buffer.from(secretData.randomHash, "hex");
+    const gamePda = this.getGamePDA(randomHashBuffer);
+
+    return { secretData, randomHashBuffer, gamePda };
+  }
+
   private getGamePDA(randomHash: Buffer): PublicKey {
     const programId = this.ensurePublicKey(this.program.programId);
     const [pda] = PublicKey.findProgramAddressSync(
@@ -806,14 +833,13 @@ export class OracleService {
     gameAddress: string,
     secretData?: { secretKey: string; randomHash: string }
   ): PublicKey {
-    // Since we can predict PDAs now, we can reverse engineer from the stored secret
-    const resolvedSecret =
-      secretData ?? this.db.getSecretKey(gameAddress);
-    if (!resolvedSecret) {
-      throw new MissingSecretError(gameAddress);
+    if (secretData) {
+      const randomHash = Buffer.from(secretData.randomHash, "hex");
+      return this.getGamePDA(randomHash);
     }
-    const randomHash = Buffer.from(resolvedSecret.randomHash, "hex");
-    return this.getGamePDA(randomHash);
+
+    const resolved = this.resolveStoredGame(gameAddress, { throwIfMissing: true });
+    return resolved.gamePda;
   }
 
   private async evaluateGameReadiness(
