@@ -10,6 +10,7 @@ import {
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
+import { createProgramStub } from "./helpers/program-stub.ts";
 
 let OracleService: typeof import("../oracle-service.ts").OracleService;
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
@@ -62,27 +63,31 @@ async function runExecuteGameCompletionScenario({
     getAccountInfo: async (_pubkey: PublicKey) => ({ owner: inferredMintOwner }),
   };
 
-  (service as any).program = {
+  const programStub = createProgramStub({
     programId,
-    methods: {
-      completeGame: (_rand: number[], _secret: number[], winnerIndex: number) => {
-        expect(winnerIndex).toBe(5);
-        return {
-          accountsPartial: (accs: any) => {
-            calls.accounts = accs;
-            return {
-              signers: (signers: any[]) => {
-                calls.signers = signers;
-                return {
-                  rpc: async () => "tx-abc",
-                };
-              },
-            };
-          },
-        };
+    overrides: {
+      methods: {
+        completeGame: (_rand: number[], _secret: number[], winnerIndex: number) => {
+          expect(winnerIndex).toBe(5);
+          return {
+            accountsPartial: (accs: any) => {
+              calls.accounts = accs;
+              return {
+                signers: (signers: any[]) => {
+                  calls.signers = signers;
+                  return {
+                    rpc: async () => "tx-abc",
+                  };
+                },
+              };
+            },
+          };
+        },
       },
     },
-  };
+  });
+
+  (service as any).program = programStub;
 
   (service as any).confirmTransaction = async (sig: string) => {
     calls.confirmed = sig;
@@ -168,17 +173,13 @@ describe("OracleService internals", () => {
     const db = OracleDatabase.getInstance();
     const addr = Keypair.generate().publicKey.toBase58();
     db.trackGame(addr);
-    (service as any).program = {
-      account: {
-        game: {
-          fetch: async () => {
-            const e: any = new Error("Account does not exist");
-            e.message = "Account does not exist";
-            throw e;
-          },
-        },
+    (service as any).program = createProgramStub({
+      fetchImpl: async () => {
+        const e: any = new Error("Account does not exist");
+        e.message = "Account does not exist";
+        throw e;
       },
-    };
+    });
     const res = await service.isGameReadyForCompletion(new PublicKey(addr));
     expect(res).toBe(false);
     // now pending list should not contain addr since marked completed
@@ -198,38 +199,30 @@ describe("OracleService internals", () => {
     };
 
     try {
-      (service as any).program = {
-        account: {
-          game: {
-            fetch: async () => ({
-              ticketsCount: 4,
-              maxTickets: 4,
-              minTickets: 1,
-              timeout: 60,
-              createdAt: now - 30,
-            }),
-          },
-        },
-      };
+      (service as any).program = createProgramStub({
+        fetchImpl: async () => ({
+          ticketsCount: 4,
+          maxTickets: 4,
+          minTickets: 1,
+          timeout: 60,
+          createdAt: now - 30,
+        }),
+      });
 
       const fullReady = await service.isGameReadyForCompletion(
         new PublicKey(Keypair.generate().publicKey.toBytes()),
       );
       expect(fullReady).toBe(true);
 
-      (service as any).program = {
-        account: {
-          game: {
-            fetch: async () => ({
-              ticketsCount: 2,
-              maxTickets: 10,
-              minTickets: 2,
-              timeout: 60,
-              createdAt: now - 120,
-            }),
-          },
-        },
-      };
+      (service as any).program = createProgramStub({
+        fetchImpl: async () => ({
+          ticketsCount: 2,
+          maxTickets: 10,
+          minTickets: 2,
+          timeout: 60,
+          createdAt: now - 120,
+        }),
+      });
 
       const expiredReady = await service.isGameReadyForCompletion(
         new PublicKey(Keypair.generate().publicKey.toBytes()),
@@ -253,10 +246,15 @@ describe("OracleService internals", () => {
     // not ready
     db.saveSecretKey("not-ready", "deadbeef", "bead");
     // ensure programId exists for PDA derivation inside completeGame
-    (service as any).program = {
+    (service as any).program = createProgramStub({
       programId: Keypair.generate().publicKey,
-      account: { game: { fetch: async () => ({ ticketsCount: 1, maxTickets: 10, minTickets: 1, lastSlot: 1 }) } },
-    };
+      fetchImpl: async () => ({
+        ticketsCount: 1,
+        maxTickets: 10,
+        minTickets: 1,
+        lastSlot: 1,
+      }),
+    });
     (service as any).isGameReadyForCompletion = async () => false;
     res = await service.completeGame("not-ready");
     expect(res.notReady).toBe(true);
@@ -265,10 +263,15 @@ describe("OracleService internals", () => {
     db.saveSecretKey("no-players", "deadbeef", "bead");
     (service as any).isGameReadyForCompletion = async () => true;
     // stub fetch to provide meta for winner calc
-    (service as any).program = {
+    (service as any).program = createProgramStub({
       programId: Keypair.generate().publicKey,
-      account: { game: { fetch: async () => ({ ticketsCount: 1, maxTickets: 10, minTickets: 1, lastSlot: 1 }) } },
-    };
+      fetchImpl: async () => ({
+        ticketsCount: 1,
+        maxTickets: 10,
+        minTickets: 1,
+        lastSlot: 1,
+      }),
+    });
     res = await service.completeGame("no-players");
     expect(res.success).toBe(false);
     expect(String(res.error || "")).toContain("No players");
@@ -290,10 +293,15 @@ describe("OracleService internals", () => {
       players,
     });
     (service as any).isGameReadyForCompletion = async () => true;
-    (service as any).program = {
+    (service as any).program = createProgramStub({
       programId: Keypair.generate().publicKey,
-      account: { game: { fetch: async () => ({ ticketsCount: 2, maxTickets: 2, minTickets: 1, lastSlot: 123 }) } },
-    };
+      fetchImpl: async () => ({
+        ticketsCount: 2,
+        maxTickets: 2,
+        minTickets: 1,
+        lastSlot: 123,
+      }),
+    });
     (service as any).executeGameCompletion = async () => "tx123";
 
     const res = await service.completeGame(gameAddr);
@@ -318,14 +326,15 @@ describe("OracleService internals", () => {
     });
 
     (service as any).isGameReadyForCompletion = async () => true;
-    (service as any).program = {
+    (service as any).program = createProgramStub({
       programId: Keypair.generate().publicKey,
-      account: {
-        game: {
-          fetch: async () => ({ ticketsCount: 2, maxTickets: 2, minTickets: 1, lastSlot: 456 }),
-        },
-      },
-    };
+      fetchImpl: async () => ({
+        ticketsCount: 2,
+        maxTickets: 2,
+        minTickets: 1,
+        lastSlot: 456,
+      }),
+    });
 
     const res = await service.completeGame(gameAddr);
     expect(res.success).toBe(false);
@@ -461,10 +470,15 @@ describe("OracleService internals", () => {
     const originalProgram = (service as any).program;
 
     (service as any).isGameReadyForCompletion = async () => true;
-    (service as any).program = {
+    (service as any).program = createProgramStub({
       programId: Keypair.generate().publicKey,
-      account: { game: { fetch: async () => ({ ticketsCount: 2, maxTickets: 2, minTickets: 1, lastSlot: 99 }) } },
-    };
+      fetchImpl: async () => ({
+        ticketsCount: 2,
+        maxTickets: 2,
+        minTickets: 1,
+        lastSlot: 99,
+      }),
+    });
 
     try {
       const result = await service.completeGame(gameAddr);
@@ -499,10 +513,15 @@ describe("OracleService internals", () => {
     const originalExecute = (service as any).executeGameCompletion;
     const originalProgram = (service as any).program;
     (service as any).isGameReadyForCompletion = async () => true;
-    (service as any).program = {
+    (service as any).program = createProgramStub({
       programId: Keypair.generate().publicKey,
-      account: { game: { fetch: async () => ({ ticketsCount: 1, maxTickets: 1, minTickets: 1, lastSlot: 1 }) } },
-    };
+      fetchImpl: async () => ({
+        ticketsCount: 1,
+        maxTickets: 1,
+        minTickets: 1,
+        lastSlot: 1,
+      }),
+    });
     (service as any).executeGameCompletion = async () => {
       throw new Error("rpc fail");
     };
