@@ -438,8 +438,7 @@ export class OracleService {
 
       return { success: true, txHash };
     } catch (error: any) {
-      this.db.incrementCompletionAttempts(gameAddress);
-      return { success: false, error: error.message };
+      return recordFailure(error instanceof Error ? error.message : String(error));
     }
   }
 
