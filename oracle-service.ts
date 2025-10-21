@@ -368,7 +368,8 @@ export class OracleService {
       }
 
       const randomHashBuffer = Buffer.from(secretData.randomHash, "hex");
-      const gamePda = sharedContext?.gamePda ?? this.getGamePDA(randomHashBuffer);
+      const gamePda =
+        sharedContext?.gamePda ?? this.getGamePDAFromAddress(gameAddress, secretData);
 
       let readiness =
         cachedReadiness ?? sharedContext?.readiness ?? this.consumeReadiness(gameAddress);
@@ -733,8 +734,7 @@ export class OracleService {
         throw new MissingSecretError(gameAddress);
       }
       secretData = resolvedSecret;
-      const randomHashBuffer = Buffer.from(resolvedSecret.randomHash, "hex");
-      gamePda = this.getGamePDA(randomHashBuffer);
+      gamePda = this.getGamePDAFromAddress(gameAddress, resolvedSecret);
     } catch (error: any) {
       if (error instanceof MissingSecretError) {
         console.log(`⚠️  No secret key found for game ${gameAddress}`);
@@ -781,13 +781,17 @@ export class OracleService {
     return pda;
   }
 
-  private getGamePDAFromAddress(gameAddress: string): anchor.web3.PublicKey {
+  private getGamePDAFromAddress(
+    gameAddress: string,
+    secretData?: { secretKey: string; randomHash: string }
+  ): anchor.web3.PublicKey {
     // Since we can predict PDAs now, we can reverse engineer from the stored secret
-    const secretData = this.db.getSecretKey(gameAddress);
-    if (!secretData) {
+    const resolvedSecret =
+      secretData ?? this.db.getSecretKey(gameAddress);
+    if (!resolvedSecret) {
       throw new MissingSecretError(gameAddress);
     }
-    const randomHash = Buffer.from(secretData.randomHash, "hex");
+    const randomHash = Buffer.from(resolvedSecret.randomHash, "hex");
     return this.getGamePDA(randomHash);
   }
 
