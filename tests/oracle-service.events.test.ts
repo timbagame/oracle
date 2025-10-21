@@ -27,11 +27,19 @@ describe("OracleService event handling", () => {
       "gameClosed",
     ]);
 
+    const statsWhileListening = service.getStats();
+    expect(statsWhileListening.eventListening).toBe(true);
+    expect(statsWhileListening.activeListeners).toBe(5);
+
     await service.startEventListening();
     expect(programStub.addCalls.length).toBe(5);
 
     await service.stopEventListening();
     expect(programStub.removeCalls).toEqual([1, 2, 3, 4, 5]);
+
+    const statsAfterStop = service.getStats();
+    expect(statsAfterStop.eventListening).toBe(false);
+    expect(statsAfterStop.activeListeners).toBe(0);
   });
 
   it("awaits asynchronous event listener registration", async () => {
