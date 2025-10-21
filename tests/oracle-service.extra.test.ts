@@ -524,7 +524,11 @@ describe("OracleService internals", () => {
     const originalComplete = (service as any).completeGame;
 
     let attempts = 0;
-    (service as any).gameExistsOnChain = async () => true;
+    (service as any).gameExistsOnChain = async () => ({
+      gamePda: Keypair.generate().publicKey,
+      secretData: { secretKey: "aa".repeat(32), randomHash: "bb".repeat(32) },
+      readiness: { ready: true, gameAccount: {} },
+    });
     (service as any).completeGame = async () => {
       attempts++;
       throw new Error("forced failure");

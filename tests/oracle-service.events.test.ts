@@ -198,7 +198,7 @@ describe("OracleService event handling", () => {
     const service = createService(db, programStub);
 
     const missing = await (service as any).gameExistsOnChain("no-secret");
-    expect(missing).toBe(false);
+    expect(missing).toBeNull();
     expect(programStub.fetchCalls).toHaveLength(0);
 
     const activeGame = "active-game";
@@ -208,9 +208,8 @@ describe("OracleService event handling", () => {
       programStub.fetchCalls.push(pda);
       return {};
     };
-
     const exists = await (service as any).gameExistsOnChain(activeGame);
-    expect(exists).toBe(true);
+    expect(exists?.gamePda).toBeInstanceOf(PublicKey);
     expect(programStub.fetchCalls).toHaveLength(1);
 
     const goneGame = "gone-game";
@@ -222,7 +221,7 @@ describe("OracleService event handling", () => {
     };
 
     const gone = await (service as any).gameExistsOnChain(goneGame);
-    expect(gone).toBe(false);
+    expect(gone).toBeNull();
     expect(programStub.fetchCalls).toHaveLength(2);
   });
 });
@@ -235,6 +234,7 @@ function createService(db: OracleDatabaseStub, programStub: ProgramStub): Oracle
   (service as any).isListening = false;
   (service as any).connection = null;
   (service as any).adminKeypair = Keypair.generate();
+  (service as any).getBlockchainTime = async () => Math.floor(Date.now() / 1000);
   return service;
 }
 
