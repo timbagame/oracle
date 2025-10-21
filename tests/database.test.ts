@@ -1,41 +1,28 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from "bun:test";
 import { rmSync } from "fs";
-import { createTempDatabaseFile, type TempDatabaseFile } from "./helpers/test-db.ts";
-
-type OracleDatabaseInstance = import("../database.ts").OracleDatabase;
+import { setupTestEnvironment } from "./helpers/setup-env.ts";
 
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
-let tempDb: TempDatabaseFile;
+let testEnv: ReturnType<typeof setupTestEnvironment>;
 
 const resetDatabase = () => {
-  if (!OracleDatabase) {
+  if (!testEnv || !OracleDatabase) {
     return;
   }
 
-  const existing = (OracleDatabase as any).instance as OracleDatabaseInstance | undefined;
-  if (existing) {
-    try {
-      existing.close();
-    } catch {
-      // ignore close errors in cleanup paths
-    }
-  }
+  testEnv.resetSingletons();
 
-  if (tempDb) {
-    try {
-      rmSync(tempDb.path, { force: true });
-    } catch {
-      // ignore missing file during cleanup
-    }
+  try {
+    rmSync(testEnv.tempDb.path, { force: true });
+  } catch {
+    // ignore missing file during cleanup
   }
-
-  (OracleDatabase as any).instance = undefined;
 };
 
 beforeAll(async () => {
-  tempDb = createTempDatabaseFile("oracle-database-test");
-  process.env["DATABASE_FILE"] = tempDb.path;
+  testEnv = setupTestEnvironment({ prefix: "oracle-database-test" });
   ({ OracleDatabase } = await import("../database.ts"));
+  testEnv.registerSingleton(OracleDatabase);
   resetDatabase();
 });
 
@@ -45,8 +32,7 @@ beforeEach(() => {
 
 afterAll(() => {
   resetDatabase();
-  delete process.env["DATABASE_FILE"];
-  tempDb.cleanup();
+  testEnv.cleanup();
 });
 
 describe("OracleDatabase", () => {
@@ -131,7 +117,7 @@ describe("OracleDatabase", () => {
     const db = OracleDatabase.getInstance();
 
     const info = db.getConnectionInfo();
-    expect(info.file).toBe(tempDb.path);
+    expect(info.file).toBe(testEnv.tempDb.path);
     expect(info.isOpen).toBe(true);
 
     db.close();

@@ -1,30 +1,24 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
-import { createTempDatabaseFile, type TempDatabaseFile } from "./helpers/test-db.ts";
+import { setupTestEnvironment } from "./helpers/setup-env.ts";
 import { createBasicOracle } from "./helpers/fake-oracle.ts";
 
 let buildHandlers: typeof import("../index.ts").buildHandlers;
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
 let OracleService: typeof import("../oracle-service.ts").OracleService;
-let tempDb: TempDatabaseFile;
+let testEnv: ReturnType<typeof setupTestEnvironment>;
 
 beforeAll(async () => {
-  process.env["NODE_ENV"] = "test";
-  process.env["SOLANA_NETWORK"] = "http://localhost";
-  tempDb = createTempDatabaseFile("index-test");
-  process.env["DATABASE_FILE"] = tempDb.path;
-
+  testEnv = setupTestEnvironment({ prefix: "index-test" });
   ({ OracleDatabase } = await import("../database.ts"));
   ({ OracleService } = await import("../oracle-service.ts"));
   ({ buildHandlers } = await import("../index.ts"));
+
+  testEnv.registerSingleton(OracleDatabase);
+  testEnv.registerSingleton(OracleService);
 });
 
 afterAll(() => {
-  const db = OracleDatabase.getInstance();
-  db.close();
-  tempDb.cleanup();
-  (OracleService as any).instance = undefined;
-  (OracleDatabase as any).instance = undefined;
-  delete process.env["DATABASE_FILE"];
+  testEnv.cleanup();
 });
 
 describe("API handlers", () => {
