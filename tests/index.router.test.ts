@@ -4,17 +4,21 @@ import { createBasicOracle, createBasicStats } from "./helpers/fake-oracle.ts";
 
 type BuildHandlers = typeof import("../index.ts").buildHandlers;
 type BuildFetchRouter = typeof import("../index.ts").buildFetchRouter;
+type RouteMetadata = typeof import("../index.ts").ROUTE_METADATA;
 
 let buildHandlers: BuildHandlers;
 let buildFetchRouter: BuildFetchRouter;
 let handlers: ReturnType<BuildHandlers>;
 let router: ReturnType<BuildFetchRouter>;
 let testEnv: Awaited<ReturnType<typeof createTestEnv>>;
+let routeMetadata: RouteMetadata = [] as RouteMetadata;
 
 describe("index router", () => {
   beforeAll(async () => {
     testEnv = await createTestEnv({ prefix: "index-router" });
-    ({ buildHandlers, buildFetchRouter } = await import("../index.ts"));
+    const indexModule = await import("../index.ts");
+    ({ buildHandlers, buildFetchRouter } = indexModule);
+    routeMetadata = indexModule.ROUTE_METADATA;
     handlers = buildHandlers(
       createBasicOracle({
         generateGameSecrets: () => ({ randomHash: "abc", gameAddress: "game123" }),
@@ -67,6 +71,13 @@ describe("index router", () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     expect(text).toContain("Oracle API Documentation");
+    for (const route of routeMetadata) {
+      expect(text).toContain(route.path);
+      expect(text).toContain(route.summary);
+      if (route.requestExample) {
+        expect(text).toContain(route.requestExample);
+      }
+    }
   });
 
   test("unknown route returns 404", async () => {
