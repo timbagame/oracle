@@ -69,6 +69,7 @@ describe("index router", () => {
   test("GET / returns HTML", async () => {
     const res = await router(new Request("http://localhost:3001/", { method: "GET" }));
     expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("text/html");
     const text = await res.text();
     expect(text).toContain("Oracle API Documentation");
     for (const route of routeMetadata) {
