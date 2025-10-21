@@ -1,5 +1,4 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
-import { createTestEnv } from "./helpers/create-test-env.ts";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import * as anchor from "@coral-xyz/anchor";
@@ -10,26 +9,20 @@ import {
   TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
+import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 
 let OracleService: typeof import("../oracle-service.ts").OracleService;
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
-let testEnv: Awaited<ReturnType<typeof createTestEnv>>;
+let cleanup: () => void;
 
 beforeAll(async () => {
-  const env = await createTestEnv({
-    prefix: "oracle-service-extra-test",
-    singletons: {
-      OracleService: async () => (await import("../oracle-service.ts")).OracleService,
-      OracleDatabase: async () => (await import("../database.ts")).OracleDatabase,
-    },
-  });
-
-  testEnv = env;
-  ({ OracleService, OracleDatabase } = env.singletons);
+  ({ OracleService, OracleDatabase, cleanup } = await setupOracleServiceEnv(
+    "oracle-service-extra-test",
+  ));
 });
 
 afterAll(() => {
-  testEnv.cleanup();
+  cleanup();
 });
 
 async function runExecuteGameCompletionScenario({
