@@ -50,6 +50,13 @@ interface GameCompletionResult {
   txHash?: string;
 }
 
+type PublicKeyLike =
+  | anchor.web3.PublicKey
+  | string
+  | { [key: string]: any }
+  | null
+  | undefined;
+
 interface GameSecrets {
   randomHash: string;
   gameAddress: string;
@@ -265,17 +272,8 @@ export class OracleService {
     playerAddress?: string;
     ticketIndex?: number;
   } {
-    const gameKey = event.gameKey;
-    const playerKey = event.player;
-
-    const resolvePubkey = (key: any): string | undefined => {
-      if (!key) return undefined;
-      if (typeof key === "string") return key;
-      if (key instanceof anchor.web3.PublicKey) return key.toBase58();
-      if (typeof key.toBase58 === "function") return key.toBase58();
-      if (typeof key.toString === "function") return key.toString();
-      return undefined;
-    };
+    const gameKey = event.gameKey as PublicKeyLike;
+    const playerKey = event.player as PublicKeyLike;
 
     const resolveIndex = (value: any): number | undefined => {
       if (value === undefined || value === null) return undefined;
@@ -290,8 +288,8 @@ export class OracleService {
     };
 
     return {
-      gameAddress: resolvePubkey(gameKey) ?? "",
-      playerAddress: resolvePubkey(playerKey),
+      gameAddress: this.toBase58(gameKey) ?? "",
+      playerAddress: this.toBase58(playerKey),
       ticketIndex: resolveIndex(event.ticketIndex ?? event.ticket_index),
     };
   }
@@ -541,9 +539,25 @@ export class OracleService {
     return TOKEN_PROGRAM_ID;
   }
 
-  private coercePublicKey(
-    value: anchor.web3.PublicKey | string | { [key: string]: any } | null | undefined
-  ): anchor.web3.PublicKey | null {
+  private toBase58(value: PublicKeyLike): string | undefined {
+    const key = this.coercePublicKey(value);
+    if (key) {
+      return key.toBase58();
+    }
+
+    if (typeof value === "string") {
+      return value;
+    }
+
+    if (value && typeof (value as any).toString === "function") {
+      const asString = (value as any).toString();
+      return typeof asString === "string" ? asString : undefined;
+    }
+
+    return undefined;
+  }
+
+  private coercePublicKey(value: PublicKeyLike): anchor.web3.PublicKey | null {
     if (!value) {
       return null;
     }
