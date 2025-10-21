@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { createBasicOracle } from "./helpers/fake-oracle.ts";
 
 let initialize: typeof import("../index.ts").initialize;
 let shutdown: typeof import("../index.ts").shutdown;
@@ -19,55 +20,29 @@ afterAll(() => {
 
 describe("lifecycle helpers", () => {
   it("initialize propagates listener failures", async () => {
-    await expect(
-      initialize({
-        startEventListening: async () => {},
-        stopEventListening: async () => {},
-        scanAndCompleteActiveGames: async () => ({ completed: 0, errors: 0, notReady: 0 }),
-        generateGameSecrets: () => ({ randomHash: "", gameAddress: "" }),
-        getStats: () => ({
-          totalSecrets: 0,
-          usedSecrets: 0,
-          pendingGames: 0,
-          completedGames: 0,
-          cancelledGames: 0,
-        }),
-        cleanupOldRecords: () => ({ deletedSecrets: 0, deletedGames: 0 }),
-      } as any)
-    ).resolves.toBeUndefined();
+    await expect(initialize(createBasicOracle())).resolves.toBeUndefined();
 
     await expect(
-      initialize({
-        startEventListening: async () => {
-          throw new Error("boom");
-        },
-        stopEventListening: async () => {},
-        scanAndCompleteActiveGames: async () => ({ completed: 0, errors: 0, notReady: 0 }),
-        generateGameSecrets: () => ({ randomHash: "", gameAddress: "" }),
-        getStats: () => ({
-          totalSecrets: 0,
-          usedSecrets: 0,
-          pendingGames: 0,
-          completedGames: 0,
-          cancelledGames: 0,
-        }),
-        cleanupOldRecords: () => ({ deletedSecrets: 0, deletedGames: 0 }),
-      } as any)
+      initialize(
+        createBasicOracle({
+          startEventListening: async () => {
+            throw new Error("boom");
+          },
+        })
+      )
     ).rejects.toThrow("boom");
   });
 
   it("shutdown stops listeners and does not exit in tests", async () => {
     let stopped = false;
-    await shutdown({
-      startEventListening: async () => {},
-      stopEventListening: async () => {
-        stopped = true;
-      },
-      scanAndCompleteActiveGames: async () => ({ completed: 0, errors: 0, notReady: 0 }),
-      generateGameSecrets: () => ({ randomHash: "", gameAddress: "" }),
-      getStats: () => ({ totalSecrets: 0, usedSecrets: 0, pendingGames: 0, completedGames: 0, cancelledGames: 0 }),
-      cleanupOldRecords: () => ({ deletedSecrets: 0, deletedGames: 0 }),
-    } as any, "SIGINT");
+    await shutdown(
+      createBasicOracle({
+        stopEventListening: async () => {
+          stopped = true;
+        },
+      }),
+      "SIGINT"
+    );
     expect(stopped).toBe(true);
   });
 });

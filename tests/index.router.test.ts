@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import type { OracleApi } from "../index.ts";
 import { createTempDatabaseFile, type TempDatabaseFile } from "./helpers/test-db.ts";
+import { createBasicOracle, createBasicStats } from "./helpers/fake-oracle.ts";
 
 type BuildHandlers = typeof import("../index.ts").buildHandlers;
 type BuildFetchRouter = typeof import("../index.ts").buildFetchRouter;
@@ -11,22 +11,6 @@ let handlers: ReturnType<BuildHandlers>;
 let router: ReturnType<BuildFetchRouter>;
 let tempDb: TempDatabaseFile;
 
-function newFakeOracle(): OracleApi {
-  return {
-    startEventListening: async () => {},
-    stopEventListening: async () => {},
-    generateGameSecrets: () => ({ randomHash: "abc", gameAddress: "game123" }),
-    getStats: () => ({
-      pendingGames: 0,
-      recentCompletions: 0,
-      errors: 0,
-      uptimeSeconds: 0,
-    }),
-    scanAndCompleteActiveGames: async () => ({ completed: 0, errors: 0, notReady: 0 }),
-    cleanupOldRecords: () => ({ deletedSecrets: 0, deletedGames: 0 }),
-  } as any;
-}
-
 describe("index router", () => {
   beforeAll(async () => {
     process.env["NODE_ENV"] = "test";
@@ -34,7 +18,17 @@ describe("index router", () => {
     process.env["DATABASE_FILE"] = tempDb.path;
 
     ({ buildHandlers, buildFetchRouter } = await import("../index.ts"));
-    handlers = buildHandlers(newFakeOracle());
+    handlers = buildHandlers(
+      createBasicOracle({
+        generateGameSecrets: () => ({ randomHash: "abc", gameAddress: "game123" }),
+        getStats: () => ({
+          ...createBasicStats(),
+          recentCompletions: 0,
+          errors: 0,
+          uptimeSeconds: 0,
+        }),
+      })
+    );
     router = buildFetchRouter(handlers);
   });
 
@@ -85,10 +79,13 @@ describe("index router", () => {
   });
 
   test("router catches handler errors and returns 500", async () => {
-    const badHandlers = buildHandlers({
-      ...newFakeOracle(),
-      generateGameSecrets: () => { throw new Error("boom"); },
-    } as any);
+    const badHandlers = buildHandlers(
+      createBasicOracle({
+        generateGameSecrets: () => {
+          throw new Error("boom");
+        },
+      })
+    );
     const badRouter = buildFetchRouter(badHandlers);
     const res = await badRouter(new Request("http://localhost:3001/generate-hash", { method: "POST" }));
     expect(res.status).toBe(500);
