@@ -2,6 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import type { OracleDatabase } from "../database.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
+import {
+  createProgramStub,
+  type ProgramStub,
+} from "./helpers/program-stub.ts";
 
 type OracleServiceType = import("../oracle-service.ts").OracleService;
 
@@ -50,7 +54,7 @@ describe("OracleService event handling", () => {
 
   it("awaits asynchronous event listener registration", async () => {
     const { db } = createDbStub();
-    const programStub = createProgramStub(true);
+    const programStub = createProgramStub({ asyncRegistration: true });
     const service = createService(db, programStub);
 
     await service.startEventListening();
@@ -334,63 +338,3 @@ type OracleDatabaseStub = Partial<OracleDatabase> & {
   incrementCompletionAttempts(game: string): void;
 };
 
-type ProgramStub = {
-  addCalls: Array<{ event: string; handler: (event: any) => void }>;
-  removeCalls: number[];
-  fetchCalls: PublicKey[];
-  fetchImpl: (pda: PublicKey) => Promise<any>;
-  listeners: Map<number, { event: string; handler: (event: any) => void }>;
-  addEventListener(event: string, handler: (event: any) => void): number | Promise<number>;
-  removeEventListener(id: number): Promise<void>;
-  account: {
-    game: {
-      fetch(pda: PublicKey): Promise<any>;
-    };
-  };
-  programId: PublicKey;
-};
-
-function createProgramStub(asyncRegistration: boolean = false): ProgramStub {
-  let nextId = 1;
-  const listeners = new Map<number, { event: string; handler: (event: any) => void }>();
-  const addCalls: Array<{ event: string; handler: (event: any) => void }> = [];
-  const removeCalls: number[] = [];
-  const fetchCalls: PublicKey[] = [];
-
-  const stub: ProgramStub = {
-    listeners,
-    addCalls,
-    removeCalls,
-    fetchCalls,
-    fetchImpl: async (pda: PublicKey) => {
-      fetchCalls.push(pda);
-      return {};
-    },
-    addEventListener(event, handler) {
-      const id = nextId++;
-      addCalls.push({ event, handler });
-      listeners.set(id, { event, handler });
-      if (asyncRegistration) {
-        return new Promise<number>((resolve) => {
-          setTimeout(() => resolve(id), 0);
-        });
-      }
-      return id;
-    },
-    removeEventListener(id) {
-      removeCalls.push(id);
-      listeners.delete(id);
-      return Promise.resolve();
-    },
-    account: {
-      game: {
-        fetch(pda: PublicKey) {
-          return stub.fetchImpl(pda);
-        },
-      },
-    },
-    programId: Keypair.generate().publicKey,
-  };
-
-  return stub;
-}
