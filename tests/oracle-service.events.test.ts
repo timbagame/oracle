@@ -1,15 +1,21 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import type { OracleDatabase } from "../database.ts";
+import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 
 type OracleServiceType = import("../oracle-service.ts").OracleService;
 
 let OracleServiceClass: typeof import("../oracle-service.ts").OracleService;
+let cleanup: () => void;
 
 beforeAll(async () => {
-  process.env["NODE_ENV"] = "test";
-  process.env["SOLANA_NETWORK"] = process.env["SOLANA_NETWORK"] || "http://localhost";
-  ({ OracleService: OracleServiceClass } = await import("../oracle-service.ts"));
+  const env = await setupOracleServiceEnv("oracle-service-events-test");
+  OracleServiceClass = env.OracleService;
+  cleanup = env.cleanup;
+});
+
+afterAll(() => {
+  cleanup?.();
 });
 
 describe("OracleService event handling", () => {

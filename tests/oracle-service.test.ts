@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
-import { createTestEnv } from "./helpers/create-test-env.ts";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
+import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 import { Keypair } from "@solana/web3.js";
 
 const makeFakeContext = () => ({
@@ -13,23 +13,16 @@ const makeFakeContext = () => ({
 
 let OracleService: typeof import("../oracle-service.ts").OracleService;
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
-let testEnv: Awaited<ReturnType<typeof createTestEnv>>;
+let cleanup: () => void;
 
 beforeAll(async () => {
-  const env = await createTestEnv({
-    prefix: "oracle-service-test",
-    singletons: {
-      OracleService: async () => (await import("../oracle-service.ts")).OracleService,
-      OracleDatabase: async () => (await import("../database.ts")).OracleDatabase,
-    },
-  });
-
-  testEnv = env;
-  ({ OracleService, OracleDatabase } = env.singletons);
+  const env = await setupOracleServiceEnv("oracle-service-test");
+  ({ OracleService, OracleDatabase } = env);
+  cleanup = env.cleanup;
 });
 
 afterAll(() => {
-  testEnv.cleanup();
+  cleanup?.();
 });
 
 describe("OracleService", () => {
