@@ -1,5 +1,6 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
 import { setupTestEnvironment } from "./helpers/setup-env.ts";
+import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import * as anchor from "@coral-xyz/anchor";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import {
@@ -632,11 +633,7 @@ describe("OracleService internals", () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();
 
-    for (const game of db.getPendingGames()) {
-      db.markGameCompleted(game.game_address);
-      db.markSecretKeyUsed(game.game_address);
-    }
-    service.cleanupOldRecords(-1);
+    resetPendingGames(db, { service });
 
     const failingGame = "error-prone-game";
     db.saveSecretKey(failingGame, "a".repeat(64), "b".repeat(64));
