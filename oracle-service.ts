@@ -1,4 +1,5 @@
 import * as anchor from "@coral-xyz/anchor";
+import { PublicKey } from "@solana/web3.js";
 import { randomBytes, createHash } from "crypto";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -52,6 +53,7 @@ interface GameCompletionResult {
 }
 
 type PublicKeyLike =
+  | PublicKey
   | anchor.web3.PublicKey
   | string
   | { [key: string]: any }
@@ -75,7 +77,7 @@ interface GameReadinessSnapshot {
 }
 
 interface GameOnChainContext {
-  gamePda: anchor.web3.PublicKey;
+  gamePda: PublicKey;
   secretData: { secretKey: string; randomHash: string };
   readiness?: GameReadinessSnapshot;
 }
@@ -302,10 +304,15 @@ export class OracleService {
   }
 
   private async tryAutoComplete(
-    gamePda: anchor.web3.PublicKey,
+    gameKey: PublicKeyLike,
     gameAddress: string,
     trigger: string
   ): Promise<void> {
+    const gamePda = this.coercePublicKey(gameKey);
+    if (!gamePda) {
+      return;
+    }
+
     if (!(await this.isGameReadyForCompletion(gamePda))) {
       return;
     }
@@ -340,9 +347,10 @@ export class OracleService {
     return secrets;
   }
 
-  public async isGameReadyForCompletion(gamePda: anchor.web3.PublicKey): Promise<boolean> {
-    const gameAddress = gamePda.toBase58();
-    const readiness = await this.evaluateGameReadiness(gamePda, gameAddress);
+  public async isGameReadyForCompletion(gamePda: PublicKey): Promise<boolean> {
+    const normalized = this.ensurePublicKey(gamePda);
+    const gameAddress = normalized.toBase58();
+    const readiness = await this.evaluateGameReadiness(normalized, gameAddress);
     if (readiness.ready) {
       this.readinessCache.set(gameAddress, readiness);
     } else {
@@ -423,7 +431,7 @@ export class OracleService {
         return recordFailure("Unable to determine winner");
       }
 
-      const winnerAddress = new anchor.web3.PublicKey(winnerPlayerAddress);
+      const winnerAddress = new PublicKey(winnerPlayerAddress);
 
       const txHash = await this.executeGameCompletion({
         gameAccount,
@@ -444,31 +452,32 @@ export class OracleService {
 
   private async executeGameCompletion(args: {
     gameAccount: any;
-    winnerAddress: anchor.web3.PublicKey;
+    winnerAddress: PublicKey;
     randomHashBuffer: Buffer;
     secretKeyBuffer: Buffer;
     winnerIndex: number;
   }): Promise<string> {
     const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
 
-    const creatorPublicKey = new anchor.web3.PublicKey(gameAccount.creator);
+    const creatorPublicKey = new PublicKey(gameAccount.creator);
     const gamePda = this.getGamePDA(randomHashBuffer);
-    const tokenMint = new anchor.web3.PublicKey(gameAccount.tokenMint);
+    const tokenMint = new PublicKey(gameAccount.tokenMint);
     const tokenProgramId = await this.resolveTokenProgram(
       gameAccount.tokenProgram,
       tokenMint
     );
-    const [oraclePda] = anchor.web3.PublicKey.findProgramAddressSync(
+    const programId = this.ensurePublicKey(this.program.programId);
+    const [oraclePda] = PublicKey.findProgramAddressSync(
       [Buffer.from("oracle", "utf8")],
-      this.program.programId
+      programId
     );
-    const [gameTokenPda] = anchor.web3.PublicKey.findProgramAddressSync(
+    const [gameTokenPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("game_token", "utf8"), tokenMint.toBuffer()],
-      this.program.programId
+      programId
     );
-    const [gameVaultPda] = anchor.web3.PublicKey.findProgramAddressSync(
+    const [gameVaultPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("game_vault", "utf8"), tokenMint.toBuffer()],
-      this.program.programId
+      programId
     );
     const winnerTokenAccount = getAssociatedTokenAddressSync(
       tokenMint,
@@ -510,12 +519,12 @@ export class OracleService {
   }
 
   private async resolveTokenProgram(
-    tokenProgram: anchor.web3.PublicKey | string | null | undefined,
-    tokenMint: anchor.web3.PublicKey
-  ): Promise<anchor.web3.PublicKey> {
+    tokenProgram: PublicKey | string | null | undefined,
+    tokenMint: PublicKey
+  ): Promise<PublicKey> {
     const directProgram = this.coercePublicKey(tokenProgram);
 
-    if (directProgram && !directProgram.equals(anchor.web3.PublicKey.default)) {
+    if (directProgram && !directProgram.equals(PublicKey.default)) {
       if (directProgram.equals(TOKEN_PROGRAM_ID)) {
         return TOKEN_PROGRAM_ID;
       }
@@ -566,18 +575,22 @@ export class OracleService {
     return undefined;
   }
 
-  private coercePublicKey(value: PublicKeyLike): anchor.web3.PublicKey | null {
+  private coercePublicKey(value: PublicKeyLike): PublicKey | null {
     if (!value) {
       return null;
     }
 
-    if (value instanceof anchor.web3.PublicKey) {
+    if (value instanceof PublicKey) {
       return value;
+    }
+
+    if (value instanceof anchor.web3.PublicKey) {
+      return new PublicKey(value.toBytes());
     }
 
     if (typeof value === "string") {
       try {
-        return new anchor.web3.PublicKey(value);
+        return new PublicKey(value);
       } catch {
         return null;
       }
@@ -586,7 +599,7 @@ export class OracleService {
     if (typeof value === "object") {
       if (typeof (value as any).toBase58 === "function") {
         try {
-          return new anchor.web3.PublicKey((value as any).toBase58());
+          return new PublicKey((value as any).toBase58());
         } catch {
           return null;
         }
@@ -602,10 +615,18 @@ export class OracleService {
     }
 
     try {
-      return new anchor.web3.PublicKey(value as any);
+      return new PublicKey(value as any);
     } catch {
       return null;
     }
+  }
+
+  private ensurePublicKey(value: PublicKeyLike | PublicKey): PublicKey {
+    const normalized = value instanceof PublicKey ? value : this.coercePublicKey(value);
+    if (!normalized) {
+      throw new Error("Invalid public key provided");
+    }
+    return normalized;
   }
 
   private calculateWinnerIndex(
@@ -726,7 +747,7 @@ export class OracleService {
     gameAddress: string
   ): Promise<GameOnChainContext | null> {
     let secretData: { secretKey: string; randomHash: string };
-    let gamePda: anchor.web3.PublicKey;
+    let gamePda: PublicKey;
     try {
       const resolvedSecret = this.db.getSecretKey(gameAddress);
       if (!resolvedSecret) {
@@ -772,10 +793,11 @@ export class OracleService {
     }
   }
 
-  private getGamePDA(randomHash: Buffer): anchor.web3.PublicKey {
-    const [pda] = anchor.web3.PublicKey.findProgramAddressSync(
+  private getGamePDA(randomHash: Buffer): PublicKey {
+    const programId = this.ensurePublicKey(this.program.programId);
+    const [pda] = PublicKey.findProgramAddressSync(
       [Buffer.from("game", 'utf8'), randomHash],
-      this.program.programId
+      programId
     );
     return pda;
   }
@@ -783,7 +805,7 @@ export class OracleService {
   private getGamePDAFromAddress(
     gameAddress: string,
     secretData?: { secretKey: string; randomHash: string }
-  ): anchor.web3.PublicKey {
+  ): PublicKey {
     // Since we can predict PDAs now, we can reverse engineer from the stored secret
     const resolvedSecret =
       secretData ?? this.db.getSecretKey(gameAddress);
@@ -795,7 +817,7 @@ export class OracleService {
   }
 
   private async evaluateGameReadiness(
-    gamePda: anchor.web3.PublicKey,
+    gamePda: PublicKey,
     gameAddress: string
   ): Promise<GameReadinessSnapshot> {
     const gameAccount = await this.fetchGameAccount(gamePda, gameAddress);
@@ -817,7 +839,7 @@ export class OracleService {
   }
 
   private async fetchGameAccount(
-    gamePda: anchor.web3.PublicKey,
+    gamePda: PublicKey,
     gameAddress: string
   ): Promise<any | null> {
     try {
