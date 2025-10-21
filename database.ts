@@ -59,7 +59,8 @@ export class OracleDatabase {
 
   private createTables(): void {
     // Secret keys table
-    this.db.run(`
+    this.runSchemaStatement(
+      `
       CREATE TABLE IF NOT EXISTS secret_keys (
         game_address TEXT PRIMARY KEY,
         secret_key TEXT NOT NULL,
@@ -67,10 +68,14 @@ export class OracleDatabase {
         created_at INTEGER NOT NULL,
         used BOOLEAN DEFAULT FALSE
       )
-    `);
+    `,
+      "Ensuring secret_keys table exists",
+      "Failed to ensure secret_keys table"
+    );
 
     // Game tracking table
-    this.db.run(`
+    this.runSchemaStatement(
+      `
       CREATE TABLE IF NOT EXISTS game_tracking (
         game_address TEXT PRIMARY KEY,
         status TEXT NOT NULL DEFAULT '${DEFAULT_STATUS}',
@@ -79,10 +84,14 @@ export class OracleDatabase {
         completion_attempts INTEGER DEFAULT 0,
         completed_at INTEGER
       )
-    `);
+    `,
+      "Ensuring game_tracking table exists",
+      "Failed to ensure game_tracking table"
+    );
 
     // Game players table (per-ticket entries)
-    this.db.run(`
+    this.runSchemaStatement(
+      `
       CREATE TABLE IF NOT EXISTS game_players (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         game_address TEXT NOT NULL,
@@ -91,7 +100,10 @@ export class OracleDatabase {
         joined_at INTEGER NOT NULL,
         UNIQUE(game_address, ticket_index)
       )
-    `);
+    `,
+      "Ensuring game_players table exists",
+      "Failed to ensure game_players table"
+    );
 
     this.ensureTicketSchema();
   }
@@ -103,16 +115,38 @@ export class OracleDatabase {
     const hasTicketIndex = tableInfo.some((column) => column.name === "ticket_index");
 
     if (!hasTicketIndex) {
-      this.db.run("ALTER TABLE game_players ADD COLUMN ticket_index INTEGER");
-      this.db.run("DELETE FROM game_players");
+      this.runSchemaStatement(
+        "ALTER TABLE game_players ADD COLUMN ticket_index INTEGER",
+        "Adding ticket_index column to game_players",
+        "Failed to add ticket_index column to game_players"
+      );
+      this.runSchemaStatement(
+        "DELETE FROM game_players",
+        "Clearing legacy game_players rows after ticket_index migration",
+        "Failed to clear legacy game_players rows during migration"
+      );
     }
 
-    this.db.run(
-      "CREATE UNIQUE INDEX IF NOT EXISTS idx_game_players_ticket ON game_players (game_address, ticket_index)"
+    this.runSchemaStatement(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_game_players_ticket ON game_players (game_address, ticket_index)",
+      "Ensuring idx_game_players_ticket index exists",
+      "Failed to ensure idx_game_players_ticket index"
     );
-    this.db.run(
-      "CREATE INDEX IF NOT EXISTS idx_game_players_game ON game_players (game_address)"
+    this.runSchemaStatement(
+      "CREATE INDEX IF NOT EXISTS idx_game_players_game ON game_players (game_address)",
+      "Ensuring idx_game_players_game index exists",
+      "Failed to ensure idx_game_players_game index"
     );
+  }
+
+  private runSchemaStatement(
+    sql: string,
+    logMessage: string,
+    errorMessage: string,
+    ...params: Parameters<ReturnType<Database["prepare"]>["run"]>
+  ): ReturnType<ReturnType<Database["prepare"]>["run"]> {
+    console.log(`🛠️ ${logMessage}`);
+    return this.runStatement(sql, errorMessage, ...params);
   }
 
   private executeDbOperation<T>(
