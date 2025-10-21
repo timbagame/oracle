@@ -131,18 +131,28 @@ export class OracleDatabase {
     }
   }
 
+  private runStatement(
+    sql: string,
+    params: unknown[],
+    errorMessage: string
+  ): ReturnType<ReturnType<Database["prepare"]>["run"]> {
+    return this.executeDbOperation(() => {
+      const stmt = this.db.prepare(sql);
+      return stmt.run(...params);
+    }, errorMessage);
+  }
+
   // Secret key management
   public saveSecretKey(
     gameAddress: string,
     secretKey: string,
     randomHash: string
   ): void {
-    this.executeDbOperation(() => {
-      const stmt = this.db.prepare(
-        "INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)"
-      );
-      stmt.run(gameAddress, secretKey, randomHash, Date.now());
-    }, `Failed to save secret key for game ${gameAddress}`);
+    this.runStatement(
+      "INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)",
+      [gameAddress, secretKey, randomHash, Date.now()],
+      `Failed to save secret key for game ${gameAddress}`
+    );
   }
 
   public getSecretKey(gameAddress: string): SecretKeyData | null {
@@ -168,22 +178,20 @@ export class OracleDatabase {
   }
 
   public markSecretKeyUsed(gameAddress: string): void {
-    this.executeDbOperation(() => {
-      const stmt = this.db.prepare(
-        "UPDATE secret_keys SET used = TRUE WHERE game_address = ?"
-      );
-      stmt.run(gameAddress);
-    }, "Failed to mark secret key as used");
+    this.runStatement(
+      "UPDATE secret_keys SET used = TRUE WHERE game_address = ?",
+      [gameAddress],
+      "Failed to mark secret key as used"
+    );
   }
 
   // Game tracking
   public trackGame(gameAddress: string, gameType?: string): void {
-    this.executeDbOperation(() => {
-      const stmt = this.db.prepare(
-        "INSERT OR REPLACE INTO game_tracking (game_address, status, game_type, last_checked) VALUES (?, ?, ?, ?)"
-      );
-      stmt.run(gameAddress, DEFAULT_STATUS, gameType || null, Date.now());
-    }, "Failed to track game");
+    this.runStatement(
+      "INSERT OR REPLACE INTO game_tracking (game_address, status, game_type, last_checked) VALUES (?, ?, ?, ?)",
+      [gameAddress, DEFAULT_STATUS, gameType || null, Date.now()],
+      "Failed to track game"
+    );
   }
 
   public getGameType(gameAddress: string): string | null {
@@ -203,13 +211,12 @@ export class OracleDatabase {
     status: "completed" | "cancelled",
     errorMessage: string
   ): void {
-    this.executeDbOperation(() => {
-      const now = Date.now();
-      const stmt = this.db.prepare(
-        "UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?"
-      );
-      stmt.run(status, now, now, gameAddress);
-    }, errorMessage);
+    const now = Date.now();
+    this.runStatement(
+      "UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?",
+      [status, now, now, gameAddress],
+      errorMessage
+    );
   }
 
   public markGameCompleted(gameAddress: string): void {
@@ -221,12 +228,11 @@ export class OracleDatabase {
   }
 
   public incrementCompletionAttempts(gameAddress: string): void {
-    this.executeDbOperation(() => {
-      const stmt = this.db.prepare(
-        "UPDATE game_tracking SET completion_attempts = completion_attempts + 1, last_checked = ? WHERE game_address = ?"
-      );
-      stmt.run(Date.now(), gameAddress);
-    }, "Failed to increment completion attempts");
+    this.runStatement(
+      "UPDATE game_tracking SET completion_attempts = completion_attempts + 1, last_checked = ? WHERE game_address = ?",
+      [Date.now(), gameAddress],
+      "Failed to increment completion attempts"
+    );
   }
 
   public getPendingGames(): PendingGame[] {
@@ -360,34 +366,31 @@ export class OracleDatabase {
     playerAddress: string,
     ticketIndex: number
   ): void {
-    this.executeDbOperation(() => {
-      const stmt = this.db.prepare(
-        "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)"
-      );
-      stmt.run(gameAddress, playerAddress, ticketIndex, Date.now());
-    }, "Failed to add player to game");
+    this.runStatement(
+      "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)",
+      [gameAddress, playerAddress, ticketIndex, Date.now()],
+      "Failed to add player to game"
+    );
   }
 
   public removePlayerFromGame(
     gameAddress: string,
     ticketIndex: number
   ): void {
-    this.executeDbOperation(() => {
-      const stmt = this.db.prepare(
-        "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?"
-      );
-      stmt.run(gameAddress, ticketIndex);
-    }, "Failed to remove player from game");
+    this.runStatement(
+      "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?",
+      [gameAddress, ticketIndex],
+      "Failed to remove player from game"
+    );
   }
 
   public clearStalePlayersForGame(gameAddress: string): void {
-    this.executeDbOperation(() => {
-      const stmt = this.db.prepare(
-        "DELETE FROM game_players WHERE game_address = ?"
-      );
-      stmt.run(gameAddress);
-      console.log(`🧹 Cleared stale player data for game ${gameAddress}`);
-    }, "Failed to clear stale players for game");
+    this.runStatement(
+      "DELETE FROM game_players WHERE game_address = ?",
+      [gameAddress],
+      "Failed to clear stale players for game"
+    );
+    console.log(`🧹 Cleared stale player data for game ${gameAddress}`);
   }
 
   public getGamePlayers(gameAddress: string): string[] {
