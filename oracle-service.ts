@@ -771,6 +771,13 @@ export class OracleService {
     return this.resolveGameContext(gameAddress, { requireOnChain: true });
   }
 
+  private logMissingSecret(gameAddress: string, requireOnChain: boolean): void {
+    if (!requireOnChain) {
+      return;
+    }
+    console.log(`⚠️  No secret key found for game ${gameAddress}`);
+  }
+
   private async resolveGameContext(
     gameAddress: string,
     options: ResolveGameContextOptions = {}
@@ -782,18 +789,14 @@ export class OracleService {
       resolved = this.resolveStoredGame(gameAddress, { throwIfMissing: requireOnChain });
     } catch (error: any) {
       if (error instanceof MissingSecretError) {
-        if (requireOnChain) {
-          console.log(`⚠️  No secret key found for game ${gameAddress}`);
-        }
+        this.logMissingSecret(gameAddress, requireOnChain);
         return null;
       }
       throw error;
     }
 
     if (!resolved) {
-      if (requireOnChain) {
-        console.log(`⚠️  No secret key found for game ${gameAddress}`);
-      }
+      this.logMissingSecret(gameAddress, requireOnChain);
       return null;
     }
 
