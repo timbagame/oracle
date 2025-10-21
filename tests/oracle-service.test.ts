@@ -1,5 +1,6 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
 import { setupTestEnvironment } from "./helpers/setup-env.ts";
+import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { Keypair } from "@solana/web3.js";
 
 let OracleService: typeof import("../oracle-service.ts").OracleService;
@@ -87,11 +88,7 @@ describe("OracleService", () => {
   it("returns zero stats when no games are pending", async () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();
-    for (const game of db.getPendingGames()) {
-      db.markGameCompleted(game.game_address);
-      db.markSecretKeyUsed(game.game_address);
-    }
-    service.cleanupOldRecords(-1);
+    resetPendingGames(db, { service });
 
     const stats = await service.scanAndCompleteActiveGames();
     expect(stats).toEqual({ completed: 0, errors: 0, notReady: 0 });
@@ -100,11 +97,7 @@ describe("OracleService", () => {
   it("scans pending games and records outcomes", async () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();
-    for (const game of db.getPendingGames()) {
-      db.markGameCompleted(game.game_address);
-      db.markSecretKeyUsed(game.game_address);
-    }
-    service.cleanupOldRecords(-1);
+    resetPendingGames(db, { service });
 
     // success case
     db.saveSecretKey("gameSuccess", "secret", "hash");
@@ -158,11 +151,7 @@ describe("OracleService", () => {
   it("skips games that exceed max completion attempts", async () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();
-    for (const game of db.getPendingGames()) {
-      db.markGameCompleted(game.game_address);
-      db.markSecretKeyUsed(game.game_address);
-    }
-    service.cleanupOldRecords(-1);
+    resetPendingGames(db, { service });
 
     db.saveSecretKey("stubborn", "c".repeat(64), "d".repeat(64));
     db.trackGame("stubborn");
