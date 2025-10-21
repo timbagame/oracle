@@ -1,6 +1,5 @@
 import { OracleService } from "../oracle-service.ts";
-
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+import { delay } from "../delay.ts";
 
 async function runManualShutdown() {
   console.log("🛑 Timba Oracle Manual Shutdown");
@@ -37,7 +36,7 @@ async function runManualShutdown() {
       console.log(
         `   Waiting ${waitMs / 1000}s for remaining games to settle...`
       );
-      await wait(waitMs);
+      await delay(waitMs);
     }
   }
 

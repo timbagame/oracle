@@ -7,6 +7,7 @@ import {
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import { OracleDatabase } from "./database.ts";
+import { delay as delayHelper } from "./delay.ts";
 import type { Timba } from "./idl/idlType.ts";
 import idl from "./idl/idl.json" with { type: "json" };
 import * as fs from "fs";
@@ -656,7 +657,7 @@ export class OracleService {
   }
 
   private async delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return delayHelper(ms);
   }
 
   public cleanupOldRecords(hoursOld: number = 48) {
