@@ -3,6 +3,12 @@ import { createTestEnv } from "./helpers/create-test-env.ts";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { Keypair } from "@solana/web3.js";
 
+const makeFakeContext = () => ({
+  gamePda: Keypair.generate().publicKey,
+  secretData: { secretKey: "aa".repeat(32), randomHash: "bb".repeat(32) },
+  readiness: { ready: true, gameAccount: {} },
+});
+
 let OracleService: typeof import("../oracle-service.ts").OracleService;
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
 let testEnv: Awaited<ReturnType<typeof createTestEnv>>;
@@ -124,8 +130,8 @@ describe("OracleService", () => {
     const originalComplete = (service as any).completeGame;
 
     (service as any).gameExistsOnChain = async (addr: string) => {
-      if (addr === "gameGone") return false;
-      return true;
+      if (addr === "gameGone") return null;
+      return makeFakeContext();
     };
 
     (service as any).completeGame = async (addr: string) => {
@@ -174,7 +180,7 @@ describe("OracleService", () => {
     const processed: string[] = [];
     let delayCalls = 0;
 
-    (service as any).gameExistsOnChain = async () => true;
+    (service as any).gameExistsOnChain = async () => makeFakeContext();
     (service as any).completeGame = async (addr: string) => {
       processed.push(addr);
       return { success: true };
