@@ -709,21 +709,24 @@ export class OracleService {
   }
 
   private async gameExistsOnChain(gameAddress: string): Promise<boolean> {
+    let gamePda: anchor.web3.PublicKey;
     try {
-      const gamePda = this.getGamePDAFromAddress(gameAddress);
-      await this.program.account.game.fetch(gamePda);
-      return true;
+      gamePda = this.getGamePDAFromAddress(gameAddress);
     } catch (error: any) {
       if (error instanceof MissingSecretError) {
         console.log(`⚠️  No secret key found for game ${gameAddress}`);
         return false;
       }
-      if (this.isAccountNotFoundError(error)) {
-        console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
-        return false;
-      }
       throw error;
     }
+
+    const gameAccount = await this.fetchGameAccount(gamePda, gameAddress);
+    if (!gameAccount) {
+      console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
+      return false;
+    }
+
+    return true;
   }
 
   private updateScanStats(stats: CompletionStats, result: GameCompletionResult): void {
