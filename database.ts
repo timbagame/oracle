@@ -133,8 +133,8 @@ export class OracleDatabase {
 
   private runStatement(
     sql: string,
-    params: unknown[],
-    errorMessage: string
+    errorMessage: string,
+    ...params: Parameters<ReturnType<Database["prepare"]>["run"]>
   ): ReturnType<ReturnType<Database["prepare"]>["run"]> {
     return this.executeDbOperation(() => {
       const stmt = this.db.prepare(sql);
@@ -150,8 +150,11 @@ export class OracleDatabase {
   ): void {
     this.runStatement(
       "INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)",
-      [gameAddress, secretKey, randomHash, Date.now()],
-      `Failed to save secret key for game ${gameAddress}`
+      `Failed to save secret key for game ${gameAddress}`,
+      gameAddress,
+      secretKey,
+      randomHash,
+      Date.now()
     );
   }
 
@@ -180,8 +183,8 @@ export class OracleDatabase {
   public markSecretKeyUsed(gameAddress: string): void {
     this.runStatement(
       "UPDATE secret_keys SET used = TRUE WHERE game_address = ?",
-      [gameAddress],
-      "Failed to mark secret key as used"
+      "Failed to mark secret key as used",
+      gameAddress
     );
   }
 
@@ -189,8 +192,11 @@ export class OracleDatabase {
   public trackGame(gameAddress: string, gameType?: string): void {
     this.runStatement(
       "INSERT OR REPLACE INTO game_tracking (game_address, status, game_type, last_checked) VALUES (?, ?, ?, ?)",
-      [gameAddress, DEFAULT_STATUS, gameType || null, Date.now()],
-      "Failed to track game"
+      "Failed to track game",
+      gameAddress,
+      DEFAULT_STATUS,
+      gameType || null,
+      Date.now()
     );
   }
 
@@ -214,8 +220,11 @@ export class OracleDatabase {
     const now = Date.now();
     this.runStatement(
       "UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?",
-      [status, now, now, gameAddress],
-      errorMessage
+      errorMessage,
+      status,
+      now,
+      now,
+      gameAddress
     );
   }
 
@@ -230,8 +239,9 @@ export class OracleDatabase {
   public incrementCompletionAttempts(gameAddress: string): void {
     this.runStatement(
       "UPDATE game_tracking SET completion_attempts = completion_attempts + 1, last_checked = ? WHERE game_address = ?",
-      [Date.now(), gameAddress],
-      "Failed to increment completion attempts"
+      "Failed to increment completion attempts",
+      Date.now(),
+      gameAddress
     );
   }
 
@@ -368,8 +378,11 @@ export class OracleDatabase {
   ): void {
     this.runStatement(
       "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)",
-      [gameAddress, playerAddress, ticketIndex, Date.now()],
-      "Failed to add player to game"
+      "Failed to add player to game",
+      gameAddress,
+      playerAddress,
+      ticketIndex,
+      Date.now()
     );
   }
 
@@ -379,16 +392,17 @@ export class OracleDatabase {
   ): void {
     this.runStatement(
       "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?",
-      [gameAddress, ticketIndex],
-      "Failed to remove player from game"
+      "Failed to remove player from game",
+      gameAddress,
+      ticketIndex
     );
   }
 
   public clearStalePlayersForGame(gameAddress: string): void {
     this.runStatement(
       "DELETE FROM game_players WHERE game_address = ?",
-      [gameAddress],
-      "Failed to clear stale players for game"
+      "Failed to clear stale players for game",
+      gameAddress
     );
     console.log(`🧹 Cleared stale player data for game ${gameAddress}`);
   }
