@@ -83,6 +83,11 @@ interface GameOnChainContext {
   readiness?: GameReadinessSnapshot;
 }
 
+interface ResolveGameContextOptions {
+  readiness?: GameReadinessSnapshot;
+  requireOnChain?: boolean;
+}
+
 export class OracleService {
   private static instance: OracleService;
   private program: anchor.Program<Timba>;
@@ -371,28 +376,27 @@ export class OracleService {
     };
 
     try {
-      const resolvedContext = sharedContext
-        ? {
-            secretData: sharedContext.secretData,
-            randomHashBuffer:
-              sharedContext.randomHashBuffer ??
-              Buffer.from(sharedContext.secretData.randomHash, "hex"),
-            gamePda: sharedContext.gamePda,
-          }
-        : this.resolveStoredGame(gameAddress);
+      let context = sharedContext ?? null;
+      let readiness =
+        cachedReadiness ?? sharedContext?.readiness ?? undefined;
 
-      if (!resolvedContext) {
+      if (!context) {
+        const options: ResolveGameContextOptions = {};
+        if (readiness) {
+          options.readiness = readiness;
+        }
+        context = await this.resolveGameContext(gameAddress, options);
+      }
+
+      if (!context) {
         return recordFailure("No secret key found");
       }
 
-      const { secretData, randomHashBuffer, gamePda } = resolvedContext;
-
-      let readiness =
-        cachedReadiness ?? sharedContext?.readiness ?? this.consumeReadiness(gameAddress);
+      readiness = readiness ?? context.readiness ?? this.consumeReadiness(gameAddress);
       let shouldAttempt: boolean | undefined;
 
       if (!readiness) {
-        shouldAttempt = await this.isGameReadyForCompletion(gamePda);
+        shouldAttempt = await this.isGameReadyForCompletion(context.gamePda);
         readiness = this.consumeReadiness(gameAddress);
       }
 
@@ -401,17 +405,27 @@ export class OracleService {
           return { success: false, notReady: true };
         }
 
-        const gameAccount = await this.fetchGameAccount(gamePda, gameAddress);
-        if (!gameAccount) {
+        const refreshed = await this.resolveGameContext(gameAddress, {
+          requireOnChain: true,
+        });
+
+        if (!refreshed || !refreshed.readiness) {
           return { success: false, notReady: true };
         }
-        readiness = { ready: true, gameAccount };
+
+        context = refreshed;
+        readiness = refreshed.readiness;
+
+        if (shouldAttempt) {
+          readiness = { ...readiness, ready: true };
+        }
       }
 
-      if (!readiness.ready || !readiness.gameAccount) {
+      if (!readiness || !readiness.ready || !readiness.gameAccount) {
         return { success: false, notReady: true };
       }
 
+      const { secretData, randomHashBuffer } = context;
       const gameAccount = readiness.gameAccount;
       const players = this.db.getGamePlayers(gameAddress);
       const nEntries = Number(gameAccount.ticketsCount);
@@ -754,31 +768,50 @@ export class OracleService {
   private async gameExistsOnChain(
     gameAddress: string
   ): Promise<GameOnChainContext | null> {
+    return this.resolveGameContext(gameAddress, { requireOnChain: true });
+  }
+
+  private async resolveGameContext(
+    gameAddress: string,
+    options: ResolveGameContextOptions = {}
+  ): Promise<GameOnChainContext | null> {
+    const { readiness, requireOnChain = false } = options;
+
     let resolved: ReturnType<OracleService["resolveStoredGame"]> = null;
     try {
-      resolved = this.resolveStoredGame(gameAddress, { throwIfMissing: true });
+      resolved = this.resolveStoredGame(gameAddress, { throwIfMissing: requireOnChain });
     } catch (error: any) {
       if (error instanceof MissingSecretError) {
-        console.log(`⚠️  No secret key found for game ${gameAddress}`);
+        if (requireOnChain) {
+          console.log(`⚠️  No secret key found for game ${gameAddress}`);
+        }
         return null;
       }
       throw error;
     }
 
     if (!resolved) {
-      console.log(`⚠️  No secret key found for game ${gameAddress}`);
+      if (requireOnChain) {
+        console.log(`⚠️  No secret key found for game ${gameAddress}`);
+      }
       return null;
     }
 
-    const { gamePda, secretData, randomHashBuffer } = resolved;
+    let readinessSnapshot = readiness;
 
-    const readiness = await this.evaluateGameReadiness(gamePda, gameAddress);
-    if (!readiness.gameAccount) {
-      console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
-      return null;
+    if (!readinessSnapshot && requireOnChain) {
+      readinessSnapshot = await this.evaluateGameReadiness(resolved.gamePda, gameAddress);
+
+      if (!readinessSnapshot.gameAccount) {
+        console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
+        return null;
+      }
     }
 
-    return { gamePda, secretData, randomHashBuffer, readiness };
+    return {
+      ...resolved,
+      readiness: readinessSnapshot,
+    };
   }
 
   private updateScanStats(stats: CompletionStats, result: GameCompletionResult): void {
