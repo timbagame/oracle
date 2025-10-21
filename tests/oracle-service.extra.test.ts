@@ -332,11 +332,7 @@ describe("OracleService internals", () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();
 
-    for (const pending of db.getPendingGames()) {
-      db.markGameCompleted(pending.game_address);
-      db.markSecretKeyUsed(pending.game_address);
-    }
-    service.cleanupOldRecords(-1);
+    resetPendingGames(db, { service });
 
     const orphanGame = "orphaned-game";
     db.trackGame(orphanGame);
