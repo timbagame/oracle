@@ -1,6 +1,7 @@
 import { beforeAll, afterAll, describe, it, expect } from "bun:test";
 import { createTestEnv } from "./helpers/create-test-env.ts";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
+import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import { Keypair } from "@solana/web3.js";
 
 const makeFakeContext = () => ({
@@ -111,20 +112,32 @@ describe("OracleService", () => {
     resetPendingGames(db, { service });
 
     // success case
-    db.saveSecretKey("gameSuccess", "secret", "hash");
-    db.trackGame("gameSuccess");
+    seedTrackedGame(db, {
+      address: "gameSuccess",
+      secret: "secret",
+      randomHash: "hash",
+    });
 
     // not ready case
-    db.saveSecretKey("gamePending", "secret", "hash");
-    db.trackGame("gamePending");
+    seedTrackedGame(db, {
+      address: "gamePending",
+      secret: "secret",
+      randomHash: "hash",
+    });
 
     // game removed from chain
-    db.saveSecretKey("gameGone", "secret", "hash");
-    db.trackGame("gameGone");
+    seedTrackedGame(db, {
+      address: "gameGone",
+      secret: "secret",
+      randomHash: "hash",
+    });
 
     // error during completion
-    db.saveSecretKey("gameError", "secret", "hash");
-    db.trackGame("gameError");
+    seedTrackedGame(db, {
+      address: "gameError",
+      secret: "secret",
+      randomHash: "hash",
+    });
 
     const originalExists = (service as any).gameExistsOnChain;
     const originalComplete = (service as any).completeGame;
@@ -164,14 +177,20 @@ describe("OracleService", () => {
     const db = OracleDatabase.getInstance();
     resetPendingGames(db, { service });
 
-    db.saveSecretKey("stubborn", "c".repeat(64), "d".repeat(64));
-    db.trackGame("stubborn");
+    seedTrackedGame(db, {
+      address: "stubborn",
+      secret: "c".repeat(64),
+      randomHash: "d".repeat(64),
+    });
     for (let i = 0; i < 5; i++) {
       db.incrementCompletionAttempts("stubborn");
     }
 
-    db.saveSecretKey("active", "e".repeat(64), "f".repeat(64));
-    db.trackGame("active");
+    seedTrackedGame(db, {
+      address: "active",
+      secret: "e".repeat(64),
+      randomHash: "f".repeat(64),
+    });
 
     const originalExists = (service as any).gameExistsOnChain;
     const originalComplete = (service as any).completeGame;
