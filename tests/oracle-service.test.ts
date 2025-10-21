@@ -7,6 +7,7 @@ import { Keypair } from "@solana/web3.js";
 const makeFakeContext = () => ({
   gamePda: Keypair.generate().publicKey,
   secretData: { secretKey: "aa".repeat(32), randomHash: "bb".repeat(32) },
+  randomHashBuffer: Buffer.from("bb".repeat(32), "hex"),
   readiness: { ready: true, gameAccount: {} },
 });
 
@@ -60,16 +61,18 @@ describe("OracleService", () => {
     expect(stats.activeListeners).toBe(0);
   });
 
-  it("derives game PDA from stored secrets", () => {
+  it("resolves stored games from secrets", () => {
     const service = OracleService.getInstance();
     service.cleanupOldRecords(-1);
     const { gameAddress } = service.generateGameSecrets();
 
-    const pda: any = (service as any).getGamePDAFromAddress(gameAddress);
-    expect(pda.toBase58()).toBe(gameAddress);
+    const resolved: any = (service as any).resolveStoredGame(gameAddress);
+    expect(resolved?.gamePda.toBase58()).toBe(gameAddress);
+    expect(resolved?.randomHashBuffer).toBeInstanceOf(Buffer);
 
     const fakeAddress = Keypair.generate().publicKey.toBase58();
-    expect(() => (service as any).getGamePDAFromAddress(fakeAddress)).toThrow();
+    expect((service as any).resolveStoredGame(fakeAddress)).toBeNull();
+    expect(() => (service as any).resolveStoredGame(fakeAddress, { throwIfMissing: true })).toThrow();
   });
 
   it("identifies account not found errors", () => {
