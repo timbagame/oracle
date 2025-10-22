@@ -1,13 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { createBasicOracle } from "./helpers/fake-oracle.ts";
+import { createTestEnv } from "./helpers/create-test-env.ts";
 
 let initialize: typeof import("../index.ts").initialize;
 let shutdown: typeof import("../index.ts").shutdown;
 
 let exitBackup: any;
+let testEnv: Awaited<ReturnType<typeof createTestEnv>>;
 
 beforeAll(async () => {
-  process.env["NODE_ENV"] = "test";
+  testEnv = await createTestEnv({ prefix: "index-lifecycle" });
   ({ initialize, shutdown } = await import("../index.ts"));
   // stub exit to avoid terminating runner
   exitBackup = (process as any).exit;
@@ -16,6 +18,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   (process as any).exit = exitBackup;
+  testEnv.cleanup();
 });
 
 describe("lifecycle helpers", () => {

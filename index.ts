@@ -4,6 +4,7 @@ import { OracleService } from "./oracle-service.ts";
 // Constants
 const DEFAULT_PORT = 3001;
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
+const IS_TEST_ENV = process.env.NODE_ENV === "test";
 
 // CORS headers configuration
 const CORS_HEADERS = {
@@ -42,7 +43,7 @@ async function stopServer(
 
   server?.stop();
 
-  if (exitCode !== undefined && process.env.NODE_ENV !== "test") {
+  if (exitCode !== undefined && !IS_TEST_ENV) {
     return () => process.exit(exitCode);
   }
 
@@ -272,7 +273,7 @@ export function buildFetchRouter(handlers: ReturnType<typeof buildHandlers>) {
 }
 
 // Main server
-if (process.env.NODE_ENV !== "test") {
+if (!IS_TEST_ENV) {
   const realOracle = OracleService.getInstance();
   const handlers = buildHandlers(realOracle);
   const fetchRouter = buildFetchRouter(handlers);
@@ -302,7 +303,7 @@ if (process.env.NODE_ENV !== "test") {
     })
     .catch(async (error) => {
       console.error("❌ Oracle initialization failed. Stopping server.", error);
-      const exitCode = process.env.NODE_ENV !== "test" ? 1 : undefined;
+      const exitCode = !IS_TEST_ENV ? 1 : undefined;
       let exit: (() => void) | undefined;
 
       try {
@@ -337,7 +338,7 @@ export async function shutdown(
   signal: string
 ): Promise<void> {
   console.log(`\n🛑 Shutting down (${signal})...`);
-  const exitCode = process.env.NODE_ENV !== "test" ? 0 : undefined;
+  const exitCode = !IS_TEST_ENV ? 0 : undefined;
   let exit: (() => void) | undefined;
 
   try {
