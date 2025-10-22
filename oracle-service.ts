@@ -156,7 +156,7 @@ export class OracleService {
   ];
   private program: anchor.Program<Timba>;
   private connection: anchor.web3.Connection;
-  private provider: anchor.AnchorProvider;
+  private provider!: anchor.AnchorProvider;
   private adminKeypair: anchor.web3.Keypair;
   private db: OracleDatabase;
   private rpcEndpoints: string[];
@@ -231,7 +231,12 @@ export class OracleService {
       this.activeRpcIndex = 0;
     }
 
-    return this.rpcEndpoints[this.activeRpcIndex];
+    const endpoint = this.rpcEndpoints[this.activeRpcIndex];
+    if (!endpoint) {
+      throw new Error("No RPC endpoints configured");
+    }
+
+    return endpoint;
   }
 
   private shouldUseEphemeralKeypair(): boolean {
