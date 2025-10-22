@@ -176,6 +176,15 @@ export class OracleDatabase {
     }, errorMessage);
   }
 
+  private runDelete(
+    sql: string,
+    errorMessage: string,
+    ...params: Parameters<ReturnType<Database["prepare"]>["run"]>
+  ): number {
+    const result = this.runStatement(sql, errorMessage, ...params);
+    return typeof result?.changes === "number" ? result.changes : 0;
+  }
+
   // Secret key management
   public saveSecretKey(
     gameAddress: string,
@@ -352,7 +361,7 @@ export class OracleDatabase {
       const cutoffTime = Date.now() - hoursOld * 60 * 60 * 1000;
 
       // Clean up old secret keys that have already been used or whose game is finished.
-      const secretsStmt = this.db.prepare(
+      const deletedSecrets = this.runDelete(
         `DELETE FROM secret_keys
          WHERE created_at < ?
            AND (
@@ -360,22 +369,26 @@ export class OracleDatabase {
              game_address IN (
                SELECT game_address FROM game_tracking WHERE status != ?
              )
-           )`
+           )`,
+        "Failed to delete old secret keys",
+        cutoffTime,
+        DEFAULT_STATUS
       );
-      const secretsResult = secretsStmt.run(cutoffTime, DEFAULT_STATUS);
 
       // Clean up old game tracking records (completed/cancelled games older than cutoff)
-      const trackingStmt = this.db.prepare(
+      const deletedGames = this.runDelete(
         `DELETE FROM game_tracking
          WHERE status != ?
            AND completed_at IS NOT NULL
-           AND completed_at < ?`
+           AND completed_at < ?`,
+        "Failed to delete old game tracking rows",
+        DEFAULT_STATUS,
+        cutoffTime
       );
-      const trackingResult = trackingStmt.run(DEFAULT_STATUS, cutoffTime);
 
       const deletedCounts = {
-        deletedSecrets: secretsResult.changes,
-        deletedGames: trackingResult.changes,
+        deletedSecrets,
+        deletedGames,
       };
 
       console.log(

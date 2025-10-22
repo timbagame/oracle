@@ -207,7 +207,9 @@ describe("OracleService event handling", () => {
     const programStub = createProgramStub();
     const service = createService(db, programStub);
 
-    const missing = await (service as any).gameExistsOnChain("no-secret");
+    const missing = await (service as any).resolveGameContext("no-secret", {
+      requireOnChain: true,
+    });
     expect(missing).toBeNull();
     expect(programStub.fetchCalls).toHaveLength(0);
 
@@ -218,7 +220,9 @@ describe("OracleService event handling", () => {
       programStub.fetchCalls.push(pda);
       return {};
     };
-    const exists = await (service as any).gameExistsOnChain(activeGame);
+    const exists = await (service as any).resolveGameContext(activeGame, {
+      requireOnChain: true,
+    });
     expect(exists?.gamePda).toBeInstanceOf(PublicKey);
     expect(programStub.fetchCalls).toHaveLength(1);
 
@@ -230,7 +234,9 @@ describe("OracleService event handling", () => {
       throw new Error("Account does not exist");
     };
 
-    const gone = await (service as any).gameExistsOnChain(goneGame);
+    const gone = await (service as any).resolveGameContext(goneGame, {
+      requireOnChain: true,
+    });
     expect(gone).toBeNull();
     expect(programStub.fetchCalls).toHaveLength(2);
   });

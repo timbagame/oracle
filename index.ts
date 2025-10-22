@@ -24,21 +24,32 @@ type HttpMethod = "GET" | "POST";
 const PORT = Number(process.env["ORACLE_PORT"]) || DEFAULT_PORT;
 
 let server: ReturnType<typeof Bun.serve> | undefined;
-let backgroundTask: ReturnType<typeof setInterval> | undefined;
+let backgroundLoop: Promise<void> | undefined;
+let backgroundAbortController: AbortController | undefined;
 
 async function stopServer(
   oracle: OracleApi,
   exitCode?: number
 ): Promise<(() => void) | undefined> {
+  if (backgroundAbortController) {
+    backgroundAbortController.abort();
+  }
+
+  if (backgroundLoop) {
+    try {
+      await backgroundLoop;
+    } catch (loopError) {
+      console.error("⚠️  Background loop terminated with error:", loopError);
+    } finally {
+      backgroundLoop = undefined;
+      backgroundAbortController = undefined;
+    }
+  }
+
   try {
     await oracle.stopEventListening();
   } catch (listenerError) {
     console.error("⚠️  Failed to stop event listeners:", listenerError);
-  }
-
-  if (backgroundTask) {
-    clearInterval(backgroundTask);
-    backgroundTask = undefined;
   }
 
   server?.stop();
@@ -48,6 +59,14 @@ async function stopServer(
   }
 
   return undefined;
+}
+
+function invokeExit(exitCode: number | undefined, exit?: () => void): void {
+  if (exitCode === undefined) {
+    return;
+  }
+
+  (exit ?? (() => process.exit(exitCode)))();
 }
 
 // Response helpers
@@ -285,16 +304,29 @@ if (!IS_TEST_ENV) {
   console.log(`🔮 Oracle API running on http://localhost:${PORT}`);
 
   const startBackgroundTasks = () => {
-    backgroundTask = setInterval(async () => {
-      try {
-        await realOracle.scanAndCompleteActiveGames();
+    if (backgroundAbortController) {
+      return;
+    }
 
-        // Clean up old records periodically (every scan cycle)
-        realOracle.cleanupOldRecords(48);
-      } catch (error) {
-        console.error("❌ Background scan error:", error);
-      }
-    }, FALLBACK_SCAN_INTERVAL);
+    backgroundAbortController = new AbortController();
+    backgroundLoop = realOracle
+      .runScanLoop({
+        waitBetweenCyclesMs: FALLBACK_SCAN_INTERVAL,
+        waitForPendingOnly: false,
+        cleanupAfterCycleHours: 48,
+        shouldContinue: () => true,
+        signal: backgroundAbortController.signal,
+      })
+      .then(() => undefined)
+      .catch((error) => {
+        if (backgroundAbortController?.signal.aborted) {
+          return;
+        }
+        console.error("❌ Background scan loop failed:", error);
+      })
+      .finally(() => {
+        backgroundAbortController = undefined;
+      });
   };
 
   initialize(realOracle)
@@ -311,9 +343,7 @@ if (!IS_TEST_ENV) {
       } catch (shutdownError) {
         console.error("❌ Failed to stop server after init error:", shutdownError);
       } finally {
-        if (exitCode !== undefined) {
-          (exit ?? (() => process.exit(exitCode)))();
-        }
+        invokeExit(exitCode, exit);
       }
     });
 
@@ -347,8 +377,6 @@ export async function shutdown(
   } catch (error) {
     console.error("❌ Shutdown error:", error);
   } finally {
-    if (exitCode !== undefined) {
-      (exit ?? (() => process.exit(exitCode)))();
-    }
+    invokeExit(exitCode, exit);
   }
 }

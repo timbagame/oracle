@@ -76,6 +76,24 @@ interface CompletionStats {
   notReady: number;
 }
 
+export interface ScanLoopOptions {
+  waitBetweenCyclesMs?: number;
+  waitForPendingOnly?: boolean;
+  cleanupAfterCycleHours?: number;
+  shouldContinue?: (stats: CompletionStats, cycle: number) => boolean;
+  signal?: AbortSignal;
+  onCycleStart?: (cycle: number) => void;
+  onCycleComplete?: (cycle: number, stats: CompletionStats) => void;
+}
+
+export interface ScanLoopSummary {
+  cycles: number;
+  totalCompleted: number;
+  totalErrors: number;
+  totalNotReady: number;
+  lastStats: CompletionStats | null;
+}
+
 interface GameReadinessSnapshot {
   ready: boolean;
   gameAccount: any | null;
@@ -381,52 +399,17 @@ export class OracleService {
     };
 
     try {
-      let context = sharedContext ?? null;
-      let readiness =
-        cachedReadiness ?? sharedContext?.readiness ?? undefined;
-
-      if (!context) {
-        const options: ResolveGameContextOptions = {};
-        if (readiness) {
-          options.readiness = readiness;
-        }
-        context = await this.resolveGameContext(gameAddress, options);
-      }
+      const { context, readiness, notReady } = await this.resolveReadinessForGame(
+        gameAddress,
+        sharedContext ?? null,
+        cachedReadiness
+      );
 
       if (!context) {
         return recordFailure("No secret key found");
       }
 
-      readiness = readiness ?? context.readiness ?? this.consumeReadiness(gameAddress);
-      let shouldAttempt: boolean | undefined;
-
-      if (!readiness) {
-        shouldAttempt = await this.isGameReadyForCompletion(context.gamePda);
-        readiness = this.consumeReadiness(gameAddress);
-      }
-
-      if (!readiness) {
-        if (shouldAttempt === false) {
-          return { success: false, notReady: true };
-        }
-
-        const refreshed = await this.resolveGameContext(gameAddress, {
-          requireOnChain: true,
-        });
-
-        if (!refreshed || !refreshed.readiness) {
-          return { success: false, notReady: true };
-        }
-
-        context = refreshed;
-        readiness = refreshed.readiness;
-
-        if (shouldAttempt) {
-          readiness = { ...readiness, ready: true };
-        }
-      }
-
-      if (!readiness || !readiness.ready || !readiness.gameAccount) {
+      if (notReady || !readiness) {
         return { success: false, notReady: true };
       }
 
@@ -475,6 +458,68 @@ export class OracleService {
     } catch (error: any) {
       return recordFailure(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  private async resolveReadinessForGame(
+    gameAddress: string,
+    context: GameOnChainContext | null,
+    readiness?: GameReadinessSnapshot
+  ): Promise<{
+    context: GameOnChainContext | null;
+    readiness?: GameReadinessSnapshot;
+    notReady?: boolean;
+  }> {
+    let resolvedContext = context;
+    let resolvedReadiness = readiness ?? context?.readiness;
+
+    if (!resolvedContext) {
+      const options: ResolveGameContextOptions = {};
+      if (resolvedReadiness) {
+        options.readiness = resolvedReadiness;
+      }
+      resolvedContext = await this.resolveGameContext(gameAddress, options);
+
+      if (!resolvedContext) {
+        return { context: null };
+      }
+    }
+
+    resolvedReadiness =
+      resolvedReadiness ?? resolvedContext.readiness ?? this.consumeReadiness(gameAddress);
+
+    let shouldAttempt: boolean | undefined;
+
+    if (!resolvedReadiness) {
+      shouldAttempt = await this.isGameReadyForCompletion(resolvedContext.gamePda);
+      resolvedReadiness = this.consumeReadiness(gameAddress);
+    }
+
+    if (!resolvedReadiness) {
+      if (shouldAttempt === false) {
+        return { context: resolvedContext, notReady: true };
+      }
+
+      const refreshed = await this.resolveGameContext(gameAddress, {
+        requireOnChain: true,
+      });
+
+      if (!refreshed || !refreshed.readiness) {
+        return { context: resolvedContext, notReady: true };
+      }
+
+      resolvedContext = refreshed;
+      resolvedReadiness = refreshed.readiness;
+
+      if (shouldAttempt) {
+        resolvedReadiness = { ...resolvedReadiness, ready: true };
+      }
+    }
+
+    if (!resolvedReadiness || !resolvedReadiness.ready || !resolvedReadiness.gameAccount) {
+      return { context: resolvedContext, readiness: resolvedReadiness, notReady: true };
+    }
+
+    return { context: resolvedContext, readiness: resolvedReadiness };
   }
 
   private async executeGameCompletion(args: {
@@ -709,10 +754,6 @@ export class OracleService {
     return error.message?.includes('Account does not exist');
   }
 
-  private async delay(ms: number): Promise<void> {
-    return delayHelper(ms);
-  }
-
   public cleanupOldRecords(hoursOld: number = 48) {
     return this.db.cleanupOldRecords(hoursOld);
   }
@@ -743,7 +784,9 @@ export class OracleService {
 
       try {
         // Check if game still exists on-chain
-        const onChainContext = await this.gameExistsOnChain(game.game_address);
+        const onChainContext = await this.resolveGameContext(game.game_address, {
+          requireOnChain: true,
+        });
         if (!onChainContext) {
           this.db.markGameCompleted(game.game_address);
           continue;
@@ -756,7 +799,7 @@ export class OracleService {
         );
         this.updateScanStats(stats, result);
 
-        await this.delay(DEFAULT_DELAY_MS);
+        await delayHelper(DEFAULT_DELAY_MS);
       } catch (error) {
         stats.errors++;
         console.error(`❌ Error completing game ${game.game_address}:`, error);
@@ -767,10 +810,94 @@ export class OracleService {
     return stats;
   }
 
-  private async gameExistsOnChain(
-    gameAddress: string
-  ): Promise<GameOnChainContext | null> {
-    return this.resolveGameContext(gameAddress, { requireOnChain: true });
+  public async runScanLoop(options: ScanLoopOptions = {}): Promise<ScanLoopSummary> {
+    const {
+      waitBetweenCyclesMs = DEFAULT_DELAY_MS,
+      waitForPendingOnly = false,
+      cleanupAfterCycleHours,
+      shouldContinue,
+      signal,
+      onCycleStart,
+      onCycleComplete,
+    } = options;
+
+    const totals: CompletionStats = { completed: 0, errors: 0, notReady: 0 };
+    let lastStats: CompletionStats | null = null;
+    let cycle = 0;
+
+    const shouldAbort = () => Boolean(signal?.aborted);
+
+    const waitForNextCycle = async () => {
+      if (waitBetweenCyclesMs <= 0) {
+        return;
+      }
+
+      if (!signal) {
+        await delayHelper(waitBetweenCyclesMs);
+        return;
+      }
+
+      if (signal.aborted) {
+        return;
+      }
+
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(() => {
+          signal.removeEventListener("abort", onAbort);
+          resolve();
+        }, waitBetweenCyclesMs);
+
+        const onAbort = () => {
+          clearTimeout(timeout);
+          signal.removeEventListener("abort", onAbort);
+          resolve();
+        };
+
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+    };
+
+    while (!shouldAbort()) {
+      cycle += 1;
+      onCycleStart?.(cycle);
+
+      const stats = await this.scanAndCompleteActiveGames();
+      lastStats = stats;
+
+      totals.completed += stats.completed;
+      totals.errors += stats.errors;
+      totals.notReady += stats.notReady;
+
+      if (cleanupAfterCycleHours !== undefined) {
+        this.cleanupOldRecords(cleanupAfterCycleHours);
+      }
+
+      onCycleComplete?.(cycle, stats);
+
+      if (shouldAbort()) {
+        break;
+      }
+
+      const continueLoop = shouldContinue
+        ? shouldContinue(stats, cycle)
+        : stats.completed > 0 || stats.notReady > 0;
+
+      if (!continueLoop) {
+        break;
+      }
+
+      if (waitBetweenCyclesMs > 0 && (!waitForPendingOnly || stats.notReady > 0)) {
+        await waitForNextCycle();
+      }
+    }
+
+    return {
+      cycles: cycle,
+      totalCompleted: totals.completed,
+      totalErrors: totals.errors,
+      totalNotReady: totals.notReady,
+      lastStats,
+    };
   }
 
   private logMissingSecret(gameAddress: string, requireOnChain: boolean): void {
