@@ -1,8 +1,9 @@
-import { beforeAll, afterAll, describe, it, expect } from "bun:test";
+import { beforeAll, afterAll, describe, it, expect, spyOn } from "bun:test";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 import { Keypair } from "@solana/web3.js";
+import * as delayModule from "../delay.ts";
 
 const makeFakeContext = () => ({
   gamePda: Keypair.generate().publicKey,
@@ -135,10 +136,10 @@ describe("OracleService", () => {
       randomHash: "hash",
     });
 
-    const originalExists = (service as any).gameExistsOnChain;
+    const originalResolve = (service as any).resolveGameContext;
     const originalComplete = (service as any).completeGame;
 
-    (service as any).gameExistsOnChain = async (addr: string) => {
+    (service as any).resolveGameContext = async (addr: string) => {
       if (addr === "gameGone") return null;
       return makeFakeContext();
     };
@@ -164,7 +165,7 @@ describe("OracleService", () => {
     const pending = db.getPendingGames().map((g) => g.game_address);
     expect(pending).not.toContain("gameGone");
 
-    (service as any).gameExistsOnChain = originalExists;
+    (service as any).resolveGameContext = originalResolve;
     (service as any).completeGame = originalComplete;
   });
 
@@ -188,21 +189,20 @@ describe("OracleService", () => {
       randomHash: "f".repeat(64),
     });
 
-    const originalExists = (service as any).gameExistsOnChain;
+    const originalResolve = (service as any).resolveGameContext;
     const originalComplete = (service as any).completeGame;
-    const originalDelay = (service as any).delay;
 
     const processed: string[] = [];
     let delayCalls = 0;
 
-    (service as any).gameExistsOnChain = async () => makeFakeContext();
+    (service as any).resolveGameContext = async () => makeFakeContext();
     (service as any).completeGame = async (addr: string) => {
       processed.push(addr);
       return { success: true };
     };
-    (service as any).delay = async () => {
+    const delaySpy = spyOn(delayModule, "delay").mockImplementation(async () => {
       delayCalls++;
-    };
+    });
 
     try {
       const stats = await service.scanAndCompleteActiveGames();
@@ -215,9 +215,9 @@ describe("OracleService", () => {
         .find((g) => g.game_address === "stubborn");
       expect(stubbornEntry?.completion_attempts).toBeGreaterThanOrEqual(5);
     } finally {
-      (service as any).gameExistsOnChain = originalExists;
+      (service as any).resolveGameContext = originalResolve;
       (service as any).completeGame = originalComplete;
-      (service as any).delay = originalDelay;
+      delaySpy.mockRestore();
     }
   });
 });
