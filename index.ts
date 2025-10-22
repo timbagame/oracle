@@ -289,13 +289,7 @@ if (process.env.NODE_ENV !== "test") {
         await realOracle.scanAndCompleteActiveGames();
 
         // Clean up old records periodically (every scan cycle)
-        const cleanupResult = realOracle.cleanupOldRecords(48);
-        if (
-          cleanupResult.deletedSecrets > 0 ||
-          cleanupResult.deletedGames > 0
-        ) {
-          console.log("🧹 Background cleanup completed");
-        }
+        realOracle.cleanupOldRecords(48);
       } catch (error) {
         console.error("❌ Background scan error:", error);
       }
