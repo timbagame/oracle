@@ -5,6 +5,7 @@ import { OracleService } from "./oracle-service.ts";
 // Constants
 const DEFAULT_PORT = 3001;
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
+const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = 5000;
 const IS_TEST_ENV = process.env.NODE_ENV === "test";
 
 // CORS headers configuration
@@ -37,14 +38,32 @@ async function stopServer(
   }
 
   if (backgroundLoop) {
-    try {
-      await backgroundLoop;
-    } catch (loopError) {
-      console.error("⚠️  Background loop terminated with error:", loopError);
-    } finally {
-      backgroundLoop = undefined;
-      backgroundAbortController = undefined;
+    const loopPromise = backgroundLoop;
+    backgroundLoop = undefined;
+
+    const timeoutResult = await Promise.race<"completed" | "timeout">([
+      loopPromise
+        .then(() => "completed" as const)
+        .catch((loopError) => {
+          console.error("⚠️  Background loop terminated with error:", loopError);
+          return "completed" as const;
+        }),
+      delay(BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS).then(
+        () => "timeout" as const
+      ),
+    ]);
+
+    if (timeoutResult === "timeout") {
+      console.warn(
+        "⚠️  Background loop did not exit within the shutdown timeout; proceeding with shutdown."
+      );
+
+      loopPromise.catch((loopError) => {
+        console.error("⚠️  Background loop terminated with error:", loopError);
+      });
     }
+
+    backgroundAbortController = undefined;
   }
 
   try {
