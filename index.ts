@@ -1,4 +1,5 @@
 import "./logging";
+import { delay } from "./delay.ts";
 import { OracleService } from "./oracle-service.ts";
 
 // Constants
@@ -309,24 +310,36 @@ if (!IS_TEST_ENV) {
     }
 
     backgroundAbortController = new AbortController();
-    backgroundLoop = realOracle
-      .runScanLoop({
-        waitBetweenCyclesMs: FALLBACK_SCAN_INTERVAL,
-        waitForPendingOnly: false,
-        cleanupAfterCycleHours: 48,
-        shouldContinue: () => true,
-        signal: backgroundAbortController.signal,
-      })
-      .then(() => undefined)
-      .catch((error) => {
-        if (backgroundAbortController?.signal.aborted) {
-          return;
+    const { signal } = backgroundAbortController;
+
+    const executeLoop = async () => {
+      while (!signal.aborted) {
+        try {
+          await realOracle.runScanLoop({
+            waitBetweenCyclesMs: FALLBACK_SCAN_INTERVAL,
+            waitForPendingOnly: false,
+            cleanupAfterCycleHours: 48,
+            shouldContinue: () => true,
+            signal,
+          });
+
+          if (signal.aborted) {
+            break;
+          }
+        } catch (error) {
+          if (signal.aborted) {
+            break;
+          }
+
+          console.error("❌ Background scan loop failed:", error);
+          await delay(1000);
         }
-        console.error("❌ Background scan loop failed:", error);
-      })
-      .finally(() => {
-        backgroundAbortController = undefined;
-      });
+      }
+    };
+
+    backgroundLoop = executeLoop().finally(() => {
+      backgroundAbortController = undefined;
+    });
   };
 
   initialize(realOracle)
