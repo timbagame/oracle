@@ -102,6 +102,23 @@ function createErrorResponse(error: string, status: number = 500): Response {
   return createResponse({ success: false, error }, status);
 }
 
+function buildServicePayload(extra: Record<string, unknown> = {}) {
+  const uptime = process.uptime();
+  const timestamp = new Date().toISOString();
+
+  return {
+    ...extra,
+    timestamp,
+    uptime,
+    service: {
+      name: "oracle-api",
+      version: "1.0.0",
+      environment: process.env.NODE_ENV || "development",
+      uptime,
+    },
+  };
+}
+
 // Handlers factory for clean DI and testing
 export type OracleApi = Pick<
   OracleService,
@@ -116,12 +133,9 @@ export type OracleApi = Pick<
 export function buildHandlers(oracle: OracleApi) {
   return {
     async handleHealth(): Promise<Response> {
-      return createResponse({
-        status: "healthy",
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        service: "oracle-api",
-      });
+      return createResponse(
+        buildServicePayload({ status: "healthy" })
+      );
     },
 
     async handleGenerateHash(): Promise<Response> {
@@ -140,17 +154,9 @@ export function buildHandlers(oracle: OracleApi) {
 
     async handleStats(): Promise<Response> {
       const stats = oracle.getStats();
-      return createResponse({
-        success: true,
-        timestamp: new Date().toISOString(),
-        stats,
-        service: {
-          name: "oracle-api",
-          version: "1.0.0",
-          uptime: process.uptime(),
-          environment: process.env.NODE_ENV || "development",
-        },
-      });
+      return createResponse(
+        buildServicePayload({ success: true, stats })
+      );
     },
   };
 }
