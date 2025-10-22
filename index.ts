@@ -25,6 +25,30 @@ const PORT = Number(process.env["ORACLE_PORT"]) || DEFAULT_PORT;
 let server: ReturnType<typeof Bun.serve> | undefined;
 let backgroundTask: ReturnType<typeof setInterval> | undefined;
 
+async function stopServer(
+  oracle: OracleApi,
+  exitCode?: number
+): Promise<(() => void) | undefined> {
+  try {
+    await oracle.stopEventListening();
+  } catch (listenerError) {
+    console.error("⚠️  Failed to stop event listeners:", listenerError);
+  }
+
+  if (backgroundTask) {
+    clearInterval(backgroundTask);
+    backgroundTask = undefined;
+  }
+
+  server?.stop();
+
+  if (exitCode !== undefined && process.env.NODE_ENV !== "test") {
+    return () => process.exit(exitCode);
+  }
+
+  return undefined;
+}
+
 // Response helpers
 function createResponse(data: any, status: number = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: CORS_HEADERS });
@@ -284,22 +308,17 @@ if (process.env.NODE_ENV !== "test") {
     })
     .catch(async (error) => {
       console.error("❌ Oracle initialization failed. Stopping server.", error);
-      try {
-        await realOracle.stopEventListening();
-      } catch (listenerError) {
-        console.error(
-          "⚠️  Failed to stop event listeners after startup error:",
-          listenerError
-        );
-      }
-      if (backgroundTask) {
-        clearInterval(backgroundTask);
-        backgroundTask = undefined;
-      }
-      server?.stop();
+      const exitCode = process.env.NODE_ENV !== "test" ? 1 : undefined;
+      let exit: (() => void) | undefined;
 
-      if (process.env.NODE_ENV !== "test") {
-        process.exit(1);
+      try {
+        exit = await stopServer(realOracle, exitCode);
+      } catch (shutdownError) {
+        console.error("❌ Failed to stop server after init error:", shutdownError);
+      } finally {
+        if (exitCode !== undefined) {
+          (exit ?? (() => process.exit(exitCode)))();
+        }
       }
     });
 
@@ -324,19 +343,17 @@ export async function shutdown(
   signal: string
 ): Promise<void> {
   console.log(`\n🛑 Shutting down (${signal})...`);
+  const exitCode = process.env.NODE_ENV !== "test" ? 0 : undefined;
+  let exit: (() => void) | undefined;
+
   try {
-    await oracle.stopEventListening();
-    if (backgroundTask) {
-      clearInterval(backgroundTask);
-      backgroundTask = undefined;
-    }
-    server?.stop();
+    exit = await stopServer(oracle, exitCode);
     console.log("✅ Shutdown complete");
   } catch (error) {
     console.error("❌ Shutdown error:", error);
-  }
-  // Avoid killing test process
-  if (process.env.NODE_ENV !== "test") {
-    process.exit(0);
+  } finally {
+    if (exitCode !== undefined) {
+      (exit ?? (() => process.exit(exitCode)))();
+    }
   }
 }
