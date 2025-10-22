@@ -157,7 +157,29 @@ export function createSolanaConnection(
     throw new Error("SOLANA_NETWORK environment variable is required");
   }
 
-  if (normalizedPrimary === normalizedFallback) {
+  const isMainnet = (() => {
+    if (!normalizedPrimary) {
+      return false;
+    }
+
+    if (normalizedPrimary === normalizedFallback) {
+      return true;
+    }
+
+    try {
+      const parsed = new URL(trimmed);
+      const clusterHint = `${parsed.hostname}${parsed.pathname}`;
+      if (/mainnet(?:-beta)?/i.test(clusterHint)) {
+        return true;
+      }
+    } catch (error) {
+      // Ignore parsing failures and fall through to the string check below.
+    }
+
+    return /mainnet(?:-beta)?/i.test(normalizedPrimary);
+  })();
+
+  if (normalizedPrimary === normalizedFallback || !isMainnet) {
     return buildConnection(trimmed, commitment);
   }
 

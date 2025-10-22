@@ -7,10 +7,10 @@ import {
 } from "../solana-connection.ts";
 
 describe("createSolanaConnection", () => {
-  it("falls back to mainnet when the primary RPC is unreachable", async () => {
+  it("falls back to mainnet when the primary mainnet RPC is unreachable", async () => {
     const callLog: string[] = [];
     const behaviors: Record<string, () => Promise<number>> = {
-      "http://unreachable": async () => {
+      "https://custom-mainnet.solana.com": async () => {
         const error = new Error("connect ECONNREFUSED");
         (error as NodeJS.ErrnoException).code = "ECONNREFUSED";
         throw error;
@@ -37,14 +37,52 @@ describe("createSolanaConnection", () => {
 
     __testing.setConnectionFactory((endpoint) => new FakeConnection(endpoint) as any);
     try {
-      const connection = createSolanaConnection("http://unreachable");
+      const connection = createSolanaConnection("https://custom-mainnet.solana.com");
       const slot = await connection.getSlot();
       expect(slot).toBe(123);
       expect(callLog).toEqual([
-        "http://unreachable:getSlot",
+        "https://custom-mainnet.solana.com:getSlot",
         `${MAINNET_FALLBACK_RPC}:getSlot`,
       ]);
       expect(connection.rpcEndpoint).toBe(MAINNET_FALLBACK_RPC);
+    } finally {
+      __testing.setConnectionFactory();
+    }
+  });
+
+  it("does not fall back when the configured RPC targets a non-mainnet cluster", async () => {
+    const callLog: string[] = [];
+    const behaviors: Record<string, () => Promise<number>> = {
+      "https://api.devnet.solana.com": async () => {
+        const error = new Error("connect ECONNREFUSED");
+        (error as NodeJS.ErrnoException).code = "ECONNREFUSED";
+        throw error;
+      },
+    };
+
+    class FakeConnection {
+      public readonly rpcEndpoint: string;
+
+      constructor(endpoint: string) {
+        this.rpcEndpoint = endpoint;
+      }
+
+      async getSlot(): Promise<number> {
+        callLog.push(`${this.rpcEndpoint}:getSlot`);
+        const behavior = behaviors[this.rpcEndpoint];
+        if (!behavior) {
+          throw new Error(`No behavior registered for ${this.rpcEndpoint}`);
+        }
+        return behavior();
+      }
+    }
+
+    __testing.setConnectionFactory((endpoint) => new FakeConnection(endpoint) as any);
+    try {
+      const connection = createSolanaConnection("https://api.devnet.solana.com");
+      await expect(connection.getSlot()).rejects.toThrow("connect ECONNREFUSED");
+      expect(callLog).toEqual(["https://api.devnet.solana.com:getSlot"]);
+      expect(connection.rpcEndpoint).toBe("https://api.devnet.solana.com");
     } finally {
       __testing.setConnectionFactory();
     }
