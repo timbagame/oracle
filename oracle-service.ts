@@ -26,6 +26,11 @@ const KEYPAIR_FILE = "admin-keypair.json";
 const SECRET_KEY_LENGTH = 32;
 const MAX_COMPLETION_ATTEMPTS = 5;
 const DEFAULT_DELAY_MS = 1000;
+// PDA seed buffers (treated as immutable; do not mutate in place)
+const GAME_SEED = Buffer.from("game", "utf8");
+const ORACLE_SEED = Buffer.from("oracle", "utf8");
+const GAME_TOKEN_SEED = Buffer.from("game_token", "utf8");
+const GAME_VAULT_SEED = Buffer.from("game_vault", "utf8");
 
 
 // Event handling types
@@ -489,16 +494,13 @@ export class OracleService {
       tokenMint
     );
     const programId = this.ensurePublicKey(this.program.programId);
-    const [oraclePda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("oracle", "utf8")],
-      programId
-    );
+    const [oraclePda] = PublicKey.findProgramAddressSync([ORACLE_SEED], programId);
     const [gameTokenPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("game_token", "utf8"), tokenMint.toBuffer()],
+      [GAME_TOKEN_SEED, tokenMint.toBuffer()],
       programId
     );
     const [gameVaultPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("game_vault", "utf8"), tokenMint.toBuffer()],
+      [GAME_VAULT_SEED, tokenMint.toBuffer()],
       programId
     );
     const winnerTokenAccount = getAssociatedTokenAddressSync(
@@ -858,10 +860,7 @@ export class OracleService {
 
   private getGamePDA(randomHash: Buffer): PublicKey {
     const programId = this.ensurePublicKey(this.program.programId);
-    const [pda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("game", 'utf8'), randomHash],
-      programId
-    );
+    const [pda] = PublicKey.findProgramAddressSync([GAME_SEED, randomHash], programId);
     return pda;
   }
 
