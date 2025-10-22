@@ -89,6 +89,9 @@ Configure via environment variables in `.env`:
 # Required: Solana network endpoint
 SOLANA_NETWORK=https://api.mainnet-beta.solana.com
 
+# The service will automatically fall back to the public mainnet RPC above if the
+# configured endpoint becomes unreachable.
+
 # Optional: API server port (default: 3001)
 ORACLE_PORT=3001
 

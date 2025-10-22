@@ -9,6 +9,7 @@ import {
 } from "@solana/spl-token";
 import { OracleDatabase } from "./database.ts";
 import { delay as delayHelper } from "./delay.ts";
+import { createSolanaConnection } from "./solana-connection.ts";
 import type { Timba } from "./idl/idlType.ts";
 import idl from "./idl/idl.json" with { type: "json" };
 import * as fs from "fs";
@@ -186,7 +187,7 @@ export class OracleService {
     if (!networkUrl) {
       throw new Error("SOLANA_NETWORK environment variable is required");
     }
-    return new anchor.web3.Connection(networkUrl, "confirmed");
+    return createSolanaConnection(networkUrl, "confirmed");
   }
 
   private shouldUseEphemeralKeypair(): boolean {
