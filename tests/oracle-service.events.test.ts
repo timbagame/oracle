@@ -29,13 +29,11 @@ describe("OracleService event handling", () => {
     const service = createService(db, programStub);
 
     await service.startEventListening();
-    expect(programStub.addCalls.map((call) => call.event)).toEqual([
-      "playerJoined",
-      "playerUnjoined",
-      "gameInitialized",
-      "gameCompleted",
-      "gameClosed",
-    ]);
+    expect(programStub.addCalls.map((call) => call.event)).toEqual(
+      OracleServiceClass.EVENT_HANDLER_CONFIG.map(
+        (definition) => definition.event
+      )
+    );
 
     const statsWhileListening = service.getStats();
     expect(statsWhileListening.eventListening).toBe(true);

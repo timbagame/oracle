@@ -27,6 +27,100 @@ interface DatabaseStats {
   cancelledGames: number;
 }
 
+const TABLE_DEFINITIONS: ReadonlyArray<{
+  sql: string;
+  log: string;
+  error: string;
+}> = [
+  {
+    sql: `
+      CREATE TABLE IF NOT EXISTS secret_keys (
+        game_address TEXT PRIMARY KEY,
+        secret_key TEXT NOT NULL,
+        random_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        used BOOLEAN DEFAULT FALSE
+      )
+    `,
+    log: "Ensuring secret_keys table exists",
+    error: "Failed to ensure secret_keys table",
+  },
+  {
+    sql: `
+      CREATE TABLE IF NOT EXISTS game_tracking (
+        game_address TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT '${DEFAULT_STATUS}',
+        game_type TEXT,
+        last_checked INTEGER NOT NULL,
+        completion_attempts INTEGER DEFAULT 0,
+        completed_at INTEGER
+      )
+    `,
+    log: "Ensuring game_tracking table exists",
+    error: "Failed to ensure game_tracking table",
+  },
+  {
+    sql: `
+      CREATE TABLE IF NOT EXISTS game_players (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_address TEXT NOT NULL,
+        player_address TEXT NOT NULL,
+        ticket_index INTEGER NOT NULL,
+        joined_at INTEGER NOT NULL,
+        UNIQUE(game_address, ticket_index)
+      )
+    `,
+    log: "Ensuring game_players table exists",
+    error: "Failed to ensure game_players table",
+  },
+];
+
+const LEGACY_TICKET_MIGRATIONS: ReadonlyArray<{
+  sql: string;
+  log: string;
+  error: string;
+}> = [
+  {
+    sql: "ALTER TABLE game_players ADD COLUMN ticket_index INTEGER",
+    log: "Adding ticket_index column to game_players",
+    error: "Failed to add ticket_index column to game_players",
+  },
+  {
+    sql: "DELETE FROM game_players",
+    log: "Clearing legacy game_players rows after ticket_index migration",
+    error: "Failed to clear legacy game_players rows during migration",
+  },
+];
+
+const PLAYER_INDEX_DEFINITIONS: ReadonlyArray<{
+  sql: string;
+  log: string;
+  error: string;
+}> = [
+  {
+    sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_game_players_ticket ON game_players (game_address, ticket_index)",
+    log: "Ensuring idx_game_players_ticket index exists",
+    error: "Failed to ensure idx_game_players_ticket index",
+  },
+  {
+    sql: "CREATE INDEX IF NOT EXISTS idx_game_players_game ON game_players (game_address)",
+    log: "Ensuring idx_game_players_game index exists",
+    error: "Failed to ensure idx_game_players_game index",
+  },
+];
+
+const EMPTY_DATABASE_STATS: Readonly<DatabaseStats> = Object.freeze({
+  totalSecrets: 0,
+  usedSecrets: 0,
+  pendingGames: 0,
+  completedGames: 0,
+  cancelledGames: 0,
+});
+
+function createEmptyStats(): DatabaseStats {
+  return { ...EMPTY_DATABASE_STATS };
+}
+
 /**
  * Oracle Database for storing secret keys and tracking game completion
  */
@@ -58,52 +152,9 @@ export class OracleDatabase {
   }
 
   private createTables(): void {
-    // Secret keys table
-    this.runSchemaStatement(
-      `
-      CREATE TABLE IF NOT EXISTS secret_keys (
-        game_address TEXT PRIMARY KEY,
-        secret_key TEXT NOT NULL,
-        random_hash TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        used BOOLEAN DEFAULT FALSE
-      )
-    `,
-      "Ensuring secret_keys table exists",
-      "Failed to ensure secret_keys table"
-    );
-
-    // Game tracking table
-    this.runSchemaStatement(
-      `
-      CREATE TABLE IF NOT EXISTS game_tracking (
-        game_address TEXT PRIMARY KEY,
-        status TEXT NOT NULL DEFAULT '${DEFAULT_STATUS}',
-        game_type TEXT,
-        last_checked INTEGER NOT NULL,
-        completion_attempts INTEGER DEFAULT 0,
-        completed_at INTEGER
-      )
-    `,
-      "Ensuring game_tracking table exists",
-      "Failed to ensure game_tracking table"
-    );
-
-    // Game players table (per-ticket entries)
-    this.runSchemaStatement(
-      `
-      CREATE TABLE IF NOT EXISTS game_players (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        game_address TEXT NOT NULL,
-        player_address TEXT NOT NULL,
-        ticket_index INTEGER NOT NULL,
-        joined_at INTEGER NOT NULL,
-        UNIQUE(game_address, ticket_index)
-      )
-    `,
-      "Ensuring game_players table exists",
-      "Failed to ensure game_players table"
-    );
+    for (const definition of TABLE_DEFINITIONS) {
+      this.runSchemaStatement(definition.sql, definition.log, definition.error);
+    }
 
     this.ensureTicketSchema();
   }
@@ -115,28 +166,14 @@ export class OracleDatabase {
     const hasTicketIndex = tableInfo.some((column) => column.name === "ticket_index");
 
     if (!hasTicketIndex) {
-      this.runSchemaStatement(
-        "ALTER TABLE game_players ADD COLUMN ticket_index INTEGER",
-        "Adding ticket_index column to game_players",
-        "Failed to add ticket_index column to game_players"
-      );
-      this.runSchemaStatement(
-        "DELETE FROM game_players",
-        "Clearing legacy game_players rows after ticket_index migration",
-        "Failed to clear legacy game_players rows during migration"
-      );
+      for (const statement of LEGACY_TICKET_MIGRATIONS) {
+        this.runSchemaStatement(statement.sql, statement.log, statement.error);
+      }
     }
 
-    this.runSchemaStatement(
-      "CREATE UNIQUE INDEX IF NOT EXISTS idx_game_players_ticket ON game_players (game_address, ticket_index)",
-      "Ensuring idx_game_players_ticket index exists",
-      "Failed to ensure idx_game_players_ticket index"
-    );
-    this.runSchemaStatement(
-      "CREATE INDEX IF NOT EXISTS idx_game_players_game ON game_players (game_address)",
-      "Ensuring idx_game_players_game index exists",
-      "Failed to ensure idx_game_players_game index"
-    );
+    for (const definition of PLAYER_INDEX_DEFINITIONS) {
+      this.runSchemaStatement(definition.sql, definition.log, definition.error);
+    }
   }
 
   private runSchemaStatement(
@@ -308,6 +345,7 @@ export class OracleDatabase {
       const gamesStats = this.getGamesStats();
 
       return {
+        ...createEmptyStats(),
         totalSecrets: secretsStats.total || 0,
         usedSecrets: secretsStats.used || 0,
         pendingGames: gamesStats.pending || 0,
@@ -316,13 +354,7 @@ export class OracleDatabase {
       };
     } catch (error) {
       console.error("❌ Failed to get stats:", error);
-      return {
-        totalSecrets: 0,
-        usedSecrets: 0,
-        pendingGames: 0,
-        completedGames: 0,
-        cancelledGames: 0,
-      };
+      return createEmptyStats();
     }
   }
 

@@ -111,8 +111,49 @@ interface ResolveGameContextOptions {
   requireOnChain?: boolean;
 }
 
+interface AttemptGameCompletionOptions {
+  gameAddress: string;
+  gameKey?: PublicKeyLike;
+  context?: GameOnChainContext | null;
+  readiness?: GameReadinessSnapshot;
+  skipReadinessCheck?: boolean;
+  onResult?: (result: GameCompletionResult) => void;
+  successLog?: (gameAddress: string) => string;
+  failureLog?: (gameAddress: string, error?: string) => string;
+}
+
 export class OracleService {
   private static instance: OracleService;
+  public static readonly EVENT_HANDLER_CONFIG: ReadonlyArray<{
+    event: keyof EventMap;
+    createHandler: (service: OracleService) => EventHandler;
+  }> = [
+    {
+      event: "playerJoined",
+      createHandler: (service) =>
+        service.handlePlayerEvent.bind(service, "joined"),
+    },
+    {
+      event: "playerUnjoined",
+      createHandler: (service) =>
+        service.handlePlayerEvent.bind(service, "unjoined"),
+    },
+    {
+      event: "gameInitialized",
+      createHandler: (service) =>
+        service.handleGameInitialized.bind(service),
+    },
+    {
+      event: "gameCompleted",
+      createHandler: (service) =>
+        service.handleGameStatusChange.bind(service, "completed"),
+    },
+    {
+      event: "gameClosed",
+      createHandler: (service) =>
+        service.handleGameStatusChange.bind(service, "closed"),
+    },
+  ];
   private program: anchor.Program<Timba>;
   private connection: anchor.web3.Connection;
   private adminKeypair: anchor.web3.Keypair;
@@ -208,17 +249,11 @@ export class OracleService {
   }
 
   private async setupEventListeners(): Promise<number[]> {
-    const eventMap: Array<[keyof EventMap, EventHandler]> = [
-      ["playerJoined", this.handlePlayerEvent.bind(this, "joined")],
-      ["playerUnjoined", this.handlePlayerEvent.bind(this, "unjoined")],
-      ["gameInitialized", this.handleGameInitialized.bind(this)],
-      ["gameCompleted", this.handleGameStatusChange.bind(this, "completed")],
-      ["gameClosed", this.handleGameStatusChange.bind(this, "closed")],
-    ];
-
     const listenerIds = await Promise.all(
-      eventMap.map(([eventName, handler]) =>
-        Promise.resolve(this.program.addEventListener(eventName, handler))
+      OracleService.EVENT_HANDLER_CONFIG.map(({ event, createHandler }) =>
+        Promise.resolve(
+          this.program.addEventListener(event, createHandler(this))
+        )
       )
     );
 
@@ -337,24 +372,68 @@ export class OracleService {
     gameAddress: string,
     trigger: string
   ): Promise<void> {
-    const gamePda = this.coercePublicKey(gameKey);
-    if (!gamePda) {
-      return;
+    await this.attemptGameCompletion({
+      gameAddress,
+      gameKey,
+      successLog: () =>
+        `🎯 Auto-completed game ${gameAddress} after ${trigger}`,
+      failureLog: (_address, error) =>
+        `❌ Auto-completion failed: ${error ?? "Unknown error"}`,
+    });
+  }
+
+  private async attemptGameCompletion(
+    options: AttemptGameCompletionOptions
+  ): Promise<GameCompletionResult | null> {
+    const {
+      gameAddress,
+      gameKey,
+      context = null,
+      readiness,
+      skipReadinessCheck = false,
+      onResult,
+      successLog,
+      failureLog,
+    } = options;
+
+    const resolvedPda =
+      context?.gamePda ?? (gameKey ? this.coercePublicKey(gameKey) : null);
+
+    if (!resolvedPda) {
+      return null;
     }
 
-    if (!(await this.isGameReadyForCompletion(gamePda))) {
-      return;
+    if (!skipReadinessCheck) {
+      const ready = await this.isGameReadyForCompletion(resolvedPda);
+      if (!ready) {
+        const result: GameCompletionResult = { success: false, notReady: true };
+        onResult?.(result);
+        return result;
+      }
     }
 
-    const result = await this.completeGame(gameAddress);
-    if (result.success) {
-      console.log(`🎯 Auto-completed game ${gameAddress} after ${trigger}`);
-      return;
+    const sharedContext = context ?? undefined;
+    const completion = await this.completeGame(
+      gameAddress,
+      readiness,
+      sharedContext
+    );
+
+    onResult?.(completion);
+
+    if (completion.success) {
+      const message = successLog?.(gameAddress);
+      if (message) {
+        console.log(message);
+      }
+    } else if (!completion.notReady) {
+      const message = failureLog?.(gameAddress, completion.error);
+      if (message) {
+        console.error(message);
+      }
     }
 
-    if (!result.notReady) {
-      console.error(`❌ Auto-completion failed: ${result.error}`);
-    }
+    return completion;
   }
 
   public generateGameSecrets(): GameSecrets {
@@ -469,57 +548,95 @@ export class OracleService {
     readiness?: GameReadinessSnapshot;
     notReady?: boolean;
   }> {
-    let resolvedContext = context;
-    let resolvedReadiness = readiness ?? context?.readiness;
+    const resolvedContext = await this.ensureGameContext(
+      gameAddress,
+      context,
+      readiness
+    );
 
     if (!resolvedContext) {
-      const options: ResolveGameContextOptions = {};
-      if (resolvedReadiness) {
-        options.readiness = resolvedReadiness;
-      }
-      resolvedContext = await this.resolveGameContext(gameAddress, options);
-
-      if (!resolvedContext) {
-        return { context: null };
-      }
+      return { context: null };
     }
 
-    resolvedReadiness =
-      resolvedReadiness ?? resolvedContext.readiness ?? this.consumeReadiness(gameAddress);
+    const { context: contextWithReadiness, readiness: resolvedReadiness } =
+      await this.hydrateReadinessSnapshot(
+        gameAddress,
+        resolvedContext,
+        readiness
+      );
 
-    let shouldAttempt: boolean | undefined;
-
-    if (!resolvedReadiness) {
-      shouldAttempt = await this.isGameReadyForCompletion(resolvedContext.gamePda);
-      resolvedReadiness = this.consumeReadiness(gameAddress);
+    if (
+      !resolvedReadiness ||
+      !resolvedReadiness.ready ||
+      !resolvedReadiness.gameAccount
+    ) {
+      return {
+        context: contextWithReadiness,
+        readiness: resolvedReadiness,
+        notReady: true,
+      };
     }
 
-    if (!resolvedReadiness) {
-      if (shouldAttempt === false) {
-        return { context: resolvedContext, notReady: true };
+    return { context: contextWithReadiness, readiness: resolvedReadiness };
+  }
+
+  private async ensureGameContext(
+    gameAddress: string,
+    context: GameOnChainContext | null,
+    readiness?: GameReadinessSnapshot
+  ): Promise<GameOnChainContext | null> {
+    if (context) {
+      if (readiness) {
+        return { ...context, readiness };
       }
-
-      const refreshed = await this.resolveGameContext(gameAddress, {
-        requireOnChain: true,
-      });
-
-      if (!refreshed || !refreshed.readiness) {
-        return { context: resolvedContext, notReady: true };
-      }
-
-      resolvedContext = refreshed;
-      resolvedReadiness = refreshed.readiness;
-
-      if (shouldAttempt) {
-        resolvedReadiness = { ...resolvedReadiness, ready: true };
-      }
+      return context;
     }
 
-    if (!resolvedReadiness || !resolvedReadiness.ready || !resolvedReadiness.gameAccount) {
-      return { context: resolvedContext, readiness: resolvedReadiness, notReady: true };
+    const options: ResolveGameContextOptions = readiness
+      ? { readiness }
+      : {};
+
+    return await this.resolveGameContext(gameAddress, options);
+  }
+
+  private async hydrateReadinessSnapshot(
+    gameAddress: string,
+    context: GameOnChainContext,
+    readiness?: GameReadinessSnapshot
+  ): Promise<{
+    context: GameOnChainContext;
+    readiness?: GameReadinessSnapshot;
+  }> {
+    let resolvedReadiness =
+      readiness ?? context.readiness ?? this.consumeReadiness(gameAddress);
+
+    if (resolvedReadiness) {
+      return { context, readiness: resolvedReadiness };
     }
 
-    return { context: resolvedContext, readiness: resolvedReadiness };
+    const shouldAttempt = await this.isGameReadyForCompletion(context.gamePda);
+    const cachedReadiness = this.consumeReadiness(gameAddress);
+
+    if (cachedReadiness) {
+      return { context, readiness: cachedReadiness };
+    }
+
+    if (!shouldAttempt) {
+      return { context, readiness: undefined };
+    }
+
+    const refreshed = await this.resolveGameContext(gameAddress, {
+      requireOnChain: true,
+    });
+
+    if (!refreshed?.readiness) {
+      return { context, readiness: undefined };
+    }
+
+    return {
+      context: refreshed,
+      readiness: { ...refreshed.readiness, ready: true },
+    };
   }
 
   private async executeGameCompletion(args: {
@@ -792,12 +909,16 @@ export class OracleService {
           continue;
         }
 
-        const result = await this.completeGame(
-          game.game_address,
-          onChainContext.readiness,
-          onChainContext
-        );
-        this.updateScanStats(stats, result);
+        const result = await this.attemptGameCompletion({
+          gameAddress: game.game_address,
+          context: onChainContext,
+          readiness: onChainContext.readiness,
+          skipReadinessCheck: true,
+        });
+
+        if (result) {
+          this.updateScanStats(stats, result);
+        }
 
         await delayHelper(DEFAULT_DELAY_MS);
       } catch (error) {
