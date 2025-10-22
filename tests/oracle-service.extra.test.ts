@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, describe, it, expect } from "bun:test";
+import { beforeAll, afterAll, describe, it, expect, spyOn } from "bun:test";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import * as anchor from "@coral-xyz/anchor";
@@ -672,6 +672,72 @@ describe("OracleService internals", () => {
       expect(calls[0]).toEqual({ signature: "sig-1", blockhash: "bh", lastValidBlockHeight: 42 });
     } finally {
       (service as any).connection = originalConnection;
+    }
+  });
+
+  it("falls back to secondary RPC endpoint on network error", async () => {
+    const rpcEnv = await setupOracleServiceEnv("oracle-service-rpc-fallback", {
+      env: {
+        SOLANA_NETWORK: [
+          "http://rpc-primary.example",
+          "http://rpc-secondary.example",
+          "http://rpc-primary.example",
+        ],
+      },
+    });
+
+    const { OracleService: ServiceClass, OracleDatabase: DatabaseClass, cleanup: cleanupEnv } = rpcEnv;
+    let switchSpy: ReturnType<typeof spyOn> | undefined;
+
+    try {
+      const database = DatabaseClass.getInstance();
+      const service = ServiceClass.createWith(database);
+
+      const endpoints = (service as any).rpcEndpoints;
+      expect(endpoints).toEqual([
+        "http://rpc-primary.example",
+        "http://rpc-secondary.example",
+      ]);
+
+      (service as any).activeRpcIndex = 0;
+
+      let slotCalls = 0;
+      const networkError = Object.assign(new Error("FetchError: request failed"), {
+        code: "ECONNRESET",
+        name: "FetchError",
+      });
+
+      const primaryConnection = {
+        getSlot: async () => {
+          slotCalls += 1;
+          throw networkError;
+        },
+        getBlockTime: async () => {
+          throw new Error("should not reach");
+        },
+      };
+
+      const secondaryConnection = {
+        getSlot: async () => 123,
+        getBlockTime: async () => 456,
+      };
+
+      (service as any).connection = primaryConnection;
+
+      switchSpy = spyOn(service as any, "switchRpcEndpoint").mockImplementation(async () => {
+        (service as any).activeRpcIndex = 1;
+        (service as any).connection = secondaryConnection;
+      });
+
+      const blockchainTime = await (service as any).getBlockchainTime();
+
+      expect(blockchainTime).toBe(456);
+      expect(slotCalls).toBe(1);
+      expect((service as any).activeRpcIndex).toBe(1);
+      expect(switchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      switchSpy?.mockRestore?.();
+      cleanupEnv();
     }
   });
 });

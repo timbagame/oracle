@@ -156,14 +156,18 @@ export class OracleService {
   ];
   private program: anchor.Program<Timba>;
   private connection: anchor.web3.Connection;
+  private provider: anchor.AnchorProvider;
   private adminKeypair: anchor.web3.Keypair;
   private db: OracleDatabase;
+  private rpcEndpoints: string[];
+  private activeRpcIndex: number = 0;
   private eventListeners: number[] = [];
   private isListening: boolean = false;
   private readinessCache: Map<string, GameReadinessSnapshot> = new Map();
 
   private constructor(db?: OracleDatabase) {
     this.db = db ?? OracleDatabase.getInstance();
+    this.rpcEndpoints = this.loadRpcEndpoints();
     this.connection = this.initializeConnection();
     this.adminKeypair = this.loadAdminKeypair();
     this.program = this.initializeProgram();
@@ -182,11 +186,52 @@ export class OracleService {
   }
 
   private initializeConnection(): anchor.web3.Connection {
-    const networkUrl = process.env["SOLANA_NETWORK"];
-    if (!networkUrl) {
+    const endpoint = this.getActiveRpcEndpoint();
+    return new anchor.web3.Connection(endpoint, "confirmed");
+  }
+
+  private loadRpcEndpoints(): string[] {
+    const raw = process.env["SOLANA_NETWORK"];
+    if (!raw) {
       throw new Error("SOLANA_NETWORK environment variable is required");
     }
-    return new anchor.web3.Connection(networkUrl, "confirmed");
+
+    const endpoints = this.parseRpcEndpoints(raw);
+    if (endpoints.length === 0) {
+      throw new Error("SOLANA_NETWORK must include at least one RPC endpoint");
+    }
+
+    return endpoints;
+  }
+
+  private parseRpcEndpoints(raw: string): string[] {
+    const parts = raw
+      .split(/[\s,]+/)
+      .map(part => part.trim())
+      .filter(part => part.length > 0);
+
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const part of parts) {
+      if (!seen.has(part)) {
+        deduped.push(part);
+        seen.add(part);
+      }
+    }
+
+    return deduped;
+  }
+
+  private getActiveRpcEndpoint(): string {
+    if (!this.rpcEndpoints || this.rpcEndpoints.length === 0) {
+      throw new Error("No RPC endpoints configured");
+    }
+
+    if (this.activeRpcIndex < 0 || this.activeRpcIndex >= this.rpcEndpoints.length) {
+      this.activeRpcIndex = 0;
+    }
+
+    return this.rpcEndpoints[this.activeRpcIndex];
   }
 
   private shouldUseEphemeralKeypair(): boolean {
@@ -225,13 +270,110 @@ export class OracleService {
 
   private initializeProgram(): anchor.Program<Timba> {
     const adminWallet = new anchor.Wallet(this.adminKeypair);
-    const provider = new anchor.AnchorProvider(
+    this.provider = new anchor.AnchorProvider(
       this.connection,
       adminWallet,
       { commitment: "confirmed" }
     );
-    anchor.setProvider(provider);
-    return new anchor.Program(idl as Timba, provider) as anchor.Program<Timba>;
+    anchor.setProvider(this.provider);
+    return new anchor.Program(idl as Timba, this.provider) as anchor.Program<Timba>;
+  }
+
+  public async switchRpcEndpoint(): Promise<void> {
+    if (!this.rpcEndpoints || this.rpcEndpoints.length === 0) {
+      throw new Error("No RPC endpoints configured");
+    }
+
+    const totalEndpoints = this.rpcEndpoints.length;
+    if (totalEndpoints > 1) {
+      this.activeRpcIndex = (this.activeRpcIndex + 1) % totalEndpoints;
+    }
+
+    const wasListening = this.isListening;
+    if (wasListening) {
+      await this.stopEventListening();
+    }
+
+    const newEndpoint = this.getActiveRpcEndpoint();
+    this.connection = new anchor.web3.Connection(newEndpoint, "confirmed");
+    this.program = this.initializeProgram();
+    console.warn(`♻️  Switching RPC endpoint to ${newEndpoint}`);
+
+    if (wasListening) {
+      await this.startEventListening();
+    }
+  }
+
+  private async withRpcFallback<T>(operation: () => Promise<T>): Promise<T> {
+    const totalEndpoints = this.rpcEndpoints.length;
+    if (totalEndpoints === 0) {
+      throw new Error("No RPC endpoints configured");
+    }
+
+    let attempt = 0;
+    let lastError: unknown;
+
+    while (attempt < totalEndpoints) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error;
+        if (!this.isNetworkError(error)) {
+          throw error;
+        }
+
+        attempt++;
+        if (attempt >= totalEndpoints) {
+          break;
+        }
+
+        await this.switchRpcEndpoint();
+      }
+    }
+
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+
+    throw new Error("RPC request failed");
+  }
+
+  private isNetworkError(error: any): boolean {
+    if (!error) {
+      return false;
+    }
+
+    const code = typeof error.code === "string" ? error.code : undefined;
+    const name = typeof error.name === "string" ? error.name : undefined;
+    const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
+
+    const networkCodes = new Set([
+      "ECONNRESET",
+      "ECONNREFUSED",
+      "EHOSTUNREACH",
+      "ENETUNREACH",
+      "ENOTFOUND",
+      "ETIMEDOUT",
+    ]);
+
+    if (code && networkCodes.has(code)) {
+      return true;
+    }
+
+    if (name === "FetchError") {
+      return true;
+    }
+
+    const indicators = [
+      "fetch failed",
+      "failed to fetch",
+      "network error",
+      "connection reset",
+      "connection refused",
+      "timeout",
+    ];
+
+    return indicators.some(indicator => message.includes(indicator));
   }
 
   public async startEventListening(): Promise<void> {
@@ -239,7 +381,9 @@ export class OracleService {
 
     console.log("🎧 Starting event listeners...");
     try {
-      const listeners = await this.setupEventListeners();
+      const listeners = await this.withRpcFallback(() =>
+        this.setupEventListeners({ skipFallback: true })
+      );
       this.eventListeners.push(...listeners);
       this.isListening = true;
     } catch (error) {
@@ -248,16 +392,19 @@ export class OracleService {
     }
   }
 
-  private async setupEventListeners(): Promise<number[]> {
-    const listenerIds = await Promise.all(
-      OracleService.EVENT_HANDLER_CONFIG.map(({ event, createHandler }) =>
-        Promise.resolve(
-          this.program.addEventListener(event, createHandler(this))
+  private async setupEventListeners(options: { skipFallback?: boolean } = {}): Promise<number[]> {
+    const registerListeners = async () =>
+      Promise.all(
+        OracleService.EVENT_HANDLER_CONFIG.map(({ event, createHandler }) =>
+          Promise.resolve(this.program.addEventListener(event, createHandler(this)))
         )
-      )
-    );
+      );
 
-    return listenerIds;
+    if (options.skipFallback) {
+      return registerListeners();
+    }
+
+    return this.withRpcFallback(registerListeners);
   }
 
   public async stopEventListening(): Promise<void> {
@@ -680,25 +827,27 @@ export class OracleService {
       ASSOCIATED_TOKEN_PROGRAM_ID
     );
 
-    const txHash = await this.program.methods
-      .completeGame([...randomHashBuffer], [...secretKeyBuffer], winnerIndex)
-      .accountsPartial({
-        game: gamePda,
-        tokenMint,
-        oracle: oraclePda,
-        oracleOperator: this.adminKeypair.publicKey,
-        winner: winnerAddress,
-        creator: creatorPublicKey,
-        gameToken: gameTokenPda,
-        gameVault: gameVaultPda,
-        tokenProgram: tokenProgramId,
-        gameTokenAccount,
-        systemProgram: anchor.web3.SystemProgram.programId,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        winnerTokenAccount,
-      })
-      .signers([this.adminKeypair])
-      .rpc();
+    const txHash = await this.withRpcFallback(() =>
+      this.program.methods
+        .completeGame([...randomHashBuffer], [...secretKeyBuffer], winnerIndex)
+        .accountsPartial({
+          game: gamePda,
+          tokenMint,
+          oracle: oraclePda,
+          oracleOperator: this.adminKeypair.publicKey,
+          winner: winnerAddress,
+          creator: creatorPublicKey,
+          gameToken: gameTokenPda,
+          gameVault: gameVaultPda,
+          tokenProgram: tokenProgramId,
+          gameTokenAccount,
+          systemProgram: anchor.web3.SystemProgram.programId,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          winnerTokenAccount,
+        })
+        .signers([this.adminKeypair])
+        .rpc()
+    );
 
     await this.confirmTransaction(txHash);
     return txHash;
@@ -723,7 +872,9 @@ export class OracleService {
     }
 
     try {
-      const mintAccount = await this.connection.getAccountInfo(tokenMint);
+      const mintAccount = await this.withRpcFallback(() =>
+        this.connection.getAccountInfo(tokenMint)
+      );
       const owner = mintAccount?.owner;
 
       if (owner?.equals(TOKEN_2022_PROGRAM_ID)) {
@@ -850,20 +1001,27 @@ export class OracleService {
 
   private async getBlockchainTime(): Promise<number> {
     try {
-      const slot = await this.connection.getSlot();
-      const blockTime = await this.connection.getBlockTime(slot);
-      return blockTime || Math.floor(Date.now() / 1000);
-    } catch {
+      return await this.withRpcFallback(async () => {
+        const slot = await this.connection.getSlot();
+        const blockTime = await this.connection.getBlockTime(slot);
+        return blockTime || Math.floor(Date.now() / 1000);
+      });
+    } catch (error) {
+      if (!this.isNetworkError(error)) {
+        // ignore non-network failures and fall back to system time
+      }
       return Math.floor(Date.now() / 1000);
     }
   }
 
   private async confirmTransaction(signature: string): Promise<void> {
-    const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
-    await this.connection.confirmTransaction({
-      signature,
-      blockhash,
-      lastValidBlockHeight
+    await this.withRpcFallback(async () => {
+      const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
+      await this.connection.confirmTransaction({
+        signature,
+        blockhash,
+        lastValidBlockHeight
+      });
     });
   }
 
@@ -1139,7 +1297,9 @@ export class OracleService {
     gameAddress: string
   ): Promise<any | null> {
     try {
-      return await this.program.account.game.fetch(gamePda);
+      return await this.withRpcFallback(() =>
+        this.program.account.game.fetch(gamePda)
+      );
     } catch (error: any) {
       if (this.isAccountNotFoundError(error)) {
         this.db.markGameCompleted(gameAddress);

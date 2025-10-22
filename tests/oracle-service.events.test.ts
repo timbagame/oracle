@@ -246,7 +246,12 @@ function createService(db: OracleDatabaseStub, programStub: ProgramStub): Oracle
   (service as any).program = programStub;
   (service as any).eventListeners = [];
   (service as any).isListening = false;
-  (service as any).connection = null;
+  (service as any).rpcEndpoints = ["http://localhost"]; // minimal configuration for withRpcFallback
+  (service as any).activeRpcIndex = 0;
+  (service as any).connection = {
+    getLatestBlockhash: async () => ({ blockhash: "", lastValidBlockHeight: 0 }),
+    confirmTransaction: async () => {},
+  };
   (service as any).adminKeypair = Keypair.generate();
   (service as any).getBlockchainTime = async () => Math.floor(Date.now() / 1000);
   return service;

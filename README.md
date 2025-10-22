@@ -86,8 +86,12 @@ The Oracle service uses a hybrid approach with performance optimizations:
 Configure via environment variables in `.env`:
 
 ```bash
-# Required: Solana network endpoint
+# Required: Solana network RPC endpoints.
+# Provide one or more URLs separated by commas/whitespace. Endpoints are tried in
+# the provided order, and the oracle will automatically fall back on network failures.
 SOLANA_NETWORK=https://api.mainnet-beta.solana.com
+# Example with fallback support
+# SOLANA_NETWORK=https://rpc-1.example.com, https://rpc-2.example.com
 
 # Optional: API server port (default: 3001)
 ORACLE_PORT=3001
@@ -97,6 +101,8 @@ ORACLE_PORT=3001
 # and CI runs to avoid checking sensitive keys into the repository.
 # USE_FAKE_KEYPAIR=true
 ```
+
+The service trims whitespace and de-duplicates URLs before cycling through the configured RPC endpoints.
 
 ## 📋 Usage Examples
 

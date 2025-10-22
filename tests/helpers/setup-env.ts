@@ -2,9 +2,11 @@ import { createTempDatabaseFile, type TempDatabaseFile } from "./test-db.ts";
 
 type SingletonModule = { [key: string]: unknown } | Function;
 
+export type EnvValue = string | string[] | undefined;
+
 type SetupOptions = {
   prefix?: string;
-  env?: Record<string, string | undefined>;
+  env?: Record<string, EnvValue>;
 };
 
 type SetupResult = {
@@ -37,26 +39,34 @@ function resetSingleton(singleton: SingletonModule) {
   }
 }
 
+const normalizeEnvValue = (value: EnvValue): string | undefined =>
+  Array.isArray(value) ? value.join(",") : value;
+
 export function setupTestEnvironment(options: SetupOptions = {}): SetupResult {
   const tempDb = createTempDatabaseFile(options.prefix ?? "test-db");
-  const additionalEnv = { ...options.env };
+  const additionalEnv: Record<string, EnvValue> = { ...options.env };
   const registeredSingletons = new Set<SingletonModule>();
   const originalEnv = new Map<string, string | undefined>();
   let cleanedUp = false;
 
-  const nodeEnv = additionalEnv["NODE_ENV"] ?? "test";
+  const nodeEnv = normalizeEnvValue(additionalEnv["NODE_ENV"]) ?? "test";
   delete additionalEnv["NODE_ENV"];
 
   const solanaNetwork =
-    additionalEnv["SOLANA_NETWORK"] ?? process.env["SOLANA_NETWORK"] ?? "http://localhost";
+    normalizeEnvValue(additionalEnv["SOLANA_NETWORK"]) ??
+    process.env["SOLANA_NETWORK"] ??
+    "http://localhost";
   delete additionalEnv["SOLANA_NETWORK"];
 
   const envUpdates: Record<string, string | undefined> = {
     NODE_ENV: nodeEnv,
     SOLANA_NETWORK: solanaNetwork,
     DATABASE_FILE: tempDb.path,
-    ...additionalEnv,
   };
+
+  for (const [key, value] of Object.entries(additionalEnv)) {
+    envUpdates[key] = normalizeEnvValue(value);
+  }
 
   for (const [key, value] of Object.entries(envUpdates)) {
     originalEnv.set(key, process.env[key]);
