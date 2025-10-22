@@ -308,11 +308,18 @@ if (process.env.NODE_ENV !== "test") {
     })
     .catch(async (error) => {
       console.error("❌ Oracle initialization failed. Stopping server.", error);
-      const exit = await stopServer(
-        realOracle,
-        process.env.NODE_ENV !== "test" ? 1 : undefined
-      );
-      exit?.();
+      const exitCode = process.env.NODE_ENV !== "test" ? 1 : undefined;
+      let exit: (() => void) | undefined;
+
+      try {
+        exit = await stopServer(realOracle, exitCode);
+      } catch (shutdownError) {
+        console.error("❌ Failed to stop server after init error:", shutdownError);
+      } finally {
+        if (exitCode !== undefined) {
+          (exit ?? (() => process.exit(exitCode)))();
+        }
+      }
     });
 
   process.once("SIGINT", () => shutdown(realOracle, "SIGINT"));
@@ -336,14 +343,17 @@ export async function shutdown(
   signal: string
 ): Promise<void> {
   console.log(`\n🛑 Shutting down (${signal})...`);
+  const exitCode = process.env.NODE_ENV !== "test" ? 0 : undefined;
+  let exit: (() => void) | undefined;
+
   try {
-    const exit = await stopServer(
-      oracle,
-      process.env.NODE_ENV !== "test" ? 0 : undefined
-    );
+    exit = await stopServer(oracle, exitCode);
     console.log("✅ Shutdown complete");
-    exit?.();
   } catch (error) {
     console.error("❌ Shutdown error:", error);
+  } finally {
+    if (exitCode !== undefined) {
+      (exit ?? (() => process.exit(exitCode)))();
+    }
   }
 }
