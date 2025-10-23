@@ -1,8 +1,9 @@
-import { beforeAll, afterAll, describe, it, expect } from "bun:test";
+import { beforeAll, afterAll, describe, it, expect, spyOn } from "bun:test";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import * as anchor from "@coral-xyz/anchor";
 import { Keypair, PublicKey } from "@solana/web3.js";
+import * as crypto from "crypto";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -231,6 +232,150 @@ describe("OracleService internals", () => {
     } finally {
       (service as any).program = originalProgram;
       (service as any).connection = originalConnection;
+    }
+  });
+
+  it("runScanLoop respects abort signals, cleanup retention, and callbacks", async () => {
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+
+    const originalScan = (service as any).scanAndCompleteActiveGames;
+    const originalCleanup = (service as any).cleanupOldRecords;
+
+    const statsSequence = [
+      { completed: 0, errors: 0, notReady: 1 },
+      { completed: 0, errors: 0, notReady: 0 },
+    ];
+
+    const scanCalls: Array<{ completed: number; errors: number; notReady: number }> = [];
+    const cleanupCalls: number[] = [];
+    const cycleStarts: number[] = [];
+    const cycleCompletions: Array<{ cycle: number; stats: { completed: number; errors: number; notReady: number } }> = [];
+
+    (service as any).scanAndCompleteActiveGames = async () => {
+      const next = statsSequence[scanCalls.length] ?? { completed: 0, errors: 0, notReady: 0 };
+      scanCalls.push(next);
+      return next;
+    };
+
+    (service as any).cleanupOldRecords = (hours: number) => {
+      cleanupCalls.push(hours);
+      return { deletedSecrets: 0, deletedGames: 0 };
+    };
+
+    const abortController = new AbortController();
+
+    try {
+      const summaryPromise = service.runScanLoop({
+        waitBetweenCyclesMs: 50,
+        cleanupAfterCycleHours: 6,
+        shouldContinue: (_stats, cycle) => cycle < 3,
+        signal: abortController.signal,
+        onCycleStart: (cycle) => {
+          cycleStarts.push(cycle);
+        },
+        onCycleComplete: (cycle, stats) => {
+          cycleCompletions.push({ cycle, stats });
+          if (cycle === 2) {
+            setTimeout(() => abortController.abort(), 10);
+          }
+        },
+      });
+
+      const summary = await summaryPromise;
+      const finalStats = statsSequence[1]!;
+
+      expect(scanCalls).toHaveLength(2);
+      expect(cycleStarts).toEqual([1, 2]);
+      expect(cycleCompletions.map((item) => item.cycle)).toEqual([1, 2]);
+      expect(cleanupCalls).toEqual([6, 6]);
+      expect(summary).toEqual({
+        cycles: 2,
+        totalCompleted: 0,
+        totalErrors: 0,
+        totalNotReady: 1,
+        lastStats: finalStats,
+      });
+    } finally {
+      (service as any).scanAndCompleteActiveGames = originalScan;
+      (service as any).cleanupOldRecords = originalCleanup;
+    }
+  });
+
+  it("fails game completion when unbiased winner selection is impossible", async () => {
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+
+    const createHashSpy = spyOn(crypto, "createHash").mockImplementation(() => {
+      return {
+        update() {
+          return {
+            digest() {
+              return Buffer.alloc(64, 0xff);
+            },
+          };
+        },
+      } as unknown as crypto.Hash;
+    });
+
+    const secretBuffer = Buffer.alloc(32, 1);
+
+    try {
+      expect(() => (service as any).calculateWinnerIndex(secretBuffer, 42, 3)).toThrow(
+        "Unable to generate unbiased random number - game must be cancelled",
+      );
+
+      const incrementCalls: string[] = [];
+      const markSecretCalls: string[] = [];
+      const markGameCalls: string[] = [];
+
+      (service as any).db = {
+        incrementCompletionAttempts(gameAddress: string) {
+          incrementCalls.push(gameAddress);
+        },
+        getGamePlayers() {
+          return [
+            Keypair.generate().publicKey.toBase58(),
+            Keypair.generate().publicKey.toBase58(),
+            Keypair.generate().publicKey.toBase58(),
+          ];
+        },
+        markSecretKeyUsed(gameAddress: string) {
+          markSecretCalls.push(gameAddress);
+        },
+        markGameCompleted(gameAddress: string) {
+          markGameCalls.push(gameAddress);
+        },
+      };
+
+      (service as any).resolveReadinessForGame = async () => ({
+        context: {
+          secretData: {
+            secretKey: "aa".repeat(32),
+            randomHash: "bb".repeat(32),
+          },
+          randomHashBuffer: Buffer.from("bb".repeat(32), "hex"),
+          gamePda: Keypair.generate().publicKey,
+        },
+        readiness: {
+          gameAccount: {
+            ticketsCount: 3,
+            lastSlot: 99,
+          },
+        },
+      });
+
+      const result = await service.completeGame("failing-game");
+
+      expect(result).toEqual({
+        success: false,
+        error: "Unable to generate unbiased random number - game must be cancelled",
+      });
+      expect(incrementCalls).toEqual(["failing-game"]);
+      expect(markSecretCalls).toEqual([]);
+      expect(markGameCalls).toEqual([]);
+    } finally {
+      createHashSpy.mockRestore();
     }
   });
 

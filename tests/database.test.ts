@@ -74,6 +74,29 @@ describe("OracleDatabase", () => {
     });
   });
 
+  it("preserves pending games during cleanup until they finish", () => {
+    const db = OracleDatabase.getInstance();
+    const gameAddress = "cleanup-pending";
+
+    db.saveSecretKey(gameAddress, "aa".repeat(32), "bb".repeat(32));
+    db.trackGame(gameAddress);
+
+    const firstPass = db.cleanupOldRecords(-1);
+    expect(firstPass).toEqual({ deletedSecrets: 0, deletedGames: 0 });
+    expect(db.getSecretKey(gameAddress)).not.toBeNull();
+    expect(db.getPendingGames()).toEqual([
+      { game_address: gameAddress, completion_attempts: 0 },
+    ]);
+
+    db.markSecretKeyUsed(gameAddress);
+    db.markGameCompleted(gameAddress);
+
+    const secondPass = db.cleanupOldRecords(-1);
+    expect(secondPass).toEqual({ deletedSecrets: 1, deletedGames: 1 });
+    expect(db.getSecretKey(gameAddress)).toBeNull();
+    expect(db.getPendingGames()).toEqual([]);
+  });
+
   it("tracks completion attempts and cancellations", () => {
     const db = OracleDatabase.getInstance();
 

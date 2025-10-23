@@ -200,6 +200,43 @@ describe("OracleService event handling", () => {
     expect(data.ticketIndex).toBe(5);
   });
 
+  it("extracts event data from wrapped public key helpers", () => {
+    const { db } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub);
+
+    const wrappedGameKey = Keypair.generate().publicKey;
+    const wrappedPlayerKey = Keypair.generate().publicKey;
+
+    const event = {
+      gameKey: { some: wrappedGameKey },
+      player: { value: wrappedPlayerKey },
+      ticketIndex: { toNumber: () => 11 },
+    };
+
+    const data = (service as any).extractEventData(event);
+
+    expect(data.gameAddress).toBe(wrappedGameKey.toBase58());
+    expect(data.playerAddress).toBe(wrappedPlayerKey.toBase58());
+    expect(data.ticketIndex).toBe(11);
+  });
+
+  it("coercePublicKey unwraps option-like containers", () => {
+    const { db } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub);
+
+    const key = Keypair.generate().publicKey;
+
+    const viaSome = (service as any).coercePublicKey({ some: key });
+    const viaValue = (service as any).coercePublicKey({ value: key });
+    const viaMethod = (service as any).coercePublicKey({ toBase58: () => key.toBase58() });
+
+    expect(viaSome?.toBase58()).toBe(key.toBase58());
+    expect(viaValue?.toBase58()).toBe(key.toBase58());
+    expect(viaMethod?.toBase58()).toBe(key.toBase58());
+  });
+
   it("evaluates on-chain presence of games", async () => {
     const { db } = createDbStub();
     const programStub = createProgramStub();
