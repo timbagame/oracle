@@ -632,6 +632,7 @@ export class OracleService {
     let context = providedContext ?? null;
     let readinessSnapshot =
       providedReadiness ?? providedContext?.readiness ?? undefined;
+    let cachedReadiness: GameReadinessSnapshot | undefined;
 
     if (!context) {
       try {
@@ -661,32 +662,30 @@ export class OracleService {
     }
 
     if (!readinessSnapshot) {
-      const cached = this.consumeReadiness(gameAddress);
-      if (cached) {
-        readinessSnapshot = cached;
+      cachedReadiness = this.consumeReadiness(gameAddress);
+      if (cachedReadiness && !requireOnChain) {
+        readinessSnapshot = cachedReadiness;
       }
     }
 
     if (requireOnChain) {
-      if (!readinessSnapshot || !readinessSnapshot.gameAccount) {
-        const onChainReadiness = await this.evaluateGameReadiness(
-          context.gamePda,
-          gameAddress
-        );
+      const onChainReadiness = await this.evaluateGameReadiness(
+        context.gamePda,
+        gameAddress
+      );
 
-        if (!onChainReadiness.gameAccount) {
-          console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
-          return finalize(null, undefined, false);
-        }
-
-        readinessSnapshot = onChainReadiness;
+      if (!onChainReadiness.gameAccount) {
+        console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
+        return finalize(null, undefined, false);
       }
+
+      readinessSnapshot = onChainReadiness;
     } else if (!readinessSnapshot) {
       const shouldAttempt = await this.isGameReadyForCompletion(context.gamePda);
-      const cachedReadiness = this.consumeReadiness(gameAddress);
+      const latestCachedReadiness = cachedReadiness ?? this.consumeReadiness(gameAddress);
 
-      if (cachedReadiness) {
-        readinessSnapshot = cachedReadiness;
+      if (latestCachedReadiness) {
+        readinessSnapshot = latestCachedReadiness;
       } else if (!shouldAttempt) {
         return finalize(context, undefined, true);
       } else {
