@@ -32,6 +32,62 @@ const ORACLE_SEED = Buffer.from("oracle", "utf8");
 const GAME_TOKEN_SEED = Buffer.from("game_token", "utf8");
 const GAME_VAULT_SEED = Buffer.from("game_vault", "utf8");
 
+export interface DerivedGameAccounts {
+  gamePda: PublicKey;
+  oraclePda: PublicKey;
+  gameTokenPda: PublicKey;
+  gameVaultPda: PublicKey;
+  winnerTokenAccount: PublicKey;
+  gameTokenAccount: PublicKey;
+}
+
+export function deriveGameAccounts(params: {
+  programId: PublicKey;
+  randomHash: Buffer;
+  tokenMint: PublicKey;
+  winner: PublicKey;
+  tokenProgramId: PublicKey;
+  gamePda?: PublicKey;
+}): DerivedGameAccounts {
+  const { programId, randomHash, tokenMint, winner, tokenProgramId, gamePda } = params;
+
+  const [resolvedGamePda] = gamePda
+    ? [gamePda]
+    : PublicKey.findProgramAddressSync([GAME_SEED, randomHash], programId);
+  const [oraclePda] = PublicKey.findProgramAddressSync([ORACLE_SEED], programId);
+  const [gameTokenPda] = PublicKey.findProgramAddressSync(
+    [GAME_TOKEN_SEED, tokenMint.toBuffer()],
+    programId
+  );
+  const [gameVaultPda] = PublicKey.findProgramAddressSync(
+    [GAME_VAULT_SEED, tokenMint.toBuffer()],
+    programId
+  );
+  const winnerTokenAccount = getAssociatedTokenAddressSync(
+    tokenMint,
+    winner,
+    false,
+    tokenProgramId,
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+  const gameTokenAccount = getAssociatedTokenAddressSync(
+    tokenMint,
+    gameVaultPda,
+    true,
+    tokenProgramId,
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+
+  return {
+    gamePda: resolvedGamePda,
+    oraclePda,
+    gameTokenPda,
+    gameVaultPda,
+    winnerTokenAccount,
+    gameTokenAccount,
+  };
+}
+
 
 // Event handling types
 type EventHandler = (event: any) => Promise<void> | void;
@@ -70,10 +126,14 @@ interface GameSecrets {
   gameAddress: string;
 }
 
-interface CompletionStats {
+export interface CompletionStats {
   completed: number;
   errors: number;
   notReady: number;
+}
+
+export function createEmptyCompletionStats(): CompletionStats {
+  return { completed: 0, errors: 0, notReady: 0 };
 }
 
 export interface ScanLoopOptions {
@@ -104,11 +164,6 @@ interface GameOnChainContext {
   secretData: { secretKey: string; randomHash: string };
   randomHashBuffer: Buffer;
   readiness?: GameReadinessSnapshot;
-}
-
-interface ResolveGameContextOptions {
-  readiness?: GameReadinessSnapshot;
-  requireOnChain?: boolean;
 }
 
 interface AttemptGameCompletionOptions {
@@ -478,10 +533,12 @@ export class OracleService {
     };
 
     try {
-      const { context, readiness, notReady } = await this.resolveReadinessForGame(
+      const { context, readiness, notReady } = await this.resolveContextAndReadiness(
         gameAddress,
-        sharedContext ?? null,
-        cachedReadiness
+        {
+          context: sharedContext ?? null,
+          readiness: cachedReadiness,
+        }
       );
 
       if (!context) {
@@ -530,8 +587,7 @@ export class OracleService {
         winnerIndex,
       });
 
-      this.db.markSecretKeyUsed(gameAddress);
-      this.db.markGameCompleted(gameAddress);
+      this.db.finalizeCompletedGame(gameAddress);
 
       return { success: true, txHash };
     } catch (error: any) {
@@ -539,104 +595,120 @@ export class OracleService {
     }
   }
 
-  private async resolveReadinessForGame(
+  private async resolveContextAndReadiness(
     gameAddress: string,
-    context: GameOnChainContext | null,
-    readiness?: GameReadinessSnapshot
+    options: {
+      context?: GameOnChainContext | null;
+      readiness?: GameReadinessSnapshot;
+      requireOnChain?: boolean;
+    } = {}
   ): Promise<{
     context: GameOnChainContext | null;
     readiness?: GameReadinessSnapshot;
-    notReady?: boolean;
+    notReady: boolean;
   }> {
-    const resolvedContext = await this.ensureGameContext(
-      gameAddress,
-      context,
-      readiness
-    );
+    const { context: providedContext = null, readiness: providedReadiness, requireOnChain = false } = options;
 
-    if (!resolvedContext) {
-      return { context: null };
-    }
-
-    const { context: contextWithReadiness, readiness: resolvedReadiness } =
-      await this.hydrateReadinessSnapshot(
-        gameAddress,
-        resolvedContext,
-        readiness
-      );
-
-    if (
-      !resolvedReadiness ||
-      !resolvedReadiness.ready ||
-      !resolvedReadiness.gameAccount
-    ) {
-      return {
-        context: contextWithReadiness,
-        readiness: resolvedReadiness,
-        notReady: true,
-      };
-    }
-
-    return { context: contextWithReadiness, readiness: resolvedReadiness };
-  }
-
-  private async ensureGameContext(
-    gameAddress: string,
-    context: GameOnChainContext | null,
-    readiness?: GameReadinessSnapshot
-  ): Promise<GameOnChainContext | null> {
-    if (context) {
-      if (readiness) {
-        return { ...context, readiness };
+    const attachReadiness = (
+      ctx: GameOnChainContext | null,
+      readinessValue?: GameReadinessSnapshot
+    ): GameOnChainContext | null => {
+      if (ctx && readinessValue) {
+        return ctx.readiness === readinessValue ? ctx : { ...ctx, readiness: readinessValue };
       }
-      return context;
-    }
+      return ctx;
+    };
 
-    const options: ResolveGameContextOptions = readiness
-      ? { readiness }
-      : {};
-
-    return await this.resolveGameContext(gameAddress, options);
-  }
-
-  private async hydrateReadinessSnapshot(
-    gameAddress: string,
-    context: GameOnChainContext,
-    readiness?: GameReadinessSnapshot
-  ): Promise<{
-    context: GameOnChainContext;
-    readiness?: GameReadinessSnapshot;
-  }> {
-    let resolvedReadiness =
-      readiness ?? context.readiness ?? this.consumeReadiness(gameAddress);
-
-    if (resolvedReadiness) {
-      return { context, readiness: resolvedReadiness };
-    }
-
-    const shouldAttempt = await this.isGameReadyForCompletion(context.gamePda);
-    const cachedReadiness = this.consumeReadiness(gameAddress);
-
-    if (cachedReadiness) {
-      return { context, readiness: cachedReadiness };
-    }
-
-    if (!shouldAttempt) {
-      return { context, readiness: undefined };
-    }
-
-    const refreshed = await this.resolveGameContext(gameAddress, {
-      requireOnChain: true,
+    const finalize = (
+      ctx: GameOnChainContext | null,
+      readinessValue: GameReadinessSnapshot | undefined,
+      notReady: boolean
+    ) => ({
+      context: attachReadiness(ctx, readinessValue),
+      readiness: readinessValue,
+      notReady,
     });
 
-    if (!refreshed?.readiness) {
-      return { context, readiness: undefined };
+    let context = providedContext ?? null;
+    let readinessSnapshot =
+      providedReadiness ?? providedContext?.readiness ?? undefined;
+
+    if (!context) {
+      try {
+        const resolved = this.resolveStoredGame(gameAddress, {
+          throwIfMissing: requireOnChain,
+        });
+        if (!resolved) {
+          this.logMissingSecret(gameAddress, requireOnChain);
+          return finalize(null, undefined, false);
+        }
+        context = resolved;
+      } catch (error: any) {
+        if (error instanceof MissingSecretError) {
+          this.logMissingSecret(gameAddress, requireOnChain);
+          return finalize(null, undefined, false);
+        }
+        throw error;
+      }
     }
 
-    return {
-      context: refreshed,
-      readiness: { ...refreshed.readiness, ready: true },
-    };
+    if (!context) {
+      return finalize(null, undefined, false);
+    }
+
+    if (readinessSnapshot && requireOnChain && !readinessSnapshot.gameAccount) {
+      readinessSnapshot = undefined;
+    }
+
+    if (!readinessSnapshot) {
+      const cached = this.consumeReadiness(gameAddress);
+      if (cached) {
+        readinessSnapshot = cached;
+      }
+    }
+
+    if (requireOnChain) {
+      if (!readinessSnapshot || !readinessSnapshot.gameAccount) {
+        const onChainReadiness = await this.evaluateGameReadiness(
+          context.gamePda,
+          gameAddress
+        );
+
+        if (!onChainReadiness.gameAccount) {
+          console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
+          return finalize(null, undefined, false);
+        }
+
+        readinessSnapshot = onChainReadiness;
+      }
+    } else if (!readinessSnapshot) {
+      const shouldAttempt = await this.isGameReadyForCompletion(context.gamePda);
+      const cachedReadiness = this.consumeReadiness(gameAddress);
+
+      if (cachedReadiness) {
+        readinessSnapshot = cachedReadiness;
+      } else if (!shouldAttempt) {
+        return finalize(context, undefined, true);
+      } else {
+        const refreshed = await this.evaluateGameReadiness(
+          context.gamePda,
+          gameAddress
+        );
+
+        if (!refreshed.gameAccount) {
+          return finalize(context, undefined, true);
+        }
+
+        readinessSnapshot = { ...refreshed, ready: true };
+      }
+    }
+
+    const notReady =
+      !readinessSnapshot ||
+      !readinessSnapshot.ready ||
+      !readinessSnapshot.gameAccount;
+
+    return finalize(context, readinessSnapshot, notReady);
   }
 
   private async executeGameCompletion(args: {
@@ -649,36 +721,26 @@ export class OracleService {
     const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
 
     const creatorPublicKey = new PublicKey(gameAccount.creator);
-    const gamePda = this.getGamePDA(randomHashBuffer);
     const tokenMint = new PublicKey(gameAccount.tokenMint);
     const tokenProgramId = await this.resolveTokenProgram(
       gameAccount.tokenProgram,
       tokenMint
     );
     const programId = this.ensurePublicKey(this.program.programId);
-    const [oraclePda] = PublicKey.findProgramAddressSync([ORACLE_SEED], programId);
-    const [gameTokenPda] = PublicKey.findProgramAddressSync(
-      [GAME_TOKEN_SEED, tokenMint.toBuffer()],
-      programId
-    );
-    const [gameVaultPda] = PublicKey.findProgramAddressSync(
-      [GAME_VAULT_SEED, tokenMint.toBuffer()],
-      programId
-    );
-    const winnerTokenAccount = getAssociatedTokenAddressSync(
-      tokenMint,
-      winnerAddress,
-      false,
-      tokenProgramId,
-      ASSOCIATED_TOKEN_PROGRAM_ID
-    );
-    const gameTokenAccount = getAssociatedTokenAddressSync(
-      tokenMint,
+    const {
+      gamePda,
+      oraclePda,
+      gameTokenPda,
       gameVaultPda,
-      true,
+      winnerTokenAccount,
+      gameTokenAccount,
+    } = deriveGameAccounts({
+      programId,
+      randomHash: randomHashBuffer,
+      tokenMint,
+      winner: winnerAddress,
       tokenProgramId,
-      ASSOCIATED_TOKEN_PROGRAM_ID
-    );
+    });
 
     const txHash = await this.program.methods
       .completeGame([...randomHashBuffer], [...secretKeyBuffer], winnerIndex)
@@ -886,7 +948,7 @@ export class OracleService {
   }
 
   public async scanAndCompleteActiveGames(): Promise<CompletionStats> {
-    const stats: CompletionStats = { completed: 0, errors: 0, notReady: 0 };
+    const stats: CompletionStats = createEmptyCompletionStats();
     const pendingGames = this.db.getPendingGames();
 
     if (pendingGames.length === 0) return stats;
@@ -901,9 +963,10 @@ export class OracleService {
 
       try {
         // Check if game still exists on-chain
-        const onChainContext = await this.resolveGameContext(game.game_address, {
-          requireOnChain: true,
-        });
+        const { context: onChainContext, readiness } =
+          await this.resolveContextAndReadiness(game.game_address, {
+            requireOnChain: true,
+          });
         if (!onChainContext) {
           this.db.markGameCompleted(game.game_address);
           continue;
@@ -912,7 +975,7 @@ export class OracleService {
         const result = await this.attemptGameCompletion({
           gameAddress: game.game_address,
           context: onChainContext,
-          readiness: onChainContext.readiness,
+          readiness,
           skipReadinessCheck: true,
         });
 
@@ -942,7 +1005,7 @@ export class OracleService {
       onCycleComplete,
     } = options;
 
-    const totals: CompletionStats = { completed: 0, errors: 0, notReady: 0 };
+    const totals: CompletionStats = createEmptyCompletionStats();
     let lastStats: CompletionStats | null = null;
     let cycle = 0;
 
@@ -1026,45 +1089,6 @@ export class OracleService {
       return;
     }
     console.log(`⚠️  No secret key found for game ${gameAddress}`);
-  }
-
-  private async resolveGameContext(
-    gameAddress: string,
-    options: ResolveGameContextOptions = {}
-  ): Promise<GameOnChainContext | null> {
-    const { readiness, requireOnChain = false } = options;
-
-    let resolved: ReturnType<OracleService["resolveStoredGame"]> = null;
-    try {
-      resolved = this.resolveStoredGame(gameAddress, { throwIfMissing: requireOnChain });
-    } catch (error: any) {
-      if (error instanceof MissingSecretError) {
-        this.logMissingSecret(gameAddress, requireOnChain);
-        return null;
-      }
-      throw error;
-    }
-
-    if (!resolved) {
-      this.logMissingSecret(gameAddress, requireOnChain);
-      return null;
-    }
-
-    let readinessSnapshot = readiness;
-
-    if (!readinessSnapshot && requireOnChain) {
-      readinessSnapshot = await this.evaluateGameReadiness(resolved.gamePda, gameAddress);
-
-      if (!readinessSnapshot.gameAccount) {
-        console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
-        return null;
-      }
-    }
-
-    return {
-      ...resolved,
-      readiness: readinessSnapshot,
-    };
   }
 
   private updateScanStats(stats: CompletionStats, result: GameCompletionResult): void {

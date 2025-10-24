@@ -11,8 +11,7 @@ export function resetPendingGames(
   options: ResetPendingGamesOptions = {},
 ): void {
   for (const game of db.getPendingGames()) {
-    db.markGameCompleted(game.game_address);
-    db.markSecretKeyUsed(game.game_address);
+    db.finalizeCompletedGame(game.game_address);
   }
 
   const { service, cleanupRetention = -1 } = options;

@@ -109,7 +109,7 @@ const PLAYER_INDEX_DEFINITIONS: ReadonlyArray<{
   },
 ];
 
-const EMPTY_DATABASE_STATS: Readonly<DatabaseStats> = Object.freeze({
+export const EMPTY_DATABASE_STATS: Readonly<DatabaseStats> = Object.freeze({
   totalSecrets: 0,
   usedSecrets: 0,
   pendingGames: 0,
@@ -117,7 +117,7 @@ const EMPTY_DATABASE_STATS: Readonly<DatabaseStats> = Object.freeze({
   cancelledGames: 0,
 });
 
-function createEmptyStats(): DatabaseStats {
+export function createEmptyStats(): DatabaseStats {
   return { ...EMPTY_DATABASE_STATS };
 }
 
@@ -314,6 +314,11 @@ export class OracleDatabase {
 
   public markGameClosed(gameAddress: string): void {
     this.updateGameStatus(gameAddress, "cancelled", "Failed to mark game as closed");
+  }
+
+  public finalizeCompletedGame(gameAddress: string): void {
+    this.markSecretKeyUsed(gameAddress);
+    this.markGameCompleted(gameAddress);
   }
 
   public incrementCompletionAttempts(gameAddress: string): void {

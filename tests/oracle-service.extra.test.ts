@@ -8,8 +8,8 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
+import { deriveGameAccounts, createEmptyCompletionStats } from "../oracle-service.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 import { createProgramStub } from "./helpers/program-stub.ts";
 
@@ -119,46 +119,23 @@ async function runExecuteGameCompletionScenario({
     (service as any).connection = originalConnection;
   }
 
-  const [expectedGamePda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("game", "utf8"), randomHashBuffer],
+  const derived = deriveGameAccounts({
     programId,
-  );
-  const [expectedOraclePda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("oracle", "utf8")],
-    programId,
-  );
-  const [expectedGameTokenPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("game_token", "utf8"), tokenMint.toBuffer()],
-    programId,
-  );
-  const [expectedGameVaultPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("game_vault", "utf8"), tokenMint.toBuffer()],
-    programId,
-  );
-  const expectedWinnerAta = getAssociatedTokenAddressSync(
+    randomHash: randomHashBuffer,
     tokenMint,
     winner,
-    false,
     tokenProgramId,
-    ASSOCIATED_TOKEN_PROGRAM_ID,
-  );
-  const expectedGameAta = getAssociatedTokenAddressSync(
-    tokenMint,
-    expectedGameVaultPda,
-    true,
-    tokenProgramId,
-    ASSOCIATED_TOKEN_PROGRAM_ID,
-  );
+  });
 
   return {
     tx,
     calls,
-    expectedGamePda,
-    expectedOraclePda,
-    expectedGameTokenPda,
-    expectedGameVaultPda,
-    expectedWinnerAta,
-    expectedGameAta,
+    expectedGamePda: derived.gamePda,
+    expectedOraclePda: derived.oraclePda,
+    expectedGameTokenPda: derived.gameTokenPda,
+    expectedGameVaultPda: derived.gameVaultPda,
+    expectedWinnerAta: derived.winnerTokenAccount,
+    expectedGameAta: derived.gameTokenAccount,
     expectedTokenProgram: tokenProgramId,
     oracleOperator: adminKeypair.publicKey,
     winner,
@@ -244,7 +221,7 @@ describe("OracleService internals", () => {
 
     const statsSequence = [
       { completed: 0, errors: 0, notReady: 1 },
-      { completed: 0, errors: 0, notReady: 0 },
+      createEmptyCompletionStats(),
     ];
 
     const scanCalls: Array<{ completed: number; errors: number; notReady: number }> = [];
@@ -253,7 +230,8 @@ describe("OracleService internals", () => {
     const cycleCompletions: Array<{ cycle: number; stats: { completed: number; errors: number; notReady: number } }> = [];
 
     (service as any).scanAndCompleteActiveGames = async () => {
-      const next = statsSequence[scanCalls.length] ?? { completed: 0, errors: 0, notReady: 0 };
+      const next =
+        statsSequence[scanCalls.length] ?? createEmptyCompletionStats();
       scanCalls.push(next);
       return next;
     };
@@ -326,8 +304,7 @@ describe("OracleService internals", () => {
       );
 
       const incrementCalls: string[] = [];
-      const markSecretCalls: string[] = [];
-      const markGameCalls: string[] = [];
+      const finalizeCalls: string[] = [];
 
       (service as any).db = {
         incrementCompletionAttempts(gameAddress: string) {
@@ -340,30 +317,34 @@ describe("OracleService internals", () => {
             Keypair.generate().publicKey.toBase58(),
           ];
         },
-        markSecretKeyUsed(gameAddress: string) {
-          markSecretCalls.push(gameAddress);
-        },
-        markGameCompleted(gameAddress: string) {
-          markGameCalls.push(gameAddress);
+        finalizeCompletedGame(gameAddress: string) {
+          finalizeCalls.push(gameAddress);
         },
       };
 
-      (service as any).resolveReadinessForGame = async () => ({
-        context: {
-          secretData: {
-            secretKey: "aa".repeat(32),
-            randomHash: "bb".repeat(32),
-          },
-          randomHashBuffer: Buffer.from("bb".repeat(32), "hex"),
-          gamePda: Keypair.generate().publicKey,
-        },
-        readiness: {
+      (service as any).resolveContextAndReadiness = async () => {
+        const gamePda = Keypair.generate().publicKey;
+        const readiness = {
+          ready: true,
           gameAccount: {
             ticketsCount: 3,
             lastSlot: 99,
           },
-        },
-      });
+        };
+        return {
+          context: {
+            secretData: {
+              secretKey: "aa".repeat(32),
+              randomHash: "bb".repeat(32),
+            },
+            randomHashBuffer: Buffer.from("bb".repeat(32), "hex"),
+            gamePda,
+            readiness,
+          },
+          readiness,
+          notReady: false,
+        };
+      };
 
       const result = await service.completeGame("failing-game");
 
@@ -372,8 +353,7 @@ describe("OracleService internals", () => {
         error: "Unable to generate unbiased random number - game must be cancelled",
       });
       expect(incrementCalls).toEqual(["failing-game"]);
-      expect(markSecretCalls).toEqual([]);
-      expect(markGameCalls).toEqual([]);
+      expect(finalizeCalls).toEqual([]);
     } finally {
       createHashSpy.mockRestore();
     }
@@ -504,7 +484,7 @@ describe("OracleService internals", () => {
 
     try {
       const stats = await service.scanAndCompleteActiveGames();
-      expect(stats).toEqual({ completed: 0, errors: 0, notReady: 0 });
+      expect(stats).toEqual(createEmptyCompletionStats());
       expect(marked).toContain(orphanGame);
       const remaining = db.getPendingGames().map((entry) => entry.game_address);
       expect(remaining).not.toContain(orphanGame);

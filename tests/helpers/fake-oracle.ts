@@ -1,8 +1,8 @@
 import type { OracleApi } from "../../index.ts";
+import { createEmptyStats } from "../../database.ts";
+import { createEmptyCompletionStats } from "../../oracle-service.ts";
 
 type OracleStats = ReturnType<OracleApi["getStats"]>;
-
-type CompletionStats = Awaited<ReturnType<OracleApi["scanAndCompleteActiveGames"]>>;
 
 type CleanupStats = ReturnType<OracleApi["cleanupOldRecords"]>;
 
@@ -16,12 +16,6 @@ export interface FakeOracleOptions {
   cleanupOldRecords?: OracleApi["cleanupOldRecords"];
 }
 
-const DEFAULT_COMPLETION_STATS: CompletionStats = {
-  completed: 0,
-  errors: 0,
-  notReady: 0,
-};
-
 const DEFAULT_CLEANUP_STATS: CleanupStats = {
   deletedSecrets: 0,
   deletedGames: 0,
@@ -29,11 +23,7 @@ const DEFAULT_CLEANUP_STATS: CleanupStats = {
 
 export function createBasicStats(overrides: Partial<OracleStats> = {}): OracleStats {
   return {
-    totalSecrets: 0,
-    usedSecrets: 0,
-    pendingGames: 0,
-    completedGames: 0,
-    cancelledGames: 0,
+    ...createEmptyStats(),
     eventListening: false,
     activeListeners: 0,
     ...overrides,
@@ -57,7 +47,7 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
     getStats:
       getStats ?? (() => createBasicStats(stats)),
     scanAndCompleteActiveGames:
-      scanAndCompleteActiveGames ?? (async () => ({ ...DEFAULT_COMPLETION_STATS })),
+      scanAndCompleteActiveGames ?? (async () => ({ ...createEmptyCompletionStats() })),
     startEventListening: startEventListening ?? (async () => {}),
     stopEventListening: stopEventListening ?? (async () => {}),
     cleanupOldRecords: cleanupOldRecords ?? (() => ({ ...DEFAULT_CLEANUP_STATS })),
