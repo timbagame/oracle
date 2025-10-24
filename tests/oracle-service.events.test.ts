@@ -242,10 +242,13 @@ describe("OracleService event handling", () => {
     const programStub = createProgramStub();
     const service = createService(db, programStub);
 
-    const missing = await (service as any).resolveGameContext("no-secret", {
-      requireOnChain: true,
-    });
-    expect(missing).toBeNull();
+    const missing = await (service as any).resolveContextAndReadiness(
+      "no-secret",
+      {
+        requireOnChain: true,
+      },
+    );
+    expect(missing.context).toBeNull();
     expect(programStub.fetchCalls).toHaveLength(0);
 
     const activeGame = "active-game";
@@ -255,10 +258,14 @@ describe("OracleService event handling", () => {
       programStub.fetchCalls.push(pda);
       return {};
     };
-    const exists = await (service as any).resolveGameContext(activeGame, {
-      requireOnChain: true,
-    });
-    expect(exists?.gamePda).toBeInstanceOf(PublicKey);
+    const exists = await (service as any).resolveContextAndReadiness(
+      activeGame,
+      {
+        requireOnChain: true,
+      },
+    );
+    expect(exists.context?.gamePda).toBeInstanceOf(PublicKey);
+    expect(exists.readiness?.gameAccount).toBeDefined();
     expect(programStub.fetchCalls).toHaveLength(1);
 
     const goneGame = "gone-game";
@@ -269,10 +276,10 @@ describe("OracleService event handling", () => {
       throw new Error("Account does not exist");
     };
 
-    const gone = await (service as any).resolveGameContext(goneGame, {
+    const gone = await (service as any).resolveContextAndReadiness(goneGame, {
       requireOnChain: true,
     });
-    expect(gone).toBeNull();
+    expect(gone.context).toBeNull();
     expect(programStub.fetchCalls).toHaveLength(2);
   });
 });
@@ -286,6 +293,7 @@ function createService(db: OracleDatabaseStub, programStub: ProgramStub): Oracle
   (service as any).connection = null;
   (service as any).adminKeypair = Keypair.generate();
   (service as any).getBlockchainTime = async () => Math.floor(Date.now() / 1000);
+  (service as any).readinessCache = new Map();
   return service;
 }
 
@@ -326,6 +334,9 @@ function createDbStub(): { db: OracleDatabaseStub; callLog: CallLog } {
     markGameCompleted(game) {
       callLog.markCompleted.push(game);
     },
+    finalizeCompletedGame(game) {
+      callLog.markCompleted.push(game);
+    },
     markGameClosed(game) {
       callLog.markClosed.push(game);
     },
@@ -363,6 +374,7 @@ type OracleDatabaseStub = Partial<OracleDatabase> & {
   clearStalePlayersForGame(game: string): void;
   trackGame(game: string, type?: string | null): void;
   markGameCompleted(game: string): void;
+  finalizeCompletedGame(game: string): void;
   markGameClosed(game: string): void;
   getSecretKey(game: string): { secretKey: string; randomHash: string } | null;
   saveSecretKey(game: string, secretKey: string, randomHash: string): void;

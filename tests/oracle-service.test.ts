@@ -12,6 +12,11 @@ const makeFakeContext = () => ({
   readiness: { ready: true, gameAccount: {} },
 });
 
+const makeReadyResolution = () => {
+  const context = makeFakeContext();
+  return { context, readiness: context.readiness, notReady: false };
+};
+
 let OracleService: typeof import("../oracle-service.ts").OracleService;
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
 let cleanup: () => void;
@@ -136,17 +141,19 @@ describe("OracleService", () => {
       randomHash: "hash",
     });
 
-    const originalResolve = (service as any).resolveGameContext;
+    const originalResolve = (service as any).resolveContextAndReadiness;
     const originalComplete = (service as any).completeGame;
 
-    (service as any).resolveGameContext = async (addr: string) => {
-      if (addr === "gameGone") return null;
-      return makeFakeContext();
+    (service as any).resolveContextAndReadiness = async (addr: string) => {
+      if (addr === "gameGone") {
+        return { context: null, readiness: undefined, notReady: false };
+      }
+      return makeReadyResolution();
     };
 
     (service as any).completeGame = async (addr: string) => {
       if (addr === "gameSuccess") {
-        db.markGameCompleted(addr);
+        db.finalizeCompletedGame(addr);
         return { success: true };
       }
       if (addr === "gamePending") {
@@ -165,7 +172,7 @@ describe("OracleService", () => {
     const pending = db.getPendingGames().map((g) => g.game_address);
     expect(pending).not.toContain("gameGone");
 
-    (service as any).resolveGameContext = originalResolve;
+    (service as any).resolveContextAndReadiness = originalResolve;
     (service as any).completeGame = originalComplete;
   });
 
@@ -189,13 +196,13 @@ describe("OracleService", () => {
       randomHash: "f".repeat(64),
     });
 
-    const originalResolve = (service as any).resolveGameContext;
+    const originalResolve = (service as any).resolveContextAndReadiness;
     const originalComplete = (service as any).completeGame;
 
     const processed: string[] = [];
     let delayCalls = 0;
 
-    (service as any).resolveGameContext = async () => makeFakeContext();
+    (service as any).resolveContextAndReadiness = async () => makeReadyResolution();
     (service as any).completeGame = async (addr: string) => {
       processed.push(addr);
       return { success: true };
@@ -215,7 +222,7 @@ describe("OracleService", () => {
         .find((g) => g.game_address === "stubborn");
       expect(stubbornEntry?.completion_attempts).toBeGreaterThanOrEqual(5);
     } finally {
-      (service as any).resolveGameContext = originalResolve;
+      (service as any).resolveContextAndReadiness = originalResolve;
       (service as any).completeGame = originalComplete;
       delaySpy.mockRestore();
     }
