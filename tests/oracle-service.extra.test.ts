@@ -708,24 +708,23 @@ describe("OracleService internals", () => {
     const result = await runExecuteGameCompletionScenario();
 
     expect(result.tx).toBe("tx-abc");
-    expect(result.calls.accounts?.winner.toBase58()).toBe(result.winner.toBase58());
-    expect(result.calls.accounts?.creator.toBase58()).toBe(result.creator.toBase58());
-    expect(result.calls.accounts?.oracleOperator.toBase58()).toBe(result.oracleOperator.toBase58());
-    expect(result.calls.accounts?.game.toBase58()).toBe(result.expectedGamePda.toBase58());
-    expect(result.calls.accounts?.tokenMint.toBase58()).toBe(result.tokenMint.toBase58());
-    expect(result.calls.accounts?.oracle.toBase58()).toBe(result.expectedOraclePda.toBase58());
-    expect(result.calls.accounts?.gameToken.toBase58()).toBe(result.expectedGameTokenPda.toBase58());
-    expect(result.calls.accounts?.gameVault.toBase58()).toBe(result.expectedGameVaultPda.toBase58());
-    expect(result.calls.accounts?.tokenProgram.toBase58()).toBe(
-      result.expectedTokenProgram.toBase58(),
-    );
-    expect(result.calls.accounts?.associatedTokenProgram.toBase58()).toBe(
+    const accounts = result.calls.accounts;
+    const tokenCtx = accounts?.gameTokenCtx;
+
+    expect(accounts?.winner.toBase58()).toBe(result.winner.toBase58());
+    expect(accounts?.creator.toBase58()).toBe(result.creator.toBase58());
+    expect(accounts?.oracleOperator.toBase58()).toBe(result.oracleOperator.toBase58());
+    expect(accounts?.game.toBase58()).toBe(result.expectedGamePda.toBase58());
+    expect(accounts?.oracle.toBase58()).toBe(result.expectedOraclePda.toBase58());
+    expect(tokenCtx?.tokenMint?.toBase58()).toBe(result.tokenMint.toBase58());
+    expect(tokenCtx?.gameToken?.toBase58()).toBe(result.expectedGameTokenPda.toBase58());
+    expect(tokenCtx?.gameVault?.toBase58()).toBe(result.expectedGameVaultPda.toBase58());
+    expect(tokenCtx?.tokenProgram?.toBase58()).toBe(result.expectedTokenProgram.toBase58());
+    expect(tokenCtx?.associatedTokenProgram?.toBase58()).toBe(
       ASSOCIATED_TOKEN_PROGRAM_ID.toBase58(),
     );
-    expect(result.calls.accounts?.winnerTokenAccount.toBase58()).toBe(
-      result.expectedWinnerAta.toBase58(),
-    );
-    expect(result.calls.accounts?.gameTokenAccount.toBase58()).toBe(result.expectedGameAta.toBase58());
+    expect(accounts?.winnerTokenAccount.toBase58()).toBe(result.expectedWinnerAta.toBase58());
+    expect(tokenCtx?.gameTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
     expect(result.calls.accounts?.systemProgram.toBase58()).toBe(
       anchor.web3.SystemProgram.programId.toBase58(),
     );
@@ -738,15 +737,12 @@ describe("OracleService internals", () => {
 
     expect(result.tx).toBe("tx-abc");
     expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_2022_PROGRAM_ID.toBase58());
-    expect(result.calls.accounts?.tokenProgram.toBase58()).toBe(
-      TOKEN_2022_PROGRAM_ID.toBase58(),
-    );
+    const tokenCtx = result.calls.accounts?.gameTokenCtx;
+    expect(tokenCtx?.tokenProgram?.toBase58()).toBe(TOKEN_2022_PROGRAM_ID.toBase58());
     expect(result.calls.accounts?.winnerTokenAccount.toBase58()).toBe(
       result.expectedWinnerAta.toBase58(),
     );
-    expect(result.calls.accounts?.gameTokenAccount.toBase58()).toBe(
-      result.expectedGameAta.toBase58(),
-    );
+    expect(tokenCtx?.gameTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
   });
 
   it("executeGameCompletion infers Token-2022 accounts from mint owner", async () => {
@@ -754,30 +750,24 @@ describe("OracleService internals", () => {
 
     expect(result.tx).toBe("tx-abc");
     expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_2022_PROGRAM_ID.toBase58());
-    expect(result.calls.accounts?.tokenProgram.toBase58()).toBe(
-      TOKEN_2022_PROGRAM_ID.toBase58(),
-    );
+    const tokenCtx = result.calls.accounts?.gameTokenCtx;
+    expect(tokenCtx?.tokenProgram?.toBase58()).toBe(TOKEN_2022_PROGRAM_ID.toBase58());
     expect(result.calls.accounts?.winnerTokenAccount.toBase58()).toBe(
       result.expectedWinnerAta.toBase58(),
     );
-    expect(result.calls.accounts?.gameTokenAccount.toBase58()).toBe(
-      result.expectedGameAta.toBase58(),
-    );
+    expect(tokenCtx?.gameTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
   });
 
   it("executeGameCompletion treats zeroed token program as SPL default", async () => {
     const result = await runExecuteGameCompletionScenario({ tokenProgram: PublicKey.default });
 
     expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
-    expect(result.calls.accounts?.tokenProgram.toBase58()).toBe(
-      TOKEN_PROGRAM_ID.toBase58(),
-    );
+    const tokenCtx = result.calls.accounts?.gameTokenCtx;
+    expect(tokenCtx?.tokenProgram?.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
     expect(result.calls.accounts?.winnerTokenAccount.toBase58()).toBe(
       result.expectedWinnerAta.toBase58(),
     );
-    expect(result.calls.accounts?.gameTokenAccount.toBase58()).toBe(
-      result.expectedGameAta.toBase58(),
-    );
+    expect(tokenCtx?.gameTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
   });
 
   it("confirmTransaction forwards latest blockhash params", async () => {

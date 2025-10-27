@@ -741,21 +741,25 @@ export class OracleService {
       tokenProgramId,
     });
 
+    const gameTokenCtx = {
+      tokenMint,
+      gameToken: gameTokenPda,
+      gameVault: gameVaultPda,
+      gameTokenAccount,
+      tokenProgram: tokenProgramId,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+    } as const;
+
     const txHash = await this.program.methods
       .completeGame([...randomHashBuffer], [...secretKeyBuffer], winnerIndex)
       .accountsPartial({
         game: gamePda,
-        tokenMint,
         oracle: oraclePda,
         oracleOperator: this.adminKeypair.publicKey,
         winner: winnerAddress,
         creator: creatorPublicKey,
-        gameToken: gameTokenPda,
-        gameVault: gameVaultPda,
-        tokenProgram: tokenProgramId,
-        gameTokenAccount,
+        gameTokenCtx,
         systemProgram: anchor.web3.SystemProgram.programId,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         winnerTokenAccount,
       })
       .signers([this.adminKeypair])
