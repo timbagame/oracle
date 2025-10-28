@@ -6,6 +6,7 @@ import { getEnvironmentMode, isTestEnvironment } from "./env.ts";
 // Constants
 const DEFAULT_PORT = 3001;
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
+const BACKGROUND_RETRY_DELAY_MS = 1000; // 1 second
 const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = 5000;
 const IS_TEST_ENV = isTestEnvironment();
 
@@ -342,7 +343,7 @@ if (!IS_TEST_ENV) {
 
     const runBackgroundLoop = async () => {
       while (!signal.aborted) {
-        let shouldDelayBeforeRetry = false;
+        let retryDelayMs: number | undefined;
 
         try {
           await realOracle.runScanLoop({
@@ -357,7 +358,7 @@ if (!IS_TEST_ENV) {
             console.warn(
               "⚠️  Background scan loop exited unexpectedly; restarting..."
             );
-            shouldDelayBeforeRetry = true;
+            retryDelayMs = BACKGROUND_RETRY_DELAY_MS;
           }
         } catch (error) {
           if (signal.aborted) {
@@ -365,15 +366,19 @@ if (!IS_TEST_ENV) {
           }
 
           console.error("❌ Background scan loop failed:", error);
-          shouldDelayBeforeRetry = true;
+          retryDelayMs = BACKGROUND_RETRY_DELAY_MS;
         }
 
         if (signal.aborted) {
           break;
         }
 
-        if (shouldDelayBeforeRetry && FALLBACK_SCAN_INTERVAL > 0) {
-          await delay(FALLBACK_SCAN_INTERVAL);
+        if (
+          retryDelayMs !== undefined &&
+          Number.isFinite(retryDelayMs) &&
+          retryDelayMs > 0
+        ) {
+          await delay(retryDelayMs);
         }
       }
     };
