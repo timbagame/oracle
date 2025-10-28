@@ -1,12 +1,13 @@
 import "./logging";
 import { delay } from "./delay.ts";
 import { OracleService } from "./oracle-service.ts";
+import { getEnvironmentMode, isTestEnvironment } from "./env.ts";
 
 // Constants
 const DEFAULT_PORT = 3001;
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
 const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = 5000;
-const IS_TEST_ENV = process.env.NODE_ENV === "test";
+const IS_TEST_ENV = isTestEnvironment();
 
 // CORS headers configuration
 const CORS_HEADERS = {
@@ -102,9 +103,16 @@ function createErrorResponse(error: string, status: number = 500): Response {
   return createResponse({ success: false, error }, status);
 }
 
+function createSuccessResponse(
+  payload: Record<string, unknown> = {}
+): Response {
+  return createResponse(buildServicePayload({ success: true, ...payload }));
+}
+
 function buildServicePayload(extra: Record<string, unknown> = {}) {
   const uptime = process.uptime();
   const timestamp = new Date().toISOString();
+  const environment = getEnvironmentMode();
 
   return {
     ...extra,
@@ -113,7 +121,7 @@ function buildServicePayload(extra: Record<string, unknown> = {}) {
     service: {
       name: "oracle-api",
       version: "1.0.0",
-      environment: process.env.NODE_ENV || "development",
+      environment,
       uptime,
     },
   };
@@ -133,16 +141,13 @@ export type OracleApi = Pick<
 export function buildHandlers(oracle: OracleApi) {
   return {
     async handleHealth(): Promise<Response> {
-      return createResponse(
-        buildServicePayload({ status: "healthy" })
-      );
+      return createSuccessResponse({ status: "healthy" });
     },
 
     async handleGenerateHash(): Promise<Response> {
       try {
         const secrets = oracle.generateGameSecrets();
-        return createResponse({
-          success: true,
+        return createSuccessResponse({
           randomHash: secrets.randomHash,
           gameAddress: secrets.gameAddress,
         });
@@ -154,9 +159,7 @@ export function buildHandlers(oracle: OracleApi) {
 
     async handleStats(): Promise<Response> {
       const stats = oracle.getStats();
-      return createResponse(
-        buildServicePayload({ success: true, stats })
-      );
+      return createSuccessResponse({ stats });
     },
   };
 }
@@ -337,34 +340,24 @@ if (!IS_TEST_ENV) {
     backgroundAbortController = new AbortController();
     const { signal } = backgroundAbortController;
 
-    const executeLoop = async () => {
-      while (!signal.aborted) {
-        try {
-          await realOracle.runScanLoop({
-            waitBetweenCyclesMs: FALLBACK_SCAN_INTERVAL,
-            waitForPendingOnly: false,
-            cleanupAfterCycleHours: 48,
-            shouldContinue: () => true,
-            signal,
-          });
-
-          if (signal.aborted) {
-            break;
-          }
-        } catch (error) {
-          if (signal.aborted) {
-            break;
-          }
-
+    const loop = realOracle
+      .runScanLoop({
+        waitBetweenCyclesMs: FALLBACK_SCAN_INTERVAL,
+        waitForPendingOnly: false,
+        cleanupAfterCycleHours: 48,
+        shouldContinue: () => true,
+        signal,
+      })
+      .catch((error) => {
+        if (!signal.aborted) {
           console.error("❌ Background scan loop failed:", error);
-          await delay(1000);
         }
-      }
-    };
+      })
+      .finally(() => {
+        backgroundAbortController = undefined;
+      });
 
-    backgroundLoop = executeLoop().finally(() => {
-      backgroundAbortController = undefined;
-    });
+    backgroundLoop = loop.then(() => undefined);
   };
 
   initialize(realOracle)

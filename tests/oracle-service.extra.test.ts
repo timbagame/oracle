@@ -378,23 +378,31 @@ describe("OracleService internals", () => {
         maxTickets: 10,
         minTickets: 1,
         lastSlot: 1,
+        createdAt: 0n,
+        timeout: 10_000n,
       }),
     });
-    (service as any).isGameReadyForCompletion = async () => false;
+    const originalEvaluateReadiness = (service as any).evaluateGameReadiness;
+    (service as any).evaluateGameReadiness = async () => ({
+      ready: false,
+      gameAccount: {},
+    });
     res = await service.completeGame("not-ready");
     expect(res.notReady).toBe(true);
+    (service as any).evaluateGameReadiness = originalEvaluateReadiness;
 
     // no players
     db.saveSecretKey("no-players", "deadbeef", "bead");
-    (service as any).isGameReadyForCompletion = async () => true;
     // stub fetch to provide meta for winner calc
     (service as any).program = createProgramStub({
       programId: Keypair.generate().publicKey,
       fetchImpl: async () => ({
         ticketsCount: 1,
-        maxTickets: 10,
+        maxTickets: 1,
         minTickets: 1,
         lastSlot: 1,
+        createdAt: 0n,
+        timeout: 0n,
       }),
     });
     res = await service.completeGame("no-players");
