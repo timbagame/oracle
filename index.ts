@@ -1,12 +1,11 @@
 import "./logging";
-import { delay } from "./delay.ts";
+import { delay, DEFAULT_DELAY_MS } from "./delay.ts";
 import { OracleService } from "./oracle-service.ts";
 import { getEnvironmentMode, isTestEnvironment } from "./env.ts";
 
 // Constants
 const DEFAULT_PORT = 3001;
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
-const BACKGROUND_RETRY_DELAY_MS = 1000; // 1 second
 const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = 5000;
 const IS_TEST_ENV = isTestEnvironment();
 
@@ -47,7 +46,7 @@ async function stopServer(
       loopPromise
         .then(() => "completed" as const)
         .catch((loopError) => {
-          console.error("⚠️  Background loop terminated with error:", loopError);
+          logBackgroundLoopError(loopError);
           return "completed" as const;
         }),
       delay(BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS).then(
@@ -61,7 +60,7 @@ async function stopServer(
       );
 
       loopPromise.catch((loopError) => {
-        console.error("⚠️  Background loop terminated with error:", loopError);
+        logBackgroundLoopError(loopError);
       });
     }
 
@@ -91,9 +90,18 @@ function invokeExit(exitCode: number | undefined, exit?: () => void): void {
   (exit ?? (() => process.exit(exitCode)))();
 }
 
+function logBackgroundLoopError(loopError: unknown): void {
+  console.error("⚠️  Background loop terminated with error:", loopError);
+}
+
 // Response helpers
 function createResponse(data: any, status: number = 200): Response {
-  return new Response(JSON.stringify(data), { status, headers: CORS_HEADERS });
+  if (data === null || data === undefined) {
+    return new Response(null, { status, headers: CORS_HEADERS });
+  }
+
+  const body = typeof data === "string" ? data : JSON.stringify(data);
+  return new Response(body, { status, headers: CORS_HEADERS });
 }
 
 function createHtmlResponse(html: string): Response {
@@ -358,7 +366,7 @@ if (!IS_TEST_ENV) {
             console.warn(
               "⚠️  Background scan loop exited unexpectedly; restarting..."
             );
-            retryDelayMs = BACKGROUND_RETRY_DELAY_MS;
+            retryDelayMs = DEFAULT_DELAY_MS;
           }
         } catch (error) {
           if (signal.aborted) {
@@ -366,7 +374,7 @@ if (!IS_TEST_ENV) {
           }
 
           console.error("❌ Background scan loop failed:", error);
-          retryDelayMs = BACKGROUND_RETRY_DELAY_MS;
+          retryDelayMs = DEFAULT_DELAY_MS;
         }
 
         if (signal.aborted) {
