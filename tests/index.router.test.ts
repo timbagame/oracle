@@ -47,6 +47,7 @@ describe("index router", () => {
     const res = await router(new Request("http://localhost:3001/health", { method: "GET" }));
     expect(res.status).toBe(200);
     const json: any = await res.json();
+    expect(json.success).toBe(true);
     expect(json.status).toBe("healthy");
   });
 

@@ -13,6 +13,9 @@ import type { Timba } from "./idl/idlType.ts";
 import idl from "./idl/idl.json" with { type: "json" };
 import * as fs from "fs";
 import * as path from "path";
+import { shouldUseEphemeralKeypair } from "./env.ts";
+import { coercePublicKey, ensurePublicKey, toBase58 } from "./solana-utils.ts";
+import type { PublicKeyLike } from "./solana-utils.ts";
 
 class MissingSecretError extends Error {
   constructor(gameAddress: string) {
@@ -112,14 +115,6 @@ interface GameCompletionResult {
   error?: string;
   txHash?: string;
 }
-
-type PublicKeyLike =
-  | PublicKey
-  | anchor.web3.PublicKey
-  | string
-  | { [key: string]: any }
-  | null
-  | undefined;
 
 interface GameSecrets {
   randomHash: string;
@@ -244,17 +239,6 @@ export class OracleService {
     return new anchor.web3.Connection(networkUrl, "confirmed");
   }
 
-  private shouldUseEphemeralKeypair(): boolean {
-    const env = (process.env["NODE_ENV"] || process.env["BUN_ENV"] || "").toLowerCase();
-    if (env.includes("test")) {
-      return true;
-    }
-    if (process.env["CI"] === "true") {
-      return true;
-    }
-    return process.env["USE_FAKE_KEYPAIR"] === "true";
-  }
-
   private loadAdminKeypair(): anchor.web3.Keypair {
     const configured = process.env["ORACLE_KEYPAIR_PATH"];
     const filename = configured && configured.trim().length > 0 ? configured : KEYPAIR_FILE;
@@ -265,7 +249,7 @@ export class OracleService {
       console.log(`✅ Loaded admin keypair: ${keypair.publicKey.toBase58()}`);
       return keypair;
     } catch (error: any) {
-      if ((error?.code === "ENOENT" || error?.message?.includes("ENOENT")) && this.shouldUseEphemeralKeypair()) {
+      if ((error?.code === "ENOENT" || error?.message?.includes("ENOENT")) && shouldUseEphemeralKeypair()) {
         const keypair = anchor.web3.Keypair.generate();
         console.warn(
           `⚠️  Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${filename} was not found.`
@@ -416,8 +400,8 @@ export class OracleService {
     };
 
     return {
-      gameAddress: this.toBase58(gameKey) ?? "",
-      playerAddress: this.toBase58(playerKey),
+      gameAddress: toBase58(gameKey) ?? "",
+      playerAddress: toBase58(playerKey),
       ticketIndex: resolveIndex(event.ticketIndex ?? event.ticket_index),
     };
   }
@@ -452,7 +436,7 @@ export class OracleService {
     } = options;
 
     const resolvedPda =
-      context?.gamePda ?? (gameKey ? this.coercePublicKey(gameKey) : null);
+      context?.gamePda ?? (gameKey ? coercePublicKey(gameKey) : null);
 
     if (!resolvedPda) {
       return null;
@@ -511,14 +495,9 @@ export class OracleService {
   }
 
   public async isGameReadyForCompletion(gamePda: PublicKey): Promise<boolean> {
-    const normalized = this.ensurePublicKey(gamePda);
+    const normalized = ensurePublicKey(gamePda);
     const gameAddress = normalized.toBase58();
-    const readiness = await this.evaluateGameReadiness(normalized, gameAddress);
-    if (readiness.ready) {
-      this.readinessCache.set(gameAddress, readiness);
-    } else {
-      this.readinessCache.delete(gameAddress);
-    }
+    const readiness = await this.evaluateAndCacheReadiness(normalized, gameAddress);
     return readiness.ready;
   }
 
@@ -629,76 +608,106 @@ export class OracleService {
       notReady,
     });
 
-    let context = providedContext ?? null;
-    let readinessSnapshot =
-      providedReadiness ?? providedContext?.readiness ?? undefined;
-    let cachedReadiness: GameReadinessSnapshot | undefined;
+    const resolvedContext = await this.resolveGameContext(
+      gameAddress,
+      providedContext,
+      requireOnChain
+    );
 
-    if (!context) {
-      try {
-        const resolved = this.resolveStoredGame(gameAddress, {
-          throwIfMissing: requireOnChain,
-        });
-        if (!resolved) {
-          this.logMissingSecret(gameAddress, requireOnChain);
-          return finalize(null, undefined, false);
-        }
-        context = resolved;
-      } catch (error: any) {
-        if (error instanceof MissingSecretError) {
-          this.logMissingSecret(gameAddress, requireOnChain);
-          return finalize(null, undefined, false);
-        }
-        throw error;
-      }
-    }
-
-    if (!context) {
+    if (!resolvedContext) {
       return finalize(null, undefined, false);
     }
+
+    const { readiness, notReady, missingOnChain } = await this.resolveReadinessState({
+      gameAddress,
+      context: resolvedContext,
+      providedReadiness: providedReadiness ?? providedContext?.readiness,
+      requireOnChain,
+    });
+
+    if (missingOnChain && requireOnChain) {
+      console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
+      return finalize(null, undefined, false);
+    }
+
+    return finalize(resolvedContext, readiness, notReady);
+  }
+
+  private async resolveGameContext(
+    gameAddress: string,
+    context: GameOnChainContext | null,
+    requireOnChain: boolean
+  ): Promise<GameOnChainContext | null> {
+    if (context) {
+      return context;
+    }
+
+    try {
+      const resolved = this.resolveStoredGame(gameAddress, {
+        throwIfMissing: requireOnChain,
+      });
+      if (!resolved) {
+        this.logMissingSecret(gameAddress, requireOnChain);
+        return null;
+      }
+      return resolved;
+    } catch (error: any) {
+      if (error instanceof MissingSecretError) {
+        this.logMissingSecret(gameAddress, requireOnChain);
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  private async resolveReadinessState(args: {
+    gameAddress: string;
+    context: GameOnChainContext;
+    providedReadiness?: GameReadinessSnapshot;
+    requireOnChain: boolean;
+  }): Promise<{
+    readiness?: GameReadinessSnapshot;
+    notReady: boolean;
+    missingOnChain: boolean;
+  }> {
+    const { gameAddress, context, providedReadiness, requireOnChain } = args;
+
+    let readinessSnapshot = providedReadiness ?? context.readiness;
+    let missingOnChain = false;
 
     if (readinessSnapshot && requireOnChain && !readinessSnapshot.gameAccount) {
       readinessSnapshot = undefined;
     }
 
-    if (!readinessSnapshot) {
-      cachedReadiness = this.consumeReadiness(gameAddress);
-      if (cachedReadiness && !requireOnChain) {
-        readinessSnapshot = cachedReadiness;
-      }
+    if (!readinessSnapshot && !requireOnChain) {
+      readinessSnapshot = this.consumeReadiness(gameAddress);
     }
 
     if (requireOnChain) {
-      const onChainReadiness = await this.evaluateGameReadiness(
+      const evaluation = await this.evaluateAndCacheReadiness(
         context.gamePda,
         gameAddress
       );
 
-      if (!onChainReadiness.gameAccount) {
-        console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
-        return finalize(null, undefined, false);
-      }
-
-      readinessSnapshot = onChainReadiness;
-    } else if (!readinessSnapshot) {
-      const shouldAttempt = await this.isGameReadyForCompletion(context.gamePda);
-      const latestCachedReadiness = cachedReadiness ?? this.consumeReadiness(gameAddress);
-
-      if (latestCachedReadiness) {
-        readinessSnapshot = latestCachedReadiness;
-      } else if (!shouldAttempt) {
-        return finalize(context, undefined, true);
+      if (!evaluation.gameAccount) {
+        missingOnChain = true;
+        readinessSnapshot = undefined;
       } else {
-        const refreshed = await this.evaluateGameReadiness(
-          context.gamePda,
-          gameAddress
-        );
+        readinessSnapshot = evaluation;
+      }
+    } else if (!readinessSnapshot) {
+      const evaluation = await this.evaluateAndCacheReadiness(
+        context.gamePda,
+        gameAddress
+      );
 
-        if (!refreshed.gameAccount) {
-          return finalize(context, undefined, true);
-        }
-
-        readinessSnapshot = { ...refreshed, ready: true };
+      if (!evaluation.gameAccount) {
+        missingOnChain = true;
+        readinessSnapshot = undefined;
+      } else if (!evaluation.ready) {
+        return { readiness: undefined, notReady: true, missingOnChain };
+      } else {
+        readinessSnapshot = evaluation;
       }
     }
 
@@ -707,7 +716,22 @@ export class OracleService {
       !readinessSnapshot.ready ||
       !readinessSnapshot.gameAccount;
 
-    return finalize(context, readinessSnapshot, notReady);
+    return { readiness: readinessSnapshot, notReady, missingOnChain };
+  }
+
+  private async evaluateAndCacheReadiness(
+    gamePda: PublicKey,
+    gameAddress: string
+  ): Promise<GameReadinessSnapshot> {
+    const readiness = await this.evaluateGameReadiness(gamePda, gameAddress);
+
+    if (readiness.ready) {
+      this.readinessCache.set(gameAddress, readiness);
+    } else {
+      this.readinessCache.delete(gameAddress);
+    }
+
+    return readiness;
   }
 
   private async executeGameCompletion(args: {
@@ -725,7 +749,7 @@ export class OracleService {
       gameAccount.tokenProgram,
       tokenMint
     );
-    const programId = this.ensurePublicKey(this.program.programId);
+    const programId = ensurePublicKey(this.program.programId);
     const {
       gamePda,
       oraclePda,
@@ -773,7 +797,7 @@ export class OracleService {
     tokenProgram: PublicKey | string | null | undefined,
     tokenMint: PublicKey
   ): Promise<PublicKey> {
-    const directProgram = this.coercePublicKey(tokenProgram);
+    const directProgram = coercePublicKey(tokenProgram);
 
     if (directProgram && !directProgram.equals(PublicKey.default)) {
       if (directProgram.equals(TOKEN_PROGRAM_ID)) {
@@ -806,78 +830,6 @@ export class OracleService {
     }
 
     return TOKEN_PROGRAM_ID;
-  }
-
-  private toBase58(value: PublicKeyLike): string | undefined {
-    const key = this.coercePublicKey(value);
-    if (key) {
-      return key.toBase58();
-    }
-
-    if (typeof value === "string") {
-      return value;
-    }
-
-    if (value && typeof (value as any).toString === "function") {
-      const asString = (value as any).toString();
-      return typeof asString === "string" ? asString : undefined;
-    }
-
-    return undefined;
-  }
-
-  private coercePublicKey(value: PublicKeyLike): PublicKey | null {
-    if (!value) {
-      return null;
-    }
-
-    if (value instanceof PublicKey) {
-      return value;
-    }
-
-    if (value instanceof anchor.web3.PublicKey) {
-      return new PublicKey(value.toBytes());
-    }
-
-    if (typeof value === "string") {
-      try {
-        return new PublicKey(value);
-      } catch {
-        return null;
-      }
-    }
-
-    if (typeof value === "object") {
-      if (typeof (value as any).toBase58 === "function") {
-        try {
-          return new PublicKey((value as any).toBase58());
-        } catch {
-          return null;
-        }
-      }
-
-      if ("value" in (value as any)) {
-        return this.coercePublicKey((value as any).value);
-      }
-
-      if ("some" in (value as any)) {
-        return this.coercePublicKey((value as any).some);
-      }
-    }
-
-    try {
-      return new PublicKey(value as any);
-    } catch {
-      return null;
-    }
-  }
-
-  private ensurePublicKey(value: PublicKeyLike | PublicKey): PublicKey {
-    const normalized = value instanceof PublicKey ? value : this.coercePublicKey(value);
-    if (!normalized) {
-      throw new Error("Invalid public key provided");
-    }
-    return normalized;
   }
 
   private calculateWinnerIndex(
@@ -1134,7 +1086,7 @@ export class OracleService {
   }
 
   private getGamePDA(randomHash: Buffer): PublicKey {
-    const programId = this.ensurePublicKey(this.program.programId);
+    const programId = ensurePublicKey(this.program.programId);
     const [pda] = PublicKey.findProgramAddressSync([GAME_SEED, randomHash], programId);
     return pda;
   }

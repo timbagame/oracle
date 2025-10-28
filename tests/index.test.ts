@@ -24,7 +24,8 @@ describe("API handlers", () => {
     const { handleHealth } = buildHandlers(createBasicOracle());
     const res = await handleHealth();
     expect(res.status).toBe(200);
-    const data = (await res.json()) as { status: string };
+    const data = (await res.json()) as { success: boolean; status: string };
+    expect(data.success).toBe(true);
     expect(data.status).toBe("healthy");
   });
 

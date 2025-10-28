@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Keypair, PublicKey } from "@solana/web3.js";
+import { coercePublicKey } from "../solana-utils.ts";
 import type { OracleDatabase } from "../database.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 import {
@@ -222,15 +223,11 @@ describe("OracleService event handling", () => {
   });
 
   it("coercePublicKey unwraps option-like containers", () => {
-    const { db } = createDbStub();
-    const programStub = createProgramStub();
-    const service = createService(db, programStub);
-
     const key = Keypair.generate().publicKey;
 
-    const viaSome = (service as any).coercePublicKey({ some: key });
-    const viaValue = (service as any).coercePublicKey({ value: key });
-    const viaMethod = (service as any).coercePublicKey({ toBase58: () => key.toBase58() });
+    const viaSome = coercePublicKey({ some: key });
+    const viaValue = coercePublicKey({ value: key });
+    const viaMethod = coercePublicKey({ toBase58: () => key.toBase58() });
 
     expect(viaSome?.toBase58()).toBe(key.toBase58());
     expect(viaValue?.toBase58()).toBe(key.toBase58());
