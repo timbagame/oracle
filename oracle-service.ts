@@ -8,7 +8,7 @@ import {
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import { OracleDatabase } from "./database.ts";
-import { delay as delayHelper } from "./delay.ts";
+import { delay as delayHelper, DEFAULT_DELAY_MS } from "./delay.ts";
 import type { Timba } from "./idl/idlType.ts";
 import idl from "./idl/idl.json" with { type: "json" };
 import * as fs from "fs";
@@ -28,7 +28,6 @@ class MissingSecretError extends Error {
 const KEYPAIR_FILE = "admin-keypair.json";
 const SECRET_KEY_LENGTH = 32;
 const MAX_COMPLETION_ATTEMPTS = 5;
-const DEFAULT_DELAY_MS = 1000;
 // PDA seed buffers (treated as immutable; do not mutate in place)
 const GAME_SEED = Buffer.from("game", "utf8");
 const ORACLE_SEED = Buffer.from("oracle", "utf8");
@@ -290,9 +289,7 @@ export class OracleService {
   private async setupEventListeners(): Promise<number[]> {
     const listenerIds = await Promise.all(
       OracleService.EVENT_HANDLER_CONFIG.map(({ event, createHandler }) =>
-        Promise.resolve(
-          this.program.addEventListener(event, createHandler(this))
-        )
+        this.program.addEventListener(event, createHandler(this))
       )
     );
 
@@ -683,7 +680,9 @@ export class OracleService {
       readinessSnapshot = this.consumeReadiness(gameAddress);
     }
 
-    if (requireOnChain) {
+    const shouldEvaluateReadiness = requireOnChain || !readinessSnapshot;
+
+    if (shouldEvaluateReadiness) {
       const evaluation = await this.evaluateAndCacheReadiness(
         context.gamePda,
         gameAddress
@@ -692,19 +691,7 @@ export class OracleService {
       if (!evaluation.gameAccount) {
         missingOnChain = true;
         readinessSnapshot = undefined;
-      } else {
-        readinessSnapshot = evaluation;
-      }
-    } else if (!readinessSnapshot) {
-      const evaluation = await this.evaluateAndCacheReadiness(
-        context.gamePda,
-        gameAddress
-      );
-
-      if (!evaluation.gameAccount) {
-        missingOnChain = true;
-        readinessSnapshot = undefined;
-      } else if (!evaluation.ready) {
+      } else if (!requireOnChain && !evaluation.ready) {
         return { readiness: undefined, notReady: true, missingOnChain };
       } else {
         readinessSnapshot = evaluation;

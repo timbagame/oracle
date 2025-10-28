@@ -7,6 +7,10 @@ function readEnv(key: EnvKey): string | undefined {
   return value && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+export function isCiEnvironment(): boolean {
+  return process.env["CI"] === "true";
+}
+
 export function getEnvironmentMode(): string {
   for (const key of ENV_KEYS) {
     const value = readEnv(key);
@@ -15,7 +19,7 @@ export function getEnvironmentMode(): string {
     }
   }
 
-  if (process.env["CI"] === "true") {
+  if (isCiEnvironment()) {
     return "ci";
   }
 
@@ -32,7 +36,7 @@ export function shouldUseEphemeralKeypair(): boolean {
     return true;
   }
 
-  if (process.env["CI"] === "true") {
+  if (isCiEnvironment()) {
     return true;
   }
 
