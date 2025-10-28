@@ -340,24 +340,56 @@ if (!IS_TEST_ENV) {
     backgroundAbortController = new AbortController();
     const { signal } = backgroundAbortController;
 
-    const loop = realOracle
-      .runScanLoop({
-        waitBetweenCyclesMs: FALLBACK_SCAN_INTERVAL,
-        waitForPendingOnly: false,
-        cleanupAfterCycleHours: 48,
-        shouldContinue: () => true,
-        signal,
-      })
+    const runBackgroundLoop = async () => {
+      while (!signal.aborted) {
+        let shouldDelayBeforeRetry = false;
+
+        try {
+          await realOracle.runScanLoop({
+            waitBetweenCyclesMs: FALLBACK_SCAN_INTERVAL,
+            waitForPendingOnly: false,
+            cleanupAfterCycleHours: 48,
+            shouldContinue: () => true,
+            signal,
+          });
+
+          if (!signal.aborted) {
+            console.warn(
+              "⚠️  Background scan loop exited unexpectedly; restarting..."
+            );
+            shouldDelayBeforeRetry = true;
+          }
+        } catch (error) {
+          if (signal.aborted) {
+            break;
+          }
+
+          console.error("❌ Background scan loop failed:", error);
+          shouldDelayBeforeRetry = true;
+        }
+
+        if (signal.aborted) {
+          break;
+        }
+
+        if (shouldDelayBeforeRetry && FALLBACK_SCAN_INTERVAL > 0) {
+          await delay(FALLBACK_SCAN_INTERVAL);
+        }
+      }
+    };
+
+    backgroundLoop = runBackgroundLoop()
       .catch((error) => {
         if (!signal.aborted) {
-          console.error("❌ Background scan loop failed:", error);
+          console.error(
+            "❌ Unhandled error in background scan supervisor:",
+            error
+          );
         }
       })
       .finally(() => {
         backgroundAbortController = undefined;
       });
-
-    backgroundLoop = loop.then(() => undefined);
   };
 
   initialize(realOracle)
