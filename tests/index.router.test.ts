@@ -125,4 +125,29 @@ describe("index router", () => {
       console.error = originalError;
     }
   });
+
+  test("router emits error when handler implementation is missing", async () => {
+    const originalError = console.error;
+    const errors: string[] = [];
+    console.error = (...args: any[]) => {
+      errors.push(args.join(" "));
+    };
+
+    try {
+      const incompleteHandlers = { ...handlers } as any;
+      delete incompleteHandlers.handleStats;
+      const failingRouter = buildFetchRouter(incompleteHandlers);
+
+      const res = await failingRouter(
+        new Request("http://localhost:3001/stats", { method: "GET" })
+      );
+
+      expect(res.status).toBe(500);
+      const body: any = await res.json();
+      expect(body.error).toBe("Internal server error");
+      expect(errors.some((entry) => entry.includes("Handler not implemented"))).toBe(true);
+    } finally {
+      console.error = originalError;
+    }
+  });
 });

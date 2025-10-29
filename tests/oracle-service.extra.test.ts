@@ -30,7 +30,12 @@ afterAll(() => {
 async function runExecuteGameCompletionScenario({
   tokenProgram,
   mintOwner,
-}: { tokenProgram?: PublicKey | string | null; mintOwner?: PublicKey } = {}) {
+  accountInfoImpl,
+}: {
+  tokenProgram?: PublicKey | string | null;
+  mintOwner?: PublicKey;
+  accountInfoImpl?: (pubkey: PublicKey) => Promise<{ owner: PublicKey | null } | null>;
+} = {}) {
   const service = OracleService.createWith(OracleDatabase.getInstance());
   const originalProgram = (service as any).program;
   const originalConfirm = (service as any).confirmTransaction;
@@ -60,8 +65,12 @@ async function runExecuteGameCompletionScenario({
   const inferredMintOwner = mintOwner ?? TOKEN_PROGRAM_ID;
   const tokenProgramId = directProgram ?? inferredMintOwner;
 
+  const getAccountInfo = accountInfoImpl
+    ? accountInfoImpl
+    : async () => ({ owner: inferredMintOwner });
+
   (service as any).connection = {
-    getAccountInfo: async (_pubkey: PublicKey) => ({ owner: inferredMintOwner }),
+    getAccountInfo,
   };
 
   const programStub = createProgramStub({
@@ -277,6 +286,81 @@ describe("OracleService internals", () => {
     } finally {
       (service as any).scanAndCompleteActiveGames = originalScan;
       (service as any).cleanupOldRecords = originalCleanup;
+    }
+  });
+
+  it("resolveContextAndReadiness consumes cached readiness when on-chain lookups are optional", async () => {
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+
+    resetPendingGames(db, { service });
+
+    const gameAddress = Keypair.generate().publicKey.toBase58();
+    seedTrackedGame(db, {
+      address: gameAddress,
+      secret: "aa".repeat(32),
+      randomHash: "bb".repeat(32),
+      service,
+    });
+
+    const originalProgram = (service as any).program;
+    const originalConnection = (service as any).connection;
+    const originalGetBlockchainTime = (service as any).getBlockchainTime;
+
+    const cachedSnapshot = {
+      ready: true,
+      gameAccount: { ticketsCount: 4 },
+    };
+
+    (service as any).readinessCache.set(gameAddress, cachedSnapshot);
+
+    const now = Math.floor(Date.now() / 1000);
+
+    (service as any).program = createProgramStub({
+      fetchImpl: async () => ({
+        ticketsCount: 4,
+        maxTickets: 4,
+        minTickets: 1,
+        timeout: 60,
+        createdAt: now - 30,
+      }),
+    });
+
+    (service as any).connection = {
+      getSlot: async () => 12345,
+      getBlockTime: async () => now,
+    };
+
+    (service as any).getBlockchainTime = async () => now;
+
+    const evaluateSpy = spyOn(service as any, "evaluateAndCacheReadiness");
+
+    try {
+      const first = await (service as any).resolveContextAndReadiness(gameAddress, {
+        requireOnChain: false,
+      });
+
+      expect(first.readiness).toBe(cachedSnapshot);
+      expect(first.context?.readiness).toBe(cachedSnapshot);
+      expect(first.notReady).toBe(false);
+      expect(evaluateSpy).not.toHaveBeenCalled();
+      expect((service as any).readinessCache.has(gameAddress)).toBe(false);
+
+      const second = await (service as any).resolveContextAndReadiness(gameAddress, {
+        requireOnChain: false,
+      });
+
+      expect(evaluateSpy).toHaveBeenCalledTimes(1);
+      expect(second.readiness?.ready).toBe(true);
+      expect(second.notReady).toBe(false);
+      expect(second.context?.readiness).toBe(second.readiness);
+    } finally {
+      evaluateSpy.mockRestore();
+      (service as any).program = originalProgram;
+      (service as any).connection = originalConnection;
+      (service as any).getBlockchainTime = originalGetBlockchainTime;
+      (service as any).readinessCache.clear();
+      resetPendingGames(db, { service });
     }
   });
 
@@ -776,6 +860,26 @@ describe("OracleService internals", () => {
       result.expectedWinnerAta.toBase58(),
     );
     expect(tokenCtx?.gameTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
+  });
+
+  it("executeGameCompletion falls back to SPL token program when mint owner cannot be resolved", async () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const result = await runExecuteGameCompletionScenario({
+        accountInfoImpl: async () => {
+          throw new Error("account missing");
+        },
+      });
+
+      expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
+      const tokenCtx = result.calls.accounts?.gameTokenCtx;
+      expect(tokenCtx?.tokenProgram?.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
+      const warningMessages = warnSpy.mock.calls.map((args) => args.join(" "));
+      expect(warningMessages.some((message) => message.includes("Unable to resolve token program"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("confirmTransaction forwards latest blockhash params", async () => {

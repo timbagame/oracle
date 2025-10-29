@@ -127,6 +127,37 @@ describe("OracleDatabase", () => {
     });
   });
 
+  it("returns pending games ordered by last_checked and enforces scan limit", () => {
+    const db = OracleDatabase.getInstance();
+    const rawDb = (db as any).db as { prepare: (sql: string) => { run: (...args: any[]) => void } };
+
+    const total = 60;
+    const baseTimestamp = 1_700_000_000_000;
+    const expected: string[] = [];
+
+    for (let i = 0; i < total; i++) {
+      const address = `pending-${i}`;
+      db.trackGame(address);
+      const lastChecked = baseTimestamp + (total - i);
+      rawDb
+        .prepare("UPDATE game_tracking SET last_checked = ?, completion_attempts = ? WHERE game_address = ?")
+        .run(lastChecked, i, address);
+
+      if (i >= total - 50) {
+        expected.push(address);
+      }
+    }
+
+    expected.reverse();
+
+    const pending = db.getPendingGames();
+    expect(pending).toHaveLength(50);
+    expect(pending.map((game) => game.game_address)).toEqual(expected);
+    expect(pending.map((game) => game.completion_attempts)).toEqual(
+      expected.map((address) => Number(address.split("-")[1]))
+    );
+  });
+
   it("manages player rosters for games", () => {
     const db = OracleDatabase.getInstance();
 
