@@ -28,6 +28,8 @@ class MissingSecretError extends Error {
 const KEYPAIR_FILE = "admin-keypair.json";
 const SECRET_KEY_LENGTH = 32;
 const MAX_COMPLETION_ATTEMPTS = 5;
+export const EVENT_LISTENER_FAILURE_MESSAGE = "❌ Failed to start event listeners:";
+const NO_SECRET_KEY_MESSAGE = "No secret key found";
 // PDA seed buffers (treated as immutable; do not mutate in place)
 const GAME_SEED = Buffer.from("game", "utf8");
 const ORACLE_SEED = Buffer.from("oracle", "utf8");
@@ -281,7 +283,7 @@ export class OracleService {
       this.eventListeners.push(...listeners);
       this.isListening = true;
     } catch (error) {
-      console.error("❌ Failed to start event listeners:", error);
+      console.error(EVENT_LISTENER_FAILURE_MESSAGE, error);
       throw error;
     }
   }
@@ -518,7 +520,7 @@ export class OracleService {
       );
 
       if (!context) {
-        return recordFailure("No secret key found");
+        return recordFailure(NO_SECRET_KEY_MESSAGE);
       }
 
       if (notReady || !readiness) {
@@ -958,29 +960,7 @@ export class OracleService {
         return;
       }
 
-      if (!signal) {
-        await delayHelper(waitBetweenCyclesMs);
-        return;
-      }
-
-      if (signal.aborted) {
-        return;
-      }
-
-      await new Promise<void>((resolve) => {
-        const timeout = setTimeout(() => {
-          signal.removeEventListener("abort", onAbort);
-          resolve();
-        }, waitBetweenCyclesMs);
-
-        const onAbort = () => {
-          clearTimeout(timeout);
-          signal.removeEventListener("abort", onAbort);
-          resolve();
-        };
-
-        signal.addEventListener("abort", onAbort, { once: true });
-      });
+      await delayHelper(waitBetweenCyclesMs, { signal });
     };
 
     while (!shouldAbort()) {
@@ -1030,7 +1010,7 @@ export class OracleService {
     if (!requireOnChain) {
       return;
     }
-    console.log(`⚠️  No secret key found for game ${gameAddress}`);
+    console.log(`⚠️  ${NO_SECRET_KEY_MESSAGE} for game ${gameAddress}`);
   }
 
   private updateScanStats(stats: CompletionStats, result: GameCompletionResult): void {

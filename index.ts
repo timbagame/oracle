@@ -1,6 +1,6 @@
 import "./logging";
 import { delay, DEFAULT_DELAY_MS } from "./delay.ts";
-import { OracleService } from "./oracle-service.ts";
+import { OracleService, EVENT_LISTENER_FAILURE_MESSAGE } from "./oracle-service.ts";
 import { getEnvironmentMode, isTestEnvironment } from "./env.ts";
 
 // Constants
@@ -8,6 +8,7 @@ const DEFAULT_PORT = 3001;
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
 const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = 5000;
 const IS_TEST_ENV = isTestEnvironment();
+const INTERNAL_SERVER_ERROR_MESSAGE = "Internal server error";
 
 // CORS headers configuration
 const CORS_HEADERS = {
@@ -30,10 +31,15 @@ let server: ReturnType<typeof Bun.serve> | undefined;
 let backgroundLoop: Promise<void> | undefined;
 let backgroundAbortController: AbortController | undefined;
 
+interface StopServerResult {
+  shouldExit: boolean;
+  exitCode?: number;
+}
+
 async function stopServer(
   oracle: OracleApi,
   exitCode?: number
-): Promise<(() => void) | undefined> {
+): Promise<StopServerResult> {
   if (backgroundAbortController) {
     backgroundAbortController.abort();
   }
@@ -75,19 +81,10 @@ async function stopServer(
 
   server?.stop();
 
-  if (exitCode !== undefined && !IS_TEST_ENV) {
-    return () => process.exit(exitCode);
-  }
-
-  return undefined;
-}
-
-function invokeExit(exitCode: number | undefined, exit?: () => void): void {
-  if (exitCode === undefined) {
-    return;
-  }
-
-  (exit ?? (() => process.exit(exitCode)))();
+  return {
+    shouldExit: exitCode !== undefined && !IS_TEST_ENV,
+    exitCode,
+  };
 }
 
 function logBackgroundLoopError(loopError: unknown): void {
@@ -112,6 +109,10 @@ function createErrorResponse(error: string, status: number = 500): Response {
   return createResponse({ success: false, error }, status);
 }
 
+function createInternalServerErrorResponse(): Response {
+  return createErrorResponse(INTERNAL_SERVER_ERROR_MESSAGE, 500);
+}
+
 function createSuccessResponse(
   payload: Record<string, unknown> = {}
 ): Response {
@@ -126,7 +127,6 @@ function buildServicePayload(extra: Record<string, unknown> = {}) {
   return {
     ...extra,
     timestamp,
-    uptime,
     service: {
       name: "oracle-api",
       version: "1.0.0",
@@ -318,13 +318,13 @@ export function buildFetchRouter(handlers: ReturnType<typeof buildHandlers>) {
         console.error(
           `❌ Handler not implemented for route: ${method} ${path} (${route.handler})`
         );
-        return createErrorResponse("Internal server error", 500);
+        return createInternalServerErrorResponse();
       }
 
       return await handler();
     } catch (error: any) {
       console.error("❌ Server error:", error);
-      return createErrorResponse("Internal server error", 500);
+      return createInternalServerErrorResponse();
     }
   };
 }
@@ -386,7 +386,7 @@ if (!IS_TEST_ENV) {
           Number.isFinite(retryDelayMs) &&
           retryDelayMs > 0
         ) {
-          await delay(retryDelayMs);
+          await delay(retryDelayMs, { signal });
         }
       }
     };
@@ -412,14 +412,20 @@ if (!IS_TEST_ENV) {
     .catch(async (error) => {
       console.error("❌ Oracle initialization failed. Stopping server.", error);
       const exitCode = !IS_TEST_ENV ? 1 : undefined;
-      let exit: (() => void) | undefined;
+      let stopResult: StopServerResult | undefined;
 
       try {
-        exit = await stopServer(realOracle, exitCode);
+        stopResult = await stopServer(realOracle, exitCode);
       } catch (shutdownError) {
         console.error("❌ Failed to stop server after init error:", shutdownError);
       } finally {
-        invokeExit(exitCode, exit);
+        const shouldExit =
+          stopResult?.shouldExit ?? (exitCode !== undefined && !IS_TEST_ENV);
+        const resolvedExitCode = stopResult?.exitCode ?? exitCode;
+
+        if (shouldExit && resolvedExitCode !== undefined) {
+          process.exit(resolvedExitCode);
+        }
       }
     });
 
@@ -433,7 +439,7 @@ export async function initialize(oracle: OracleApi): Promise<void> {
     await oracle.startEventListening();
     console.log("✅ Oracle services initialized");
   } catch (error) {
-    console.error("❌ Failed to start event listeners:", error);
+    console.error(EVENT_LISTENER_FAILURE_MESSAGE, error);
     throw error;
   }
 }
@@ -445,14 +451,20 @@ export async function shutdown(
 ): Promise<void> {
   console.log(`\n🛑 Shutting down (${signal})...`);
   const exitCode = !IS_TEST_ENV ? 0 : undefined;
-  let exit: (() => void) | undefined;
+  let stopResult: StopServerResult | undefined;
 
   try {
-    exit = await stopServer(oracle, exitCode);
+    stopResult = await stopServer(oracle, exitCode);
     console.log("✅ Shutdown complete");
   } catch (error) {
     console.error("❌ Shutdown error:", error);
   } finally {
-    invokeExit(exitCode, exit);
+    const shouldExit =
+      stopResult?.shouldExit ?? (exitCode !== undefined && !IS_TEST_ENV);
+    const resolvedExitCode = stopResult?.exitCode ?? exitCode;
+
+    if (shouldExit && resolvedExitCode !== undefined) {
+      process.exit(resolvedExitCode);
+    }
   }
 }
