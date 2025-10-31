@@ -218,7 +218,7 @@ describe("OracleService", () => {
       const stats = await service.scanAndCompleteActiveGames();
       expect(processed).toEqual(["active"]);
       expect(stats).toEqual({ completed: 1, errors: 0, notReady: 0 });
-      expect(delayCalls).toBe(1);
+      expect(delayCalls).toBe(0);
 
       const stubbornEntry = db
         .getPendingGames()

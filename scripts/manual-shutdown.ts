@@ -34,7 +34,7 @@ async function runManualShutdown() {
   const cleanupSummary = oracle.cleanupOldRecords(0);
   console.log("\n🧹 Cleanup summary:");
   console.log(
-    `   Deleted secrets: ${cleanupSummary.deletedSecrets}, deleted games: ${cleanupSummary.deletedGames}`
+    `   Deleted secrets: ${cleanupSummary.deletedSecrets}, deleted games: ${cleanupSummary.deletedGames}, deleted players: ${cleanupSummary.deletedPlayers}`
   );
 
   console.log("\n✅ Manual shutdown scan complete.");

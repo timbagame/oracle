@@ -153,6 +153,7 @@ export interface ScanLoopSummary {
 interface GameReadinessSnapshot {
   ready: boolean;
   gameAccount: any | null;
+  evaluatedAt?: number;
 }
 
 interface GameOnChainContext {
@@ -213,12 +214,14 @@ export class OracleService {
   private isListening: boolean = false;
   private readinessCache: Map<string, GameReadinessSnapshot> = new Map();
   private tokenProgramCache?: Map<string, PublicKey>;
+  private readonly interGameDelayMs: number;
 
   private constructor(db?: OracleDatabase) {
     this.db = db ?? OracleDatabase.getInstance();
     this.connection = this.initializeConnection();
     this.adminKeypair = this.loadAdminKeypair();
     this.program = this.initializeProgram();
+    this.interGameDelayMs = this.resolveInterGameDelay();
   }
 
   private getTokenProgramCache(): Map<string, PublicKey> {
@@ -283,6 +286,23 @@ export class OracleService {
     return new anchor.Program(idl as Timba, provider) as anchor.Program<Timba>;
   }
 
+  private resolveInterGameDelay(): number {
+    const rawValue = process.env["ORACLE_SCAN_THROTTLE_MS"];
+    if (!rawValue) {
+      return 0;
+    }
+
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      console.warn(
+        `⚠️  Ignoring invalid ORACLE_SCAN_THROTTLE_MS value '${rawValue}', expected non-negative number.`
+      );
+      return 0;
+    }
+
+    return parsed;
+  }
+
   public async startEventListening(): Promise<void> {
     if (this.isListening) return;
 
@@ -298,13 +318,22 @@ export class OracleService {
   }
 
   private async setupEventListeners(): Promise<number[]> {
-    const listenerIds = await Promise.all(
-      OracleService.EVENT_HANDLER_CONFIG.map(({ event, createHandler }) =>
-        this.program.addEventListener(event, createHandler(this))
-      )
-    );
+    const listenerIds: number[] = [];
 
-    return listenerIds;
+    try {
+      for (const { event, createHandler } of OracleService.EVENT_HANDLER_CONFIG) {
+        const handler = createHandler(this);
+        const listenerId = await this.program.addEventListener(event, handler);
+        listenerIds.push(listenerId);
+      }
+
+      return listenerIds;
+    } catch (error) {
+      await Promise.allSettled(
+        listenerIds.map((listenerId) => this.program.removeEventListener(listenerId))
+      );
+      throw error;
+    }
   }
 
   public async stopEventListening(): Promise<void> {
@@ -589,13 +618,19 @@ export class OracleService {
       context?: GameOnChainContext | null;
       readiness?: GameReadinessSnapshot;
       requireOnChain?: boolean;
+      blockTime?: number;
     } = {}
   ): Promise<{
     context: GameOnChainContext | null;
     readiness?: GameReadinessSnapshot;
     notReady: boolean;
   }> {
-    const { context: providedContext = null, readiness: providedReadiness, requireOnChain = false } = options;
+    const {
+      context: providedContext = null,
+      readiness: providedReadiness,
+      requireOnChain = false,
+      blockTime,
+    } = options;
 
     const attachReadiness = (
       ctx: GameOnChainContext | null,
@@ -632,6 +667,7 @@ export class OracleService {
       context: resolvedContext,
       providedReadiness: providedReadiness ?? providedContext?.readiness,
       requireOnChain,
+      blockTime,
     });
 
     if (missingOnChain && requireOnChain) {
@@ -674,12 +710,13 @@ export class OracleService {
     context: GameOnChainContext;
     providedReadiness?: GameReadinessSnapshot;
     requireOnChain: boolean;
+    blockTime?: number;
   }): Promise<{
     readiness?: GameReadinessSnapshot;
     notReady: boolean;
     missingOnChain: boolean;
   }> {
-    const { gameAddress, context, providedReadiness, requireOnChain } = args;
+    const { gameAddress, context, providedReadiness, requireOnChain, blockTime } = args;
 
     let readinessSnapshot = providedReadiness ?? context.readiness;
     let missingOnChain = false;
@@ -697,7 +734,8 @@ export class OracleService {
     if (shouldEvaluateReadiness) {
       const evaluation = await this.evaluateAndCacheReadiness(
         context.gamePda,
-        gameAddress
+        gameAddress,
+        blockTime
       );
 
       if (!evaluation.gameAccount) {
@@ -720,9 +758,10 @@ export class OracleService {
 
   private async evaluateAndCacheReadiness(
     gamePda: PublicKey,
-    gameAddress: string
+    gameAddress: string,
+    blockTime?: number
   ): Promise<GameReadinessSnapshot> {
-    const readiness = await this.evaluateGameReadiness(gamePda, gameAddress);
+    const readiness = await this.evaluateGameReadiness(gamePda, gameAddress, blockTime);
 
     if (readiness.ready) {
       this.readinessCache.set(gameAddress, readiness);
@@ -832,14 +871,21 @@ export class OracleService {
         cache.set(cacheKey, TOKEN_PROGRAM_ID);
         return TOKEN_PROGRAM_ID;
       }
+      throw new Error(
+        owner
+          ? `Unsupported token program owner ${owner.toBase58()}`
+          : `Mint ${tokenMint.toBase58()} is missing an owner`
+      );
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.warn(
         `⚠️  Unable to resolve token program for mint ${tokenMint.toBase58()}:`,
-        error instanceof Error ? error.message : error
+        message
       );
+      throw new Error(`Unable to resolve token program for mint ${tokenMint.toBase58()}: ${message}`, {
+        cause: error instanceof Error ? error : undefined,
+      });
     }
-
-    return TOKEN_PROGRAM_ID;
   }
 
   private calculateWinnerIndex(
@@ -930,12 +976,18 @@ export class OracleService {
 
     console.log(`🔍 Scanning ${pendingGames.length} pending games...`);
 
-    for (const game of pendingGames) {
+    let cachedBlockTime: number | undefined;
+
+    for (let index = 0; index < pendingGames.length; index++) {
+      const game = pendingGames[index]!;
       try {
+        cachedBlockTime ??= await this.getBlockchainTime();
+
         // Check if game still exists on-chain
         const { context: onChainContext, readiness } =
           await this.resolveContextAndReadiness(game.game_address, {
             requireOnChain: true,
+            blockTime: cachedBlockTime,
           });
         if (!onChainContext) {
           this.db.markGameCompleted(game.game_address);
@@ -953,10 +1005,20 @@ export class OracleService {
           this.updateScanStats(stats, result);
         }
 
-        await delayHelper(DEFAULT_DELAY_MS);
+        if (readiness && !readiness.ready) {
+          cachedBlockTime = undefined;
+        }
+
+        if (this.shouldThrottleBetweenGames(result ?? null, index, pendingGames.length)) {
+          await delayHelper(this.interGameDelayMs);
+        }
       } catch (error) {
         stats.errors++;
         console.error(`❌ Error completing game ${game.game_address}:`, error);
+        cachedBlockTime = undefined;
+        if (this.interGameDelayMs > 0) {
+          await delayHelper(this.interGameDelayMs);
+        }
       }
     }
 
@@ -1086,16 +1148,17 @@ export class OracleService {
 
   private async evaluateGameReadiness(
     gamePda: PublicKey,
-    gameAddress: string
+    gameAddress: string,
+    blockTime?: number
   ): Promise<GameReadinessSnapshot> {
     const gameAccount = await this.fetchGameAccount(gamePda, gameAddress);
     if (!gameAccount) {
       return { ready: false, gameAccount: null };
     }
 
-    const blockTime = await this.getBlockchainTime();
+    const evaluatedAt = blockTime ?? (await this.getBlockchainTime());
     const expiresAt = Number(gameAccount.createdAt) + Number(gameAccount.timeout);
-    const isExpired = blockTime > expiresAt;
+    const isExpired = evaluatedAt > expiresAt;
     const ticketsCount = Number(gameAccount.ticketsCount);
     const isFull = ticketsCount >= Number(gameAccount.maxTickets);
     const hasMinTickets = ticketsCount >= Number(gameAccount.minTickets);
@@ -1103,6 +1166,7 @@ export class OracleService {
     return {
       ready: isFull || (isExpired && hasMinTickets),
       gameAccount,
+      evaluatedAt,
     };
   }
 
@@ -1129,4 +1193,23 @@ export class OracleService {
     return readiness;
   }
 
+  private shouldThrottleBetweenGames(
+    result: GameCompletionResult | null,
+    index: number,
+    total: number
+  ): boolean {
+    if (this.interGameDelayMs <= 0) {
+      return false;
+    }
+
+    if (index >= total - 1) {
+      return false;
+    }
+
+    if (!result) {
+      return true;
+    }
+
+    return !result.success;
+  }
 }

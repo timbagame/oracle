@@ -328,6 +328,11 @@ export class OracleDatabase {
       () => {
         this.markSecretKeyUsed(gameAddress);
         this.markGameCompleted(gameAddress);
+        this.runStatement(
+          "DELETE FROM game_players WHERE game_address = ?",
+          "Failed to delete player rows for completed game",
+          gameAddress
+        );
       },
       `Failed to finalize completed game ${gameAddress}`
     );
@@ -416,6 +421,7 @@ export class OracleDatabase {
   public cleanupOldRecords(hoursOld: number = 48): {
     deletedSecrets: number;
     deletedGames: number;
+    deletedPlayers: number;
   } {
     try {
       const cutoffTime = Date.now() - hoursOld * 60 * 60 * 1000;
@@ -435,6 +441,19 @@ export class OracleDatabase {
         DEFAULT_STATUS
       );
 
+      const deletedPlayers = this.runDelete(
+        `DELETE FROM game_players
+         WHERE game_address IN (
+           SELECT game_address FROM game_tracking
+           WHERE status != ?
+             AND completed_at IS NOT NULL
+             AND completed_at < ?
+         )`,
+        "Failed to delete old player rows",
+        DEFAULT_STATUS,
+        cutoffTime
+      );
+
       // Clean up old game tracking records (completed/cancelled games older than cutoff)
       const deletedGames = this.runDelete(
         `DELETE FROM game_tracking
@@ -449,16 +468,17 @@ export class OracleDatabase {
       const deletedCounts = {
         deletedSecrets,
         deletedGames,
+        deletedPlayers,
       };
 
       console.log(
-        `🧹 Cleanup completed - Secrets: ${deletedCounts.deletedSecrets}, Games: ${deletedCounts.deletedGames}`
+        `🧹 Cleanup completed - Secrets: ${deletedCounts.deletedSecrets}, Games: ${deletedCounts.deletedGames}, Players: ${deletedCounts.deletedPlayers}`
       );
 
       return deletedCounts;
     } catch (error) {
       console.error("❌ Failed to cleanup old records:", error);
-      return { deletedSecrets: 0, deletedGames: 0 };
+      return { deletedSecrets: 0, deletedGames: 0, deletedPlayers: 0 };
     }
   }
 
