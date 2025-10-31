@@ -1,0 +1,649 @@
+import * as anchor from "@coral-xyz/anchor";
+import { PublicKey } from "@solana/web3.js";
+import { createHash } from "crypto";
+import {
+  type AttemptGameCompletionOptions,
+  type GameCompletionResult,
+  type GameOnChainContext,
+  type GameReadinessSnapshot,
+} from "./oracle-service.types.ts";
+import type { OracleDatabase } from "./database.ts";
+import type { OracleMetrics } from "./metrics.ts";
+import type { Timba } from "./idl/idlType.ts";
+import type { TimbaGameAccount } from "./types/timba.ts";
+import { coercePublicKey, ensurePublicKey } from "./solana-utils.ts";
+import type { PublicKeyLike } from "./solana-utils.ts";
+import {
+  deriveGameAccounts,
+  GAME_SEED,
+} from "./oracle-accounts.ts";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+
+export interface GameCompletionManagerOptions {
+  db: OracleDatabase;
+  metrics: OracleMetrics;
+  getConnection: () => anchor.web3.Connection;
+  getProgram: () => anchor.Program<Timba>;
+  adminKeypair: anchor.web3.Keypair;
+  readinessCache: Map<string, GameReadinessSnapshot>;
+  tokenProgramCache: Map<string, PublicKey>;
+  secretKeyLength: number;
+  noSecretKeyMessage: string;
+  confirmTransaction: (signature: string) => Promise<void>;
+}
+
+export class GameCompletionManager {
+  constructor(private readonly options: GameCompletionManagerOptions) {}
+
+  public async isGameReadyForCompletion(gamePda: PublicKey): Promise<boolean> {
+    const normalized = ensurePublicKey(gamePda);
+    const gameAddress = normalized.toBase58();
+    const readiness = await this.evaluateAndCacheReadiness(normalized, gameAddress);
+    return readiness.ready;
+  }
+
+  public async attemptGameCompletion(
+    options: AttemptGameCompletionOptions,
+    hooks: {
+      completeGame?: (
+        gameAddress: string,
+        readiness?: GameReadinessSnapshot,
+        sharedContext?: GameOnChainContext,
+      ) => Promise<GameCompletionResult>;
+    } = {},
+  ): Promise<GameCompletionResult | null> {
+    const {
+      gameAddress,
+      gameKey,
+      context = null,
+      readiness,
+      skipReadinessCheck = false,
+      onResult,
+      successLog,
+      failureLog,
+    } = options;
+
+    const resolvedPda =
+      context?.gamePda ?? (gameKey ? coercePublicKey(gameKey) : null);
+
+    if (!resolvedPda) {
+      return null;
+    }
+
+    if (!skipReadinessCheck) {
+      const ready = await this.isGameReadyForCompletion(resolvedPda);
+      if (!ready) {
+        const result: GameCompletionResult = { success: false, notReady: true };
+        onResult?.(result);
+        this.options.metrics.recordCompletion({
+          gameAddress,
+          outcome: "not-ready",
+        });
+        return result;
+      }
+    }
+
+    const sharedContext = context ?? undefined;
+    const completion = await (hooks.completeGame
+      ? hooks.completeGame(gameAddress, readiness, sharedContext)
+      : this.completeGame(gameAddress, readiness, sharedContext));
+
+    onResult?.(completion);
+
+    this.options.metrics.recordCompletion({
+      gameAddress,
+      outcome: completion.success
+        ? "success"
+        : completion.notReady
+        ? "not-ready"
+        : "error",
+      error: completion.error,
+    });
+
+    if (completion.success) {
+      const message = successLog?.(gameAddress);
+      if (message) {
+        console.log(message);
+      }
+    } else if (!completion.notReady) {
+      const message = failureLog?.(gameAddress, completion.error);
+      if (message) {
+        console.error(message);
+      }
+    }
+
+    return completion;
+  }
+
+  public async completeGame(
+    gameAddress: string,
+    cachedReadiness?: GameReadinessSnapshot,
+    sharedContext?: GameOnChainContext,
+  ): Promise<GameCompletionResult> {
+    const recordFailure = (
+      error: string,
+      options: { clearReadiness?: boolean } = {},
+    ): GameCompletionResult => {
+      this.options.db.incrementCompletionAttempts(gameAddress);
+
+      if (options.clearReadiness) {
+        this.options.readinessCache.delete(gameAddress);
+      }
+
+      return { success: false, error };
+    };
+
+    const recordFatalFailure = (error: string): GameCompletionResult =>
+      recordFailure(error, { clearReadiness: true });
+
+    try {
+      const { context, readiness, notReady } = await this.resolveContextAndReadiness(
+        gameAddress,
+        {
+          context: sharedContext ?? null,
+          readiness: cachedReadiness,
+        },
+      );
+
+      if (!context) {
+        return recordFatalFailure(this.options.noSecretKeyMessage);
+      }
+
+      if (notReady || !readiness) {
+        return { success: false, notReady: true };
+      }
+
+      const { secretData, randomHashBuffer } = context;
+      const gameAccount = readiness.gameAccount;
+      if (!gameAccount) {
+        return recordFatalFailure("On-chain game account unavailable");
+      }
+
+      const players = this.options.db.getGamePlayers(gameAddress);
+      const nEntries = Number(gameAccount.ticketsCount);
+
+      if (players.length === 0) {
+        return recordFatalFailure("No players found for game");
+      }
+
+      if (players.length !== nEntries) {
+        console.error(
+          `❌ Ticket registry mismatch for ${gameAddress}: expected ${nEntries}, found ${players.length}`,
+        );
+        return recordFatalFailure("Ticket registry out of sync");
+      }
+
+      const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
+      const winnerIndex = this.calculateWinnerIndex(
+        secretKeyBuffer,
+        Number(gameAccount.lastSlot),
+        nEntries,
+      );
+      const winnerPlayerAddress = players[winnerIndex];
+
+      if (!winnerPlayerAddress) {
+        return recordFatalFailure("Unable to determine winner");
+      }
+
+      const winnerAddress = new PublicKey(winnerPlayerAddress);
+
+      const txHash = await this.executeGameCompletion({
+        gameAccount,
+        winnerAddress,
+        randomHashBuffer,
+        secretKeyBuffer,
+        winnerIndex,
+      });
+
+      this.options.db.finalizeCompletedGame(gameAddress);
+      this.options.readinessCache.delete(gameAddress);
+
+      return { success: true, txHash };
+    } catch (error: unknown) {
+      return recordFailure(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  public async resolveContextAndReadiness(
+    gameAddress: string,
+    options: {
+      context?: GameOnChainContext | null;
+      readiness?: GameReadinessSnapshot;
+      requireOnChain?: boolean;
+      blockTime?: number;
+    } = {},
+  ): Promise<{
+    context: GameOnChainContext | null;
+    readiness?: GameReadinessSnapshot;
+    notReady: boolean;
+  }> {
+    const {
+      context: providedContext = null,
+      readiness: providedReadiness,
+      requireOnChain = false,
+      blockTime,
+    } = options;
+
+    const attachReadiness = (
+      ctx: GameOnChainContext | null,
+      readinessValue?: GameReadinessSnapshot,
+    ): GameOnChainContext | null => {
+      if (ctx && readinessValue) {
+        return ctx.readiness === readinessValue ? ctx : { ...ctx, readiness: readinessValue };
+      }
+      return ctx;
+    };
+
+    const finalize = (
+      ctx: GameOnChainContext | null,
+      readinessValue: GameReadinessSnapshot | undefined,
+      notReady: boolean,
+    ) => ({
+      context: attachReadiness(ctx, readinessValue),
+      readiness: readinessValue,
+      notReady,
+    });
+
+    const resolvedContext = await this.resolveGameContext(
+      gameAddress,
+      providedContext,
+      requireOnChain,
+    );
+
+    if (!resolvedContext) {
+      return finalize(null, undefined, false);
+    }
+
+    const { readiness, notReady, missingOnChain } = await this.resolveReadinessState({
+      gameAddress,
+      context: resolvedContext,
+      providedReadiness: providedReadiness ?? providedContext?.readiness,
+      requireOnChain,
+      blockTime,
+    });
+
+    if (missingOnChain && requireOnChain) {
+      console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
+      return finalize(null, undefined, false);
+    }
+
+    return finalize(resolvedContext, readiness, notReady);
+  }
+
+  public consumeReadiness(gameAddress: string): GameReadinessSnapshot | undefined {
+    const readiness = this.options.readinessCache.get(gameAddress);
+    if (readiness) {
+      this.options.readinessCache.delete(gameAddress);
+    }
+    return readiness;
+  }
+
+  public clearTokenProgramCache(): void {
+    this.options.tokenProgramCache.clear();
+  }
+
+  public async getBlockchainTime(): Promise<number> {
+    try {
+      const connection = this.options.getConnection();
+      const slot = await connection.getSlot();
+      const blockTime = await connection.getBlockTime(slot);
+      return blockTime || Math.floor(Date.now() / 1000);
+    } catch {
+      return Math.floor(Date.now() / 1000);
+    }
+  }
+
+  private async resolveGameContext(
+    gameAddress: string,
+    context: GameOnChainContext | null,
+    requireOnChain: boolean,
+  ): Promise<GameOnChainContext | null> {
+    if (context) {
+      return context;
+    }
+
+    try {
+      const resolved = this.resolveStoredGame(gameAddress, {
+        throwIfMissing: requireOnChain,
+      });
+      if (!resolved) {
+        this.logMissingSecret(gameAddress, requireOnChain);
+        return null;
+      }
+      return resolved;
+    } catch (error: unknown) {
+      if (error instanceof MissingSecretError) {
+        this.logMissingSecret(gameAddress, requireOnChain);
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  private async resolveReadinessState(args: {
+    gameAddress: string;
+    context: GameOnChainContext;
+    providedReadiness?: GameReadinessSnapshot;
+    requireOnChain: boolean;
+    blockTime?: number;
+  }): Promise<{
+    readiness?: GameReadinessSnapshot;
+    notReady: boolean;
+    missingOnChain: boolean;
+  }> {
+    const { gameAddress, context, providedReadiness, requireOnChain, blockTime } = args;
+
+    let readinessSnapshot = providedReadiness ?? context.readiness;
+    let missingOnChain = false;
+
+    if (readinessSnapshot && requireOnChain && !readinessSnapshot.gameAccount) {
+      readinessSnapshot = undefined;
+    }
+
+    if (!readinessSnapshot && !requireOnChain) {
+      readinessSnapshot = this.consumeReadiness(gameAddress);
+    }
+
+    const shouldEvaluateReadiness = requireOnChain || !readinessSnapshot;
+
+    if (shouldEvaluateReadiness) {
+      const evaluation = await this.evaluateAndCacheReadiness(
+        context.gamePda,
+        gameAddress,
+        blockTime,
+      );
+
+      if (!evaluation.gameAccount) {
+        missingOnChain = true;
+        readinessSnapshot = undefined;
+      } else if (!requireOnChain && !evaluation.ready) {
+        return { readiness: undefined, notReady: true, missingOnChain };
+      } else {
+        readinessSnapshot = evaluation;
+      }
+    }
+
+    const notReady =
+      !readinessSnapshot ||
+      !readinessSnapshot.ready ||
+      !readinessSnapshot.gameAccount;
+
+    return { readiness: readinessSnapshot, notReady, missingOnChain };
+  }
+
+  private async evaluateAndCacheReadiness(
+    gamePda: PublicKey,
+    gameAddress: string,
+    blockTime?: number,
+  ): Promise<GameReadinessSnapshot> {
+    const readiness = await this.evaluateGameReadiness(gamePda, gameAddress, blockTime);
+
+    if (readiness.ready) {
+      this.options.readinessCache.set(gameAddress, readiness);
+    } else {
+      this.options.readinessCache.delete(gameAddress);
+    }
+
+    return readiness;
+  }
+
+  public async evaluateGameReadiness(
+    gamePda: PublicKey,
+    gameAddress: string,
+    blockTime?: number,
+  ): Promise<GameReadinessSnapshot> {
+    const gameAccount = await this.fetchGameAccount(gamePda, gameAddress);
+    if (!gameAccount) {
+      return { ready: false, gameAccount: null };
+    }
+
+    const evaluatedAt = blockTime ?? (await this.getBlockchainTime());
+    const expiresAt = Number(gameAccount.createdAt) + Number(gameAccount.timeout);
+    const isExpired = evaluatedAt > expiresAt;
+    const ticketsCount = Number(gameAccount.ticketsCount);
+    const isFull = ticketsCount >= Number(gameAccount.maxTickets);
+    const hasMinTickets = ticketsCount >= Number(gameAccount.minTickets);
+
+    return {
+      ready: isFull || (isExpired && hasMinTickets),
+      gameAccount,
+      evaluatedAt,
+    };
+  }
+
+  public async fetchGameAccount(
+    gamePda: PublicKey,
+    gameAddress: string,
+  ): Promise<TimbaGameAccount | null> {
+    try {
+      const program = this.options.getProgram();
+      return (await program.account.game.fetch(gamePda)) as TimbaGameAccount;
+    } catch (error: unknown) {
+      if (this.isAccountNotFoundError(error)) {
+        this.options.db.markGameCompleted(gameAddress);
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  public isAccountNotFoundError(error: unknown): error is { message?: string } {
+    if (!error || typeof error !== "object") {
+      return false;
+    }
+
+    if (!("message" in error)) {
+      return false;
+    }
+
+    const { message } = error as { message?: unknown };
+    return typeof message === "string" && message.includes("Account does not exist");
+  }
+
+  public async executeGameCompletion(args: {
+    gameAccount: TimbaGameAccount;
+    winnerAddress: PublicKey;
+    randomHashBuffer: Buffer;
+    secretKeyBuffer: Buffer;
+    winnerIndex: number;
+  }): Promise<string> {
+    const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
+
+    const creatorPublicKey = ensurePublicKey(gameAccount.creator);
+    const tokenMint = ensurePublicKey(gameAccount.tokenMint);
+    const tokenProgramId = await this.resolveTokenProgram(
+      gameAccount.tokenProgram,
+      tokenMint,
+    );
+    const programId = ensurePublicKey(this.options.getProgram().programId);
+    const {
+      gamePda,
+      oraclePda,
+      gameTokenPda,
+      gameVaultPda,
+      winnerTokenAccount,
+      gameTokenAccount,
+    } = deriveGameAccounts({
+      programId,
+      randomHash: randomHashBuffer,
+      tokenMint,
+      winner: winnerAddress,
+      tokenProgramId,
+    });
+
+    const gameTokenCtx = {
+      tokenMint,
+      gameToken: gameTokenPda,
+      gameVault: gameVaultPda,
+      gameTokenAccount,
+      tokenProgram: tokenProgramId,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+    } as const;
+
+    const program = this.options.getProgram();
+    const txHash = await program.methods
+      .completeGame([...randomHashBuffer], [...secretKeyBuffer], winnerIndex)
+      .accountsPartial({
+        game: gamePda,
+        oracle: oraclePda,
+        oracleOperator: this.options.adminKeypair.publicKey,
+        winner: winnerAddress,
+        creator: creatorPublicKey,
+        gameTokenCtx,
+        systemProgram: anchor.web3.SystemProgram.programId,
+        winnerTokenAccount,
+      })
+      .signers([this.options.adminKeypair])
+      .rpc();
+
+    await this.options.confirmTransaction(txHash);
+    return txHash;
+  }
+
+  public async resolveTokenProgram(
+    tokenProgram: PublicKeyLike,
+    tokenMint: PublicKey,
+  ): Promise<PublicKey> {
+    const cacheKey = tokenMint.toBase58();
+    const cache = this.options.tokenProgramCache;
+    const directProgram = coercePublicKey(tokenProgram);
+
+    if (directProgram && !directProgram.equals(PublicKey.default)) {
+      cache.set(cacheKey, directProgram);
+
+      if (directProgram.equals(TOKEN_PROGRAM_ID)) {
+        return TOKEN_PROGRAM_ID;
+      }
+
+      if (directProgram.equals(TOKEN_2022_PROGRAM_ID)) {
+        return TOKEN_2022_PROGRAM_ID;
+      }
+
+      return directProgram;
+    }
+
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      const connection = this.options.getConnection();
+      const mintAccount = await connection.getAccountInfo(tokenMint);
+      const owner = mintAccount?.owner;
+
+      if (owner?.equals(TOKEN_2022_PROGRAM_ID)) {
+        cache.set(cacheKey, TOKEN_2022_PROGRAM_ID);
+        return TOKEN_2022_PROGRAM_ID;
+      }
+
+      if (owner?.equals(TOKEN_PROGRAM_ID)) {
+        cache.set(cacheKey, TOKEN_PROGRAM_ID);
+        return TOKEN_PROGRAM_ID;
+      }
+      throw new Error(
+        owner
+          ? `Unsupported token program owner ${owner.toBase58()}`
+          : `Mint ${tokenMint.toBase58()} is missing an owner`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `⚠️  Unable to resolve token program for mint ${tokenMint.toBase58()}:`,
+        message,
+      );
+      throw new Error(
+        `Unable to resolve token program for mint ${tokenMint.toBase58()}: ${message}`,
+        {
+          cause: error instanceof Error ? error : undefined,
+        },
+      );
+    }
+  }
+
+  public calculateWinnerIndex(
+    secretKeyBuffer: Buffer,
+    lastSlot: number,
+    nPlayers: number,
+  ): number {
+    if (nPlayers <= 1) return 0;
+
+    if (secretKeyBuffer.length < this.options.secretKeyLength) {
+      throw new Error(
+        `Secret key buffer must be at least ${this.options.secretKeyLength} bytes`,
+      );
+    }
+
+    const lastSlotBytes = Buffer.alloc(8);
+    lastSlotBytes.writeBigUInt64LE(BigInt(lastSlot));
+
+    const combinedData = Buffer.concat([
+      secretKeyBuffer.subarray(0, this.options.secretKeyLength),
+      lastSlotBytes,
+    ]);
+
+    const entropyHash = createHash("sha256").update(combinedData).digest();
+
+    const maxU64 = 0xffff_ffff_ffff_ffffn;
+    const nPlayersBig = BigInt(nPlayers);
+    const maxValid = maxU64 - (maxU64 % nPlayersBig);
+
+    for (let startPos = 0; startPos <= entropyHash.length - 8; startPos++) {
+      const randomU64 = entropyHash.readBigUInt64LE(startPos);
+      if (randomU64 < maxValid) {
+        return Number(randomU64 % nPlayersBig);
+      }
+    }
+
+    throw new Error(
+      "Unable to generate unbiased random number - game must be cancelled",
+    );
+  }
+
+  private logMissingSecret(gameAddress: string, requireOnChain: boolean): void {
+    if (!requireOnChain) {
+      return;
+    }
+    console.log(`⚠️  ${this.options.noSecretKeyMessage} for game ${gameAddress}`);
+  }
+
+  public resolveStoredGame(
+    gameAddress: string,
+    options: { throwIfMissing?: boolean } = {},
+  ): {
+    secretData: { secretKey: string; randomHash: string };
+    randomHashBuffer: Buffer;
+    gamePda: PublicKey;
+  } | null {
+    const secretData = this.options.db.getSecretKey(gameAddress);
+    if (!secretData) {
+      if (options.throwIfMissing) {
+        throw new MissingSecretError(gameAddress);
+      }
+      return null;
+    }
+
+    const randomHashBuffer = Buffer.from(secretData.randomHash, "hex");
+    const gamePda = this.getGamePDA(randomHashBuffer);
+
+    return { secretData, randomHashBuffer, gamePda };
+  }
+
+  public getGamePDA(randomHash: Buffer): PublicKey {
+    const programId = ensurePublicKey(this.options.getProgram().programId);
+    const [pda] = PublicKey.findProgramAddressSync([GAME_SEED, randomHash], programId);
+    return pda;
+  }
+}
+
+class MissingSecretError extends Error {
+  constructor(gameAddress: string) {
+    super(`No secret data found for game ${gameAddress}`);
+    this.name = "MissingSecretError";
+  }
+}
+

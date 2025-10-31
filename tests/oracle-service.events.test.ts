@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { coercePublicKey } from "../solana-utils.ts";
 import type { OracleDatabase } from "../database.ts";
+import type { OracleMetrics } from "../metrics.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 import {
   createProgramStub,
@@ -282,15 +283,25 @@ describe("OracleService event handling", () => {
 });
 
 function createService(db: OracleDatabaseStub, programStub: ProgramStub): OracleServiceType {
-  const service = Object.create(OracleServiceClass.prototype) as OracleServiceType;
-  (service as any).db = db;
+  const metricsStub: OracleMetrics = {
+    recordCompletion() {},
+    recordScanCycle() {},
+    recordCleanupSweep() {},
+  };
+
+  const service = OracleServiceClass.createWith(db as unknown as OracleDatabase, {
+    metrics: metricsStub,
+  });
+
   (service as any).program = programStub;
-  (service as any).eventListeners = [];
-  (service as any).isListening = false;
-  (service as any).connection = null;
-  (service as any).adminKeypair = Keypair.generate();
-  (service as any).getBlockchainTime = async () => Math.floor(Date.now() / 1000);
-  (service as any).readinessCache = new Map();
+  (service as any).connection = {
+    getSlot: async () => 0,
+    getBlockTime: async () => Math.floor(Date.now() / 1000),
+    getLatestBlockhash: async () => ({ blockhash: "", lastValidBlockHeight: 0 }),
+    confirmTransaction: async () => {},
+    getAccountInfo: async () => null,
+  };
+
   return service;
 }
 
