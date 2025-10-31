@@ -577,6 +577,45 @@ describe("OracleService internals", () => {
     }
   });
 
+  it("runScanLoop waits between cycles when pending-only mode sees only errors", async () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+
+    const originalScan = (service as any).scanAndCompleteActiveGames;
+
+    const delaySpy = spyOn(delayModule, "delay").mockImplementation(async () => {});
+
+    const firstStats = { completed: 0, errors: 2, notReady: 0 };
+    const secondStats = createEmptyCompletionStats();
+    let callCount = 0;
+
+    (service as any).scanAndCompleteActiveGames = async () => {
+      const next = callCount === 0 ? firstStats : secondStats;
+      callCount += 1;
+      return next;
+    };
+
+    try {
+      const summary = await service.runScanLoop({
+        waitBetweenCyclesMs: 50,
+        waitForPendingOnly: true,
+      });
+
+      expect(callCount).toBe(2);
+      expect(delaySpy).toHaveBeenCalledTimes(1);
+      expect(delaySpy).toHaveBeenCalledWith(50, { signal: undefined });
+      expect(summary).toEqual({
+        cycles: 2,
+        totalCompleted: 0,
+        totalErrors: 2,
+        totalNotReady: 0,
+        lastStats: secondStats,
+      });
+    } finally {
+      delaySpy.mockRestore();
+      (service as any).scanAndCompleteActiveGames = originalScan;
+    }
+  });
+
   it("resolveContextAndReadiness consumes cached readiness when on-chain lookups are optional", async () => {
     const db = OracleDatabase.getInstance();
     const service = OracleService.createWith(db);
