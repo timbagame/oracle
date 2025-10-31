@@ -85,6 +85,9 @@ describe("index router", () => {
   test("unknown route returns 404", async () => {
     const res = await router(new Request("http://localhost:3001/unknown", { method: "GET" }));
     expect(res.status).toBe(404);
+    const json: any = await res.json();
+    expect(json.success).toBe(false);
+    expect(json.service?.name).toBe("oracle-api");
   });
 
   test("router catches handler errors and returns 500", async () => {
@@ -98,6 +101,9 @@ describe("index router", () => {
     const badRouter = buildFetchRouter(badHandlers);
     const res = await badRouter(new Request("http://localhost:3001/generate-hash", { method: "POST" }));
     expect(res.status).toBe(500);
+    const json: any = await res.json();
+    expect(json.success).toBe(false);
+    expect(json.service?.name).toBe("oracle-api");
   });
 
   test("router logs unexpected errors and returns generic 500", async () => {
@@ -120,6 +126,7 @@ describe("index router", () => {
       expect(res.status).toBe(500);
       const json: any = await res.json();
       expect(json.error).toBe("Internal server error");
+      expect(json.success).toBe(false);
       expect(errors.some((entry) => entry.includes("Server error"))).toBe(true);
     } finally {
       console.error = originalError;
@@ -145,6 +152,7 @@ describe("index router", () => {
       expect(res.status).toBe(500);
       const body: any = await res.json();
       expect(body.error).toBe("Internal server error");
+      expect(body.success).toBe(false);
       expect(errors.some((entry) => entry.includes("Handler not implemented"))).toBe(true);
     } finally {
       console.error = originalError;

@@ -343,7 +343,7 @@ function createDbStub(): { db: OracleDatabaseStub; callLog: CallLog } {
     saveSecretKey(game, secretKey, randomHash) {
       secretKeys.set(game, { secretKey, randomHash });
     },
-    getPendingGames() {
+    getPendingGames(_maxAttempts?: number) {
       return [];
     },
     cleanupOldRecords() {
@@ -375,7 +375,10 @@ type OracleDatabaseStub = Partial<OracleDatabase> & {
   markGameClosed(game: string): void;
   getSecretKey(game: string): { secretKey: string; randomHash: string } | null;
   saveSecretKey(game: string, secretKey: string, randomHash: string): void;
-  getPendingGames(): Array<{ game_address: string; completion_attempts: number }>;
+  getPendingGames(maxAttempts?: number): Array<{
+    game_address: string;
+    completion_attempts: number;
+  }>;
   cleanupOldRecords(): { deletedSecrets: number; deletedGames: number };
   getStats(): {
     totalSecrets: number;

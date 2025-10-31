@@ -155,6 +155,76 @@ async function runExecuteGameCompletionScenario({
 }
 
 describe("OracleService internals", () => {
+  it("memoizes token program resolution and supports cache reset", async () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const originalConnection = (service as any).connection;
+    const tokenMint = Keypair.generate().publicKey;
+    const callLog: string[] = [];
+
+    (service as any).connection = {
+      getAccountInfo: async (mint: PublicKey) => {
+        callLog.push(mint.toBase58());
+        return { owner: TOKEN_PROGRAM_ID };
+      },
+    };
+
+    try {
+      service.clearTokenProgramCache();
+      const first = await (service as any).resolveTokenProgram(null, tokenMint);
+      const second = await (service as any).resolveTokenProgram(null, tokenMint);
+      expect(first.equals(TOKEN_PROGRAM_ID)).toBe(true);
+      expect(second.equals(TOKEN_PROGRAM_ID)).toBe(true);
+      expect(callLog).toHaveLength(1);
+
+      service.clearTokenProgramCache();
+      await (service as any).resolveTokenProgram(null, tokenMint);
+      expect(callLog).toHaveLength(2);
+    } finally {
+      (service as any).connection = originalConnection;
+      service.clearTokenProgramCache();
+    }
+  });
+
+  it("does not memoize fallback token program when lookup fails", async () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const originalConnection = (service as any).connection;
+    const tokenMint = Keypair.generate().publicKey;
+    const callLog: string[] = [];
+    let attempts = 0;
+
+    (service as any).connection = {
+      getAccountInfo: async (mint: PublicKey) => {
+        callLog.push(mint.toBase58());
+        attempts += 1;
+
+        if (attempts === 1) {
+          throw new Error("rpc unavailable");
+        }
+
+        return { owner: TOKEN_2022_PROGRAM_ID };
+      },
+    };
+
+    try {
+      service.clearTokenProgramCache();
+
+      const first = await (service as any).resolveTokenProgram(null, tokenMint);
+      expect(first.equals(TOKEN_PROGRAM_ID)).toBe(true);
+      expect(callLog).toHaveLength(1);
+
+      const second = await (service as any).resolveTokenProgram(null, tokenMint);
+      expect(second.equals(TOKEN_2022_PROGRAM_ID)).toBe(true);
+      expect(callLog).toHaveLength(2);
+
+      const third = await (service as any).resolveTokenProgram(null, tokenMint);
+      expect(third.equals(TOKEN_2022_PROGRAM_ID)).toBe(true);
+      expect(callLog).toHaveLength(2);
+    } finally {
+      (service as any).connection = originalConnection;
+      service.clearTokenProgramCache();
+    }
+  });
+
   it("isGameReadyForCompletion returns false and marks completed if account missing", async () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();

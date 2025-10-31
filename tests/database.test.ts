@@ -1,4 +1,5 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from "bun:test";
+import { spyOn } from "bun:test";
 import { rmSync } from "fs";
 import { createTestEnv } from "./helpers/create-test-env.ts";
 
@@ -112,6 +113,10 @@ describe("OracleDatabase", () => {
       { game_address: "cancelled-game", completion_attempts: 1 },
     ]);
 
+    expect(db.getPendingGames(2)).toEqual([
+      { game_address: "cancelled-game", completion_attempts: 1 },
+    ]);
+
     db.markGameClosed("cancelled-game");
 
     expect(db.getPendingGames()).toEqual([
@@ -214,5 +219,41 @@ describe("OracleDatabase", () => {
     } finally {
       (db as any).db = originalHandle;
     }
+  });
+});
+
+describe("finalizeCompletedGame", () => {
+  it("runs atomically", () => {
+    const db = OracleDatabase.getInstance();
+    const gameAddress = "atomic-game";
+
+    db.saveSecretKey(gameAddress, "aa".repeat(32), "bb".repeat(32));
+    db.trackGame(gameAddress);
+
+    const markSpy = spyOn(db, "markGameCompleted").mockImplementation(() => {
+      throw new Error("forced failure");
+    });
+
+    try {
+      expect(() => db.finalizeCompletedGame(gameAddress)).toThrow(
+        `Failed to finalize completed game ${gameAddress}`
+      );
+      expect(db.getSecretKey(gameAddress)).not.toBeNull();
+      expect(
+        db
+          .getPendingGames(Number.POSITIVE_INFINITY)
+          .some((entry) => entry.game_address === gameAddress)
+      ).toBe(true);
+    } finally {
+      markSpy.mockRestore();
+    }
+
+    db.finalizeCompletedGame(gameAddress);
+    expect(db.getSecretKey(gameAddress)).toBeNull();
+    expect(
+      db
+        .getPendingGames(Number.POSITIVE_INFINITY)
+        .some((entry) => entry.game_address === gameAddress)
+    ).toBe(false);
   });
 });

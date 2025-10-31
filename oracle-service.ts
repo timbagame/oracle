@@ -212,12 +212,21 @@ export class OracleService {
   private eventListeners: number[] = [];
   private isListening: boolean = false;
   private readinessCache: Map<string, GameReadinessSnapshot> = new Map();
+  private tokenProgramCache?: Map<string, PublicKey>;
 
   private constructor(db?: OracleDatabase) {
     this.db = db ?? OracleDatabase.getInstance();
     this.connection = this.initializeConnection();
     this.adminKeypair = this.loadAdminKeypair();
     this.program = this.initializeProgram();
+  }
+
+  private getTokenProgramCache(): Map<string, PublicKey> {
+    if (!this.tokenProgramCache) {
+      this.tokenProgramCache = new Map();
+    }
+
+    return this.tokenProgramCache;
   }
 
   public static getInstance(): OracleService {
@@ -306,6 +315,7 @@ export class OracleService {
     );
     this.eventListeners = [];
     this.isListening = false;
+    this.clearTokenProgramCache();
   }
 
   private async handlePlayerEvent(action: 'joined' | 'unjoined', event: any): Promise<void> {
@@ -786,9 +796,13 @@ export class OracleService {
     tokenProgram: PublicKey | string | null | undefined,
     tokenMint: PublicKey
   ): Promise<PublicKey> {
+    const cacheKey = tokenMint.toBase58();
+    const cache = this.getTokenProgramCache();
     const directProgram = coercePublicKey(tokenProgram);
 
     if (directProgram && !directProgram.equals(PublicKey.default)) {
+      cache.set(cacheKey, directProgram);
+
       if (directProgram.equals(TOKEN_PROGRAM_ID)) {
         return TOKEN_PROGRAM_ID;
       }
@@ -800,15 +814,22 @@ export class OracleService {
       return directProgram;
     }
 
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     try {
       const mintAccount = await this.connection.getAccountInfo(tokenMint);
       const owner = mintAccount?.owner;
 
       if (owner?.equals(TOKEN_2022_PROGRAM_ID)) {
+        cache.set(cacheKey, TOKEN_2022_PROGRAM_ID);
         return TOKEN_2022_PROGRAM_ID;
       }
 
       if (owner?.equals(TOKEN_PROGRAM_ID)) {
+        cache.set(cacheKey, TOKEN_PROGRAM_ID);
         return TOKEN_PROGRAM_ID;
       }
     } catch (error) {
@@ -828,11 +849,17 @@ export class OracleService {
   ): number {
     if (nPlayers <= 1) return 0;
 
+    if (secretKeyBuffer.length < SECRET_KEY_LENGTH) {
+      throw new Error(
+        `Secret key buffer must be at least ${SECRET_KEY_LENGTH} bytes`
+      );
+    }
+
     const lastSlotBytes = Buffer.alloc(8);
     lastSlotBytes.writeBigUInt64LE(BigInt(lastSlot));
 
     const combinedData = Buffer.concat([
-      secretKeyBuffer.subarray(0, 32),
+      secretKeyBuffer.subarray(0, SECRET_KEY_LENGTH),
       lastSlotBytes,
     ]);
 
@@ -891,20 +918,19 @@ export class OracleService {
     };
   }
 
+  public clearTokenProgramCache(): void {
+    this.tokenProgramCache?.clear();
+  }
+
   public async scanAndCompleteActiveGames(): Promise<CompletionStats> {
     const stats: CompletionStats = createEmptyCompletionStats();
-    const pendingGames = this.db.getPendingGames();
+    const pendingGames = this.db.getPendingGames(MAX_COMPLETION_ATTEMPTS);
 
     if (pendingGames.length === 0) return stats;
 
     console.log(`🔍 Scanning ${pendingGames.length} pending games...`);
 
     for (const game of pendingGames) {
-      if (game.completion_attempts >= MAX_COMPLETION_ATTEMPTS) {
-        console.log(`⏭️  Skipping game ${game.game_address} (${game.completion_attempts} attempts)`);
-        continue;
-      }
-
       try {
         // Check if game still exists on-chain
         const { context: onChainContext, readiness } =

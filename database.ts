@@ -213,6 +213,13 @@ export class OracleDatabase {
     }, errorMessage);
   }
 
+  private runInTransaction<T>(operation: () => T, errorMessage: string): T {
+    return this.executeDbOperation(() => {
+      const transaction = this.db.transaction(operation);
+      return transaction();
+    }, errorMessage);
+  }
+
   private runDelete(
     sql: string,
     errorMessage: string,
@@ -317,8 +324,13 @@ export class OracleDatabase {
   }
 
   public finalizeCompletedGame(gameAddress: string): void {
-    this.markSecretKeyUsed(gameAddress);
-    this.markGameCompleted(gameAddress);
+    this.runInTransaction(
+      () => {
+        this.markSecretKeyUsed(gameAddress);
+        this.markGameCompleted(gameAddress);
+      },
+      `Failed to finalize completed game ${gameAddress}`
+    );
   }
 
   public incrementCompletionAttempts(gameAddress: string): void {
@@ -330,9 +342,20 @@ export class OracleDatabase {
     );
   }
 
-  public getPendingGames(): PendingGame[] {
+  public getPendingGames(maxAttempts?: number): PendingGame[] {
     return this.executeDbOperation(
       () => {
+        if (maxAttempts !== undefined && Number.isFinite(maxAttempts)) {
+          const stmt = this.db.prepare(
+            "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND completion_attempts < ? ORDER BY last_checked ASC LIMIT ?"
+          );
+          return stmt.all(
+            DEFAULT_STATUS,
+            maxAttempts,
+            PENDING_SCAN_LIMIT
+          ) as PendingGame[];
+        }
+
         const stmt = this.db.prepare(
           "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?"
         );

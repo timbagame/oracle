@@ -1,6 +1,6 @@
 import "./logging";
 import { delay, DEFAULT_DELAY_MS } from "./delay.ts";
-import { OracleService, EVENT_LISTENER_FAILURE_MESSAGE } from "./oracle-service.ts";
+import { OracleService } from "./oracle-service.ts";
 import { getEnvironmentMode, isTestEnvironment } from "./env.ts";
 
 // Constants
@@ -34,6 +34,30 @@ let backgroundAbortController: AbortController | undefined;
 interface StopServerResult {
   shouldExit: boolean;
   exitCode?: number;
+}
+
+interface ExitDecisionInput {
+  stopResult?: StopServerResult;
+  exitCode?: number;
+}
+
+function resolveExitDecision({
+  stopResult,
+  exitCode,
+}: ExitDecisionInput): { shouldExit: boolean; exitCode?: number } {
+  const shouldExit =
+    stopResult?.shouldExit ?? (exitCode !== undefined && !IS_TEST_ENV);
+  const resolvedExitCode = stopResult?.exitCode ?? exitCode;
+
+  return { shouldExit, exitCode: resolvedExitCode };
+}
+
+function applyExitDecision(input: ExitDecisionInput): void {
+  const { shouldExit, exitCode } = resolveExitDecision(input);
+
+  if (shouldExit && exitCode !== undefined) {
+    process.exit(exitCode);
+  }
 }
 
 async function stopServer(
@@ -106,7 +130,13 @@ function createHtmlResponse(html: string): Response {
 }
 
 function createErrorResponse(error: string, status: number = 500): Response {
-  return createResponse({ success: false, error }, status);
+  return createResponse(
+    buildServicePayload({
+      success: false,
+      error,
+    }),
+    status
+  );
 }
 
 function createInternalServerErrorResponse(): Response {
@@ -419,13 +449,7 @@ if (!IS_TEST_ENV) {
       } catch (shutdownError) {
         console.error("❌ Failed to stop server after init error:", shutdownError);
       } finally {
-        const shouldExit =
-          stopResult?.shouldExit ?? (exitCode !== undefined && !IS_TEST_ENV);
-        const resolvedExitCode = stopResult?.exitCode ?? exitCode;
-
-        if (shouldExit && resolvedExitCode !== undefined) {
-          process.exit(resolvedExitCode);
-        }
+        applyExitDecision({ stopResult, exitCode });
       }
     });
 
@@ -439,7 +463,6 @@ export async function initialize(oracle: OracleApi): Promise<void> {
     await oracle.startEventListening();
     console.log("✅ Oracle services initialized");
   } catch (error) {
-    console.error(EVENT_LISTENER_FAILURE_MESSAGE, error);
     throw error;
   }
 }
@@ -459,12 +482,11 @@ export async function shutdown(
   } catch (error) {
     console.error("❌ Shutdown error:", error);
   } finally {
-    const shouldExit =
-      stopResult?.shouldExit ?? (exitCode !== undefined && !IS_TEST_ENV);
-    const resolvedExitCode = stopResult?.exitCode ?? exitCode;
-
-    if (shouldExit && resolvedExitCode !== undefined) {
-      process.exit(resolvedExitCode);
-    }
+    applyExitDecision({ stopResult, exitCode });
   }
 }
+
+export const __internal__ = Object.freeze({
+  resolveExitDecision,
+  applyExitDecision,
+});
