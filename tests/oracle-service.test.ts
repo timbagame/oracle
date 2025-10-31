@@ -88,6 +88,9 @@ describe("OracleService", () => {
     expect(winner).toBe(2);
     const single = (service as any).calculateWinnerIndex(secret, 123456, 1);
     expect(single).toBe(0);
+    expect(() =>
+      (service as any).calculateWinnerIndex(Buffer.alloc(16, 1), 123456, 2)
+    ).toThrow("Secret key buffer must be at least 32 bytes");
   });
 
   it("updates scan statistics correctly", () => {
@@ -221,6 +224,11 @@ describe("OracleService", () => {
         .getPendingGames()
         .find((g) => g.game_address === "stubborn");
       expect(stubbornEntry?.completion_attempts).toBeGreaterThanOrEqual(5);
+      expect(
+        db
+          .getPendingGames(5)
+          .some((entry) => entry.game_address === "stubborn")
+      ).toBe(false);
     } finally {
       (service as any).resolveContextAndReadiness = originalResolve;
       (service as any).completeGame = originalComplete;

@@ -10,7 +10,7 @@ export function resetPendingGames(
   db: OracleDatabase,
   options: ResetPendingGamesOptions = {},
 ): void {
-  for (const game of db.getPendingGames()) {
+  for (const game of db.getPendingGames(Number.POSITIVE_INFINITY)) {
     db.finalizeCompletedGame(game.game_address);
   }
 

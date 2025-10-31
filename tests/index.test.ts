@@ -62,7 +62,13 @@ describe("API handlers", () => {
     );
     const res = await handleGenerateHash();
     expect(res.status).toBe(500);
-    const data = (await res.json()) as { success: boolean };
+    const data = (await res.json()) as {
+      success: boolean;
+      service: { name: string };
+      timestamp: string;
+    };
     expect(data.success).toBe(false);
+    expect(data.service.name).toBe("oracle-api");
+    expect(new Date(data.timestamp).toString()).not.toBe("Invalid Date");
   });
 });
