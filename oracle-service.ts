@@ -839,7 +839,6 @@ export class OracleService {
       );
     }
 
-    cache.set(cacheKey, TOKEN_PROGRAM_ID);
     return TOKEN_PROGRAM_ID;
   }
 
