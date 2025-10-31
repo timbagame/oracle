@@ -1269,6 +1269,70 @@ describe("OracleService internals", () => {
     }
   });
 
+  it("completeGame retains readiness cache on transient errors", async () => {
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+
+    const gameAddress = Keypair.generate().publicKey.toBase58();
+    const randomHash = "12".repeat(32);
+    const secretKey = "34".repeat(32);
+    const readiness = {
+      ready: true,
+      gameAccount: createGameAccountStub({
+        ticketsCount: 1,
+        maxTickets: 1,
+        minTickets: 1,
+        lastSlot: 111,
+      }),
+    };
+    const context = {
+      gamePda: Keypair.generate().publicKey,
+      secretData: { secretKey, randomHash },
+      randomHashBuffer: Buffer.from(randomHash, "hex"),
+      readiness,
+    };
+
+    (service as any).readinessCache.set(gameAddress, readiness);
+
+    const resolveSpy = spyOn(service as any, "resolveContextAndReadiness").mockResolvedValue({
+      context,
+      readiness,
+      notReady: false,
+    });
+    const winnerIndexSpy = spyOn(service as any, "calculateWinnerIndex").mockReturnValue(0);
+    const executeSpy = spyOn(service as any, "executeGameCompletion").mockRejectedValue(
+      new Error("rpc down"),
+    );
+    const finalizeSpy = spyOn((service as any).db, "finalizeCompletedGame").mockImplementation(
+      () => undefined,
+    );
+    const playersSpy = spyOn((service as any).db, "getGamePlayers").mockReturnValue([
+      Keypair.generate().publicKey.toBase58(),
+    ]);
+    const attemptsSpy = spyOn((service as any).db, "incrementCompletionAttempts").mockImplementation(
+      () => undefined,
+    );
+
+    try {
+      const result = await service.completeGame(gameAddress);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("rpc down");
+      expect((service as any).readinessCache.has(gameAddress)).toBe(true);
+      expect(attemptsSpy).toHaveBeenCalledWith(gameAddress);
+      expect(executeSpy).toHaveBeenCalled();
+      expect(finalizeSpy).not.toHaveBeenCalled();
+    } finally {
+      resolveSpy.mockRestore();
+      winnerIndexSpy.mockRestore();
+      executeSpy.mockRestore();
+      finalizeSpy.mockRestore();
+      playersSpy.mockRestore();
+      attemptsSpy.mockRestore();
+      (service as any).readinessCache.clear();
+    }
+  });
+
   it("captures scan cycles and cleanup sweeps in metrics", async () => {
     const metrics = new OracleMetricsRecorder();
     const db = OracleDatabase.getInstance();
