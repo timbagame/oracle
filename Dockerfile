@@ -1,4 +1,4 @@
-FROM oven/bun:1.1.24
+FROM oven/bun:1.3.1
 
 WORKDIR /app
 
@@ -16,4 +16,3 @@ EXPOSE 3001
 
 # Start the oracle API
 CMD ["bun", "start"]
-
