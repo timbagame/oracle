@@ -571,6 +571,7 @@ export class OracleService {
   ): Promise<GameCompletionResult> {
     const recordFailure = (error: string): GameCompletionResult => {
       this.db.incrementCompletionAttempts(gameAddress);
+      this.readinessCache.delete(gameAddress);
       return { success: false, error };
     };
 
@@ -634,6 +635,7 @@ export class OracleService {
       });
 
       this.db.finalizeCompletedGame(gameAddress);
+      this.readinessCache.delete(gameAddress);
 
       return { success: true, txHash };
     } catch (error: unknown) {
@@ -1142,7 +1144,7 @@ export class OracleService {
 
       const continueLoop = shouldContinue
         ? shouldContinue(stats, cycle)
-        : stats.completed > 0 || stats.notReady > 0;
+        : stats.completed > 0 || stats.notReady > 0 || stats.errors > 0;
 
       if (!continueLoop) {
         break;

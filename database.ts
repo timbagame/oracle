@@ -110,6 +110,23 @@ const PLAYER_INDEX_DEFINITIONS: ReadonlyArray<{
   },
 ];
 
+const TRACKING_INDEX_DEFINITIONS: ReadonlyArray<{
+  sql: string;
+  log: string;
+  error: string;
+}> = [
+  {
+    sql: "CREATE INDEX IF NOT EXISTS idx_tracking_pending ON game_tracking (status, completion_attempts, last_checked)",
+    log: "Ensuring idx_tracking_pending index exists",
+    error: "Failed to ensure idx_tracking_pending index",
+  },
+  {
+    sql: "CREATE INDEX IF NOT EXISTS idx_tracking_completed_at ON game_tracking (status, completed_at)",
+    log: "Ensuring idx_tracking_completed_at index exists",
+    error: "Failed to ensure idx_tracking_completed_at index",
+  },
+];
+
 export const EMPTY_DATABASE_STATS: Readonly<DatabaseStats> = Object.freeze({
   totalSecrets: 0,
   usedSecrets: 0,
@@ -158,6 +175,7 @@ export class OracleDatabase {
     }
 
     this.ensureTicketSchema();
+    this.ensureTrackingIndexes();
   }
 
   private ensureTicketSchema(): void {
@@ -173,6 +191,12 @@ export class OracleDatabase {
     }
 
     for (const definition of PLAYER_INDEX_DEFINITIONS) {
+      this.runSchemaStatement(definition.sql, definition.log, definition.error);
+    }
+  }
+
+  private ensureTrackingIndexes(): void {
+    for (const definition of TRACKING_INDEX_DEFINITIONS) {
       this.runSchemaStatement(definition.sql, definition.log, definition.error);
     }
   }
