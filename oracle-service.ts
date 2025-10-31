@@ -1156,11 +1156,17 @@ export class OracleService {
         ? shouldContinue(stats, cycle)
         : stats.completed > 0 || stats.notReady > 0 || stats.errors > 0;
 
+      const onlyErrorsThisCycle =
+        stats.errors > 0 && stats.completed === 0 && stats.notReady === 0;
+
       if (!continueLoop) {
         break;
       }
 
-      if (waitBetweenCyclesMs > 0 && (!waitForPendingOnly || stats.notReady > 0)) {
+      if (
+        waitBetweenCyclesMs > 0 &&
+        (!waitForPendingOnly || stats.notReady > 0 || onlyErrorsThisCycle)
+      ) {
         await waitForNextCycle();
       }
     }
