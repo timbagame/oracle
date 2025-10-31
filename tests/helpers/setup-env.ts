@@ -1,4 +1,5 @@
 import { createTempDatabaseFile, type TempDatabaseFile } from "./test-db.ts";
+import { resetConfigForTesting } from "../../config.ts";
 
 type SingletonModule = { [key: string]: unknown } | Function;
 
@@ -67,12 +68,15 @@ export function setupTestEnvironment(options: SetupOptions = {}): SetupResult {
     }
   }
 
+  resetConfigForTesting();
+
   const registerSingleton = (singleton: SingletonModule) => {
     if (!singleton) {
       return;
     }
     registeredSingletons.add(singleton);
     resetSingleton(singleton);
+    resetConfigForTesting();
   };
 
   const resetSingletons = () => {
@@ -89,6 +93,8 @@ export function setupTestEnvironment(options: SetupOptions = {}): SetupResult {
 
     resetSingletons();
     tempDb.cleanup();
+
+    resetConfigForTesting();
 
     for (const [key, value] of originalEnv.entries()) {
       if (value === undefined) {

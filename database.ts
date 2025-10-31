@@ -1,11 +1,12 @@
 import { Database } from "bun:sqlite";
+import { getConfig } from "./config.ts";
 
 // Constants
 const DEFAULT_STATUS = "pending";
 const PENDING_SCAN_LIMIT = 50;
 
 function getDatabaseFile(): string {
-  return process.env["DATABASE_FILE"] || "oracle.sqlite";
+  return getConfig().databaseFile;
 }
 
 // Types

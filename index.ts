@@ -2,6 +2,7 @@ import "./logging";
 import { delay, DEFAULT_DELAY_MS } from "./delay.ts";
 import { OracleService } from "./oracle-service.ts";
 import { getEnvironmentMode, isTestEnvironment } from "./env.ts";
+import { getConfig } from "./config.ts";
 
 // Constants
 const DEFAULT_PORT = 3001;
@@ -25,7 +26,8 @@ type HttpMethod = "GET" | "POST";
  * Provides endpoints for requesting random hashes, monitoring, and managing games
  */
 
-const PORT = Number(process.env["ORACLE_PORT"]) || DEFAULT_PORT;
+const CONFIG = getConfig();
+const PORT = CONFIG.oraclePort ?? DEFAULT_PORT;
 
 let server: ReturnType<typeof Bun.serve> | undefined;
 let backgroundLoop: Promise<void> | undefined;

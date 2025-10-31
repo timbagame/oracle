@@ -12,8 +12,16 @@ import { delay as delayHelper, DEFAULT_DELAY_MS } from "./delay.ts";
 import type { Timba } from "./idl/idlType.ts";
 import idl from "./idl/idl.json" with { type: "json" };
 import * as fs from "fs";
-import * as path from "path";
-import { shouldUseEphemeralKeypair } from "./env.ts";
+import { getConfig, type OracleRuntimeConfig } from "./config.ts";
+import { getOracleMetrics, type OracleMetrics } from "./metrics.ts";
+import {
+  type TimbaEventMap,
+  type TimbaPlayerEvent,
+  type TimbaGameInitializedEvent,
+  type TimbaGameStatusEvent,
+  type TimbaEvent,
+  type TimbaGameAccount,
+} from "./types/timba.ts";
 import { coercePublicKey, ensurePublicKey, toBase58 } from "./solana-utils.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 
@@ -25,7 +33,6 @@ class MissingSecretError extends Error {
 }
 
 // Constants
-const KEYPAIR_FILE = "admin-keypair.json";
 const SECRET_KEY_LENGTH = 32;
 const MAX_COMPLETION_ATTEMPTS = 5;
 export const EVENT_LISTENER_FAILURE_MESSAGE = "❌ Failed to start event listeners:";
@@ -94,19 +101,13 @@ export function deriveGameAccounts(params: {
 
 
 // Event handling types
-type EventHandler = (event: any) => Promise<void> | void;
-type EventMap = {
-  gameInitialized: any;
-  playerJoined: any;
-  playerUnjoined: any;
-  gameCompleted: any;
-  gameClosed: any;
-  oracleInitialized: any;
-  oracleUpdated: any;
+type EventHandler<TKey extends keyof TimbaEventMap> = (
+  event: TimbaEventMap[TKey]
+) => Promise<void> | void;
 
-  tokenFeeWithdrawn: any;
-  tokenInitialized: any;
-  tokenUpdated: any;
+type EventHandlerConfig<TKey extends keyof TimbaEventMap> = {
+  event: TKey;
+  createHandler: (service: OracleService) => EventHandler<TKey>;
 };
 
 // Types
@@ -152,7 +153,7 @@ export interface ScanLoopSummary {
 
 interface GameReadinessSnapshot {
   ready: boolean;
-  gameAccount: any | null;
+  gameAccount: TimbaGameAccount | null;
   evaluatedAt?: number;
 }
 
@@ -176,34 +177,33 @@ interface AttemptGameCompletionOptions {
 
 export class OracleService {
   private static instance: OracleService;
-  public static readonly EVENT_HANDLER_CONFIG: ReadonlyArray<{
-    event: keyof EventMap;
-    createHandler: (service: OracleService) => EventHandler;
-  }> = [
+  public static readonly EVENT_HANDLER_CONFIG: ReadonlyArray<
+    EventHandlerConfig<keyof TimbaEventMap>
+  > = [
     {
       event: "playerJoined",
-      createHandler: (service) =>
-        service.handlePlayerEvent.bind(service, "joined"),
+      createHandler: (service) => (event) =>
+        service.handlePlayerEvent("joined", event),
     },
     {
       event: "playerUnjoined",
-      createHandler: (service) =>
-        service.handlePlayerEvent.bind(service, "unjoined"),
+      createHandler: (service) => (event) =>
+        service.handlePlayerEvent("unjoined", event),
     },
     {
       event: "gameInitialized",
-      createHandler: (service) =>
-        service.handleGameInitialized.bind(service),
+      createHandler: (service) => (event) =>
+        service.handleGameInitialized(event),
     },
     {
       event: "gameCompleted",
-      createHandler: (service) =>
-        service.handleGameStatusChange.bind(service, "completed"),
+      createHandler: (service) => (event) =>
+        service.handleGameStatusChange("completed", event),
     },
     {
       event: "gameClosed",
-      createHandler: (service) =>
-        service.handleGameStatusChange.bind(service, "closed"),
+      createHandler: (service) => (event) =>
+        service.handleGameStatusChange("closed", event),
     },
   ];
   private program: anchor.Program<Timba>;
@@ -214,14 +214,18 @@ export class OracleService {
   private isListening: boolean = false;
   private readinessCache: Map<string, GameReadinessSnapshot> = new Map();
   private tokenProgramCache?: Map<string, PublicKey>;
+  private readonly config: OracleRuntimeConfig;
+  private readonly metrics: OracleMetrics;
   private readonly interGameDelayMs: number;
 
-  private constructor(db?: OracleDatabase) {
+  private constructor(db?: OracleDatabase, metrics?: OracleMetrics) {
+    this.config = getConfig();
     this.db = db ?? OracleDatabase.getInstance();
+    this.metrics = metrics ?? getOracleMetrics();
     this.connection = this.initializeConnection();
     this.adminKeypair = this.loadAdminKeypair();
     this.program = this.initializeProgram();
-    this.interGameDelayMs = this.resolveInterGameDelay();
+    this.interGameDelayMs = this.config.scanThrottleMs;
   }
 
   private getTokenProgramCache(): Map<string, PublicKey> {
@@ -240,38 +244,41 @@ export class OracleService {
   }
 
   // Factory for tests or custom wiring: does not affect the singleton
-  public static createWith(db: OracleDatabase): OracleService {
-    return new OracleService(db);
+  public static createWith(
+    db: OracleDatabase,
+    options: { metrics?: OracleMetrics } = {}
+  ): OracleService {
+    return new OracleService(db, options.metrics);
   }
 
   private initializeConnection(): anchor.web3.Connection {
-    const networkUrl = process.env["SOLANA_NETWORK"];
-    if (!networkUrl) {
-      throw new Error("SOLANA_NETWORK environment variable is required");
-    }
-    return new anchor.web3.Connection(networkUrl, "confirmed");
+    return new anchor.web3.Connection(this.config.solanaNetwork, "confirmed");
   }
 
   private loadAdminKeypair(): anchor.web3.Keypair {
-    const configured = process.env["ORACLE_KEYPAIR_PATH"];
-    const filename = configured && configured.trim().length > 0 ? configured : KEYPAIR_FILE;
-    const keypairPath = path.isAbsolute(filename) ? filename : path.join(process.cwd(), filename);
+    const { adminKeypairPath, adminKeypairSource, useEphemeralKeypair } = this.config;
     try {
-      const keypairData = JSON.parse(fs.readFileSync(keypairPath, "utf-8"));
+      const keypairData = JSON.parse(fs.readFileSync(adminKeypairPath, "utf-8"));
       const keypair = anchor.web3.Keypair.fromSecretKey(new Uint8Array(keypairData));
       console.log(`✅ Loaded admin keypair: ${keypair.publicKey.toBase58()}`);
       return keypair;
     } catch (error: any) {
-      if ((error?.code === "ENOENT" || error?.message?.includes("ENOENT")) && shouldUseEphemeralKeypair()) {
+      if (
+        (error?.code === "ENOENT" || error?.message?.includes("ENOENT")) &&
+        useEphemeralKeypair
+      ) {
         const keypair = anchor.web3.Keypair.generate();
         console.warn(
-          `⚠️  Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${filename} was not found.`
+          `⚠️  Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${adminKeypairSource} was not found.`
         );
         return keypair;
       }
 
-      console.error(`❌ Failed to load admin keypair from ${keypairPath}:`, error?.message || error);
-      throw new Error(`Failed to load admin keypair from ${filename}`);
+      console.error(
+        `❌ Failed to load admin keypair from ${adminKeypairPath}:`,
+        error?.message || error
+      );
+      throw new Error(`Failed to load admin keypair from ${adminKeypairSource}`);
     }
   }
 
@@ -284,23 +291,6 @@ export class OracleService {
     );
     anchor.setProvider(provider);
     return new anchor.Program(idl as Timba, provider) as anchor.Program<Timba>;
-  }
-
-  private resolveInterGameDelay(): number {
-    const rawValue = process.env["ORACLE_SCAN_THROTTLE_MS"];
-    if (!rawValue) {
-      return 0;
-    }
-
-    const parsed = Number(rawValue);
-    if (!Number.isFinite(parsed) || parsed < 0) {
-      console.warn(
-        `⚠️  Ignoring invalid ORACLE_SCAN_THROTTLE_MS value '${rawValue}', expected non-negative number.`
-      );
-      return 0;
-    }
-
-    return parsed;
   }
 
   public async startEventListening(): Promise<void> {
@@ -347,7 +337,10 @@ export class OracleService {
     this.clearTokenProgramCache();
   }
 
-  private async handlePlayerEvent(action: 'joined' | 'unjoined', event: any): Promise<void> {
+  private async handlePlayerEvent(
+    action: "joined" | "unjoined",
+    event: TimbaPlayerEvent
+  ): Promise<void> {
     const { gameAddress, playerAddress, ticketIndex } = this.extractEventData(event);
 
     try {
@@ -383,7 +376,10 @@ export class OracleService {
     }
   }
 
-  private handleGameStatusChange(status: 'completed' | 'closed', event: any): void {
+  private handleGameStatusChange(
+    status: "completed" | "closed",
+    event: TimbaGameStatusEvent
+  ): void {
     const { gameAddress } = this.extractEventData(event);
 
     try {
@@ -399,7 +395,7 @@ export class OracleService {
     }
   }
 
-  private handleGameInitialized(event: any): void {
+  private handleGameInitialized(event: TimbaGameInitializedEvent): void {
     const { gameAddress } = this.extractEventData(event);
 
     // Extract game type from event
@@ -417,13 +413,13 @@ export class OracleService {
   }
 
 
-  private extractEventData(event: any): {
+  private extractEventData(event: TimbaEvent): {
     gameAddress: string;
     playerAddress?: string;
     ticketIndex?: number;
   } {
-    const gameKey = event.gameKey as PublicKeyLike;
-    const playerKey = event.player as PublicKeyLike;
+    const gameKey = (event.gameKey ?? event.gameAddress ?? (event as any).game) as PublicKeyLike;
+    const playerKey = (event.player ?? event.playerAddress) as PublicKeyLike;
 
     const resolveIndex = (value: any): number | undefined => {
       if (value === undefined || value === null) return undefined;
@@ -485,6 +481,10 @@ export class OracleService {
       if (!ready) {
         const result: GameCompletionResult = { success: false, notReady: true };
         onResult?.(result);
+        this.metrics.recordCompletion({
+          gameAddress,
+          outcome: "not-ready",
+        });
         return result;
       }
     }
@@ -497,6 +497,16 @@ export class OracleService {
     );
 
     onResult?.(completion);
+
+    this.metrics.recordCompletion({
+      gameAddress,
+      outcome: completion.success
+        ? "success"
+        : completion.notReady
+        ? "not-ready"
+        : "error",
+      error: completion.error,
+    });
 
     if (completion.success) {
       const message = successLog?.(gameAddress);
@@ -568,6 +578,10 @@ export class OracleService {
 
       const { secretData, randomHashBuffer } = context;
       const gameAccount = readiness.gameAccount;
+      if (!gameAccount) {
+        return recordFailure("On-chain game account unavailable");
+      }
+
       const players = this.db.getGamePlayers(gameAddress);
       const nEntries = Number(gameAccount.ticketsCount);
 
@@ -773,7 +787,7 @@ export class OracleService {
   }
 
   private async executeGameCompletion(args: {
-    gameAccount: any;
+    gameAccount: TimbaGameAccount;
     winnerAddress: PublicKey;
     randomHashBuffer: Buffer;
     secretKeyBuffer: Buffer;
@@ -781,8 +795,8 @@ export class OracleService {
   }): Promise<string> {
     const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
 
-    const creatorPublicKey = new PublicKey(gameAccount.creator);
-    const tokenMint = new PublicKey(gameAccount.tokenMint);
+    const creatorPublicKey = ensurePublicKey(gameAccount.creator);
+    const tokenMint = ensurePublicKey(gameAccount.tokenMint);
     const tokenProgramId = await this.resolveTokenProgram(
       gameAccount.tokenProgram,
       tokenMint
@@ -832,7 +846,7 @@ export class OracleService {
   }
 
   private async resolveTokenProgram(
-    tokenProgram: PublicKey | string | null | undefined,
+    tokenProgram: PublicKeyLike,
     tokenMint: PublicKey
   ): Promise<PublicKey> {
     const cacheKey = tokenMint.toBase58();
@@ -951,7 +965,14 @@ export class OracleService {
   }
 
   public cleanupOldRecords(hoursOld: number = 48) {
-    return this.db.cleanupOldRecords(hoursOld);
+    const result = this.db.cleanupOldRecords(hoursOld);
+    this.metrics.recordCleanupSweep({
+      hoursOld,
+      deletedSecrets: result.deletedSecrets,
+      deletedGames: result.deletedGames,
+      deletedPlayers: result.deletedPlayers,
+    });
+    return result;
   }
 
 
@@ -971,10 +992,21 @@ export class OracleService {
   public async scanAndCompleteActiveGames(): Promise<CompletionStats> {
     const stats: CompletionStats = createEmptyCompletionStats();
     const pendingGames = this.db.getPendingGames(MAX_COMPLETION_ATTEMPTS);
+    const pendingCount = pendingGames.length;
+    const scanStart = performance.now();
 
-    if (pendingGames.length === 0) return stats;
+    if (pendingCount === 0) {
+      this.metrics.recordScanCycle({
+        durationMs: performance.now() - scanStart,
+        completed: stats.completed,
+        errors: stats.errors,
+        notReady: stats.notReady,
+        pending: pendingCount,
+      });
+      return stats;
+    }
 
-    console.log(`🔍 Scanning ${pendingGames.length} pending games...`);
+    console.log(`🔍 Scanning ${pendingCount} pending games...`);
 
     let cachedBlockTime: number | undefined;
 
@@ -1015,6 +1047,11 @@ export class OracleService {
       } catch (error) {
         stats.errors++;
         console.error(`❌ Error completing game ${game.game_address}:`, error);
+        this.metrics.recordCompletion({
+          gameAddress: game.game_address,
+          outcome: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
         cachedBlockTime = undefined;
         if (this.interGameDelayMs > 0) {
           await delayHelper(this.interGameDelayMs);
@@ -1023,6 +1060,13 @@ export class OracleService {
     }
 
     this.logScanResults(stats);
+    this.metrics.recordScanCycle({
+      durationMs: performance.now() - scanStart,
+      completed: stats.completed,
+      errors: stats.errors,
+      notReady: stats.notReady,
+      pending: pendingCount,
+    });
     return stats;
   }
 
@@ -1173,9 +1217,9 @@ export class OracleService {
   private async fetchGameAccount(
     gamePda: PublicKey,
     gameAddress: string
-  ): Promise<any | null> {
+  ): Promise<TimbaGameAccount | null> {
     try {
-      return await this.program.account.game.fetch(gamePda);
+      return (await this.program.account.game.fetch(gamePda)) as TimbaGameAccount;
     } catch (error: any) {
       if (this.isAccountNotFoundError(error)) {
         this.db.markGameCompleted(gameAddress);
