@@ -7,15 +7,20 @@ const ORIGINAL_ENV = { ...process.env };
 
 function resetEnv() {
   process.env = { ...ORIGINAL_ENV };
-  delete process.env.NODE_ENV;
-  delete process.env.BUN_ENV;
-  delete process.env.CI;
-  delete process.env.USE_FAKE_KEYPAIR;
-  delete process.env.SOLANA_NETWORK;
-  delete process.env.ORACLE_PORT;
-  delete process.env.ORACLE_SCAN_THROTTLE_MS;
-  delete process.env.DATABASE_FILE;
-  delete process.env.ORACLE_KEYPAIR_PATH;
+  const keys: Array<keyof NodeJS.ProcessEnv> = [
+    "NODE_ENV",
+    "BUN_ENV",
+    "CI",
+    "USE_FAKE_KEYPAIR",
+    "SOLANA_NETWORK",
+    "ORACLE_PORT",
+    "ORACLE_SCAN_THROTTLE_MS",
+    "DATABASE_FILE",
+    "ORACLE_KEYPAIR_PATH",
+  ];
+  for (const key of keys) {
+    delete process.env[key];
+  }
 }
 
 beforeEach(() => {
@@ -31,8 +36,8 @@ afterEach(() => {
 describe("environment helpers", () => {
   it("prefers explicit runtime env variables over CI defaults", () => {
     process.env.NODE_ENV = " production ";
-    process.env.BUN_ENV = "   ";
-    process.env.CI = "false";
+    process.env["BUN_ENV"] = "   ";
+    process.env["CI"] = "false";
 
     expect(getEnvironmentMode()).toBe("production");
     expect(isTestEnvironment()).toBe(false);
@@ -40,20 +45,20 @@ describe("environment helpers", () => {
   });
 
   it("detects CI/test environments when explicit mode is absent", () => {
-    process.env.CI = "true";
+    process.env["CI"] = "true";
     expect(getEnvironmentMode()).toBe("ci");
     expect(isTestEnvironment()).toBe(false);
     expect(shouldUseEphemeralKeypair()).toBe(true);
 
     resetEnv();
-    process.env.BUN_ENV = "integration-test";
+    process.env["BUN_ENV"] = "integration-test";
     expect(isTestEnvironment()).toBe(true);
     expect(shouldUseEphemeralKeypair()).toBe(true);
   });
 
   it("allows opting into ephemeral keypairs via USE_FAKE_KEYPAIR", () => {
     process.env.NODE_ENV = "production";
-    process.env.USE_FAKE_KEYPAIR = "true";
+    process.env["USE_FAKE_KEYPAIR"] = "true";
     expect(shouldUseEphemeralKeypair()).toBe(true);
   });
 });
@@ -64,9 +69,9 @@ describe("runtime config", () => {
   });
 
   it("normalizes numeric inputs and enforces bounds", () => {
-    process.env.SOLANA_NETWORK = "https://rpc";
-    process.env.ORACLE_PORT = "70000";
-    process.env.ORACLE_SCAN_THROTTLE_MS = "-5";
+    process.env["SOLANA_NETWORK"] = "https://rpc";
+    process.env["ORACLE_PORT"] = "70000";
+    process.env["ORACLE_SCAN_THROTTLE_MS"] = "-5";
     const warnSpy = spyOn(console, "warn");
 
     const config = getConfig();
@@ -84,9 +89,9 @@ describe("runtime config", () => {
   });
 
   it("resolves relative paths and caches results until reset", () => {
-    process.env.SOLANA_NETWORK = "https://rpc";
-    process.env.ORACLE_KEYPAIR_PATH = "keys/admin.json";
-    process.env.DATABASE_FILE = "./db/oracle.sqlite";
+    process.env["SOLANA_NETWORK"] = "https://rpc";
+    process.env["ORACLE_KEYPAIR_PATH"] = "keys/admin.json";
+    process.env["DATABASE_FILE"] = "./db/oracle.sqlite";
 
     const first = getConfig();
     const expectedKeypair = path.join(process.cwd(), "keys/admin.json");
@@ -95,7 +100,7 @@ describe("runtime config", () => {
     expect(first.adminKeypairPath).toBe(expectedKeypair);
     expect(first.databaseFile).toBe(expectedDb);
 
-    process.env.DATABASE_FILE = "ignored.sqlite";
+    process.env["DATABASE_FILE"] = "ignored.sqlite";
     const cached = getConfig();
     expect(cached.databaseFile).toBe(expectedDb);
 

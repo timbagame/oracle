@@ -21,6 +21,8 @@ function createManager(overrides: {
 
   const metrics = {
     recordCompletion: () => {},
+    recordScanCycle: () => {},
+    recordCleanupSweep: () => {},
   } as const;
 
   const connection = {
@@ -126,7 +128,7 @@ describe("GameCompletionManager.resolveTokenProgram", () => {
     let lookups = 0;
     const owner = TOKEN_PROGRAM_ID;
     const { manager, connection, tokenProgramCache } = createManager({
-      accountInfo: async (pubkey) => {
+      accountInfo: async (_pubkey) => {
         lookups += 1;
         return { owner };
       },
