@@ -19,6 +19,7 @@ export interface FakeOracleOptions {
 const DEFAULT_CLEANUP_STATS: CleanupStats = {
   deletedSecrets: 0,
   deletedGames: 0,
+  deletedPlayers: 0,
 };
 
 export function createBasicStats(overrides: Partial<OracleStats> = {}): OracleStats {

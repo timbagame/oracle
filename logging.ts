@@ -11,9 +11,9 @@ export function installTimestampLogger(): void {
   loggingInitialized = true;
 
   for (const method of METHODS_TO_WRAP) {
-    const original = (console[method] as (...args: any[]) => void).bind(console);
+    const original = (console[method] as (...args: unknown[]) => void).bind(console);
 
-    console[method] = (...args: any[]): void => {
+    console[method] = (...args: unknown[]): void => {
       original(`[${formatTimestamp()}]`, ...args);
     };
   }

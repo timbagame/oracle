@@ -10,6 +10,10 @@ import {
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { deriveGameAccounts, createEmptyCompletionStats } from "../oracle-service.ts";
+import { OracleMetricsRecorder } from "../metrics.ts";
+import { resetConfigForTesting } from "../config.ts";
+import type { TimbaGameAccount } from "../types/timba.ts";
+import * as delayModule from "../delay.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 import { createProgramStub } from "./helpers/program-stub.ts";
 
@@ -26,6 +30,23 @@ beforeAll(async () => {
 afterAll(() => {
   cleanup();
 });
+
+function createGameAccountStub(
+  overrides: Partial<TimbaGameAccount> = {}
+): TimbaGameAccount {
+  return {
+    creator: overrides.creator ?? Keypair.generate().publicKey,
+    tokenMint: overrides.tokenMint ?? Keypair.generate().publicKey,
+    tokenProgram: overrides.tokenProgram ?? TOKEN_PROGRAM_ID,
+    ticketsCount: overrides.ticketsCount ?? 1,
+    maxTickets: overrides.maxTickets ?? 1,
+    minTickets: overrides.minTickets ?? 0,
+    lastSlot: overrides.lastSlot ?? 0,
+    timeout: overrides.timeout ?? 1,
+    createdAt: overrides.createdAt ?? 1,
+    ...overrides,
+  };
+}
 
 async function runExecuteGameCompletionScenario({
   tokenProgram,
@@ -155,6 +176,144 @@ async function runExecuteGameCompletionScenario({
 }
 
 describe("OracleService internals", () => {
+  it("caches blockchain time within a scan sweep", async () => {
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+
+    resetPendingGames(db, { service });
+
+    seedTrackedGame(db, {
+      address: "cache-game-1",
+      secret: "aa".repeat(64),
+      randomHash: "bb".repeat(64),
+      service,
+    });
+    seedTrackedGame(db, {
+      address: "cache-game-2",
+      secret: "cc".repeat(64),
+      randomHash: "dd".repeat(64),
+      service,
+    });
+
+    const blockTimes: number[] = [];
+    const blockSpy = spyOn(service as any, "getBlockchainTime").mockImplementation(
+      async () => {
+        const value = 1_000 + blockTimes.length;
+        blockTimes.push(value);
+        return value;
+      }
+    );
+
+    const observedBlockTimes: Array<number | undefined> = [];
+    const resolveSpy = spyOn(
+      service as any,
+      "resolveContextAndReadiness"
+    ).mockImplementation(async (_address: string, options: any) => {
+      observedBlockTimes.push(options?.blockTime);
+      return {
+        context: {
+          gamePda: Keypair.generate().publicKey,
+          secretData: { secretKey: "ee".repeat(64), randomHash: "ff".repeat(64) },
+          randomHashBuffer: Buffer.alloc(32, 0),
+        },
+        readiness: { ready: true, gameAccount: createGameAccountStub() },
+        notReady: false,
+      };
+    });
+
+    const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockImplementation(
+      async ({ gameAddress }: { gameAddress: string }) => ({
+        success: true,
+        txHash: `${gameAddress}-tx`,
+      })
+    );
+
+    try {
+      const stats = await service.scanAndCompleteActiveGames();
+      expect(stats).toEqual({ completed: 2, errors: 0, notReady: 0 });
+      expect(blockTimes).toHaveLength(1);
+      expect(new Set(observedBlockTimes)).toEqual(new Set([blockTimes[0]]));
+      expect(attemptSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      blockSpy.mockRestore();
+      resolveSpy.mockRestore();
+      attemptSpy.mockRestore();
+    }
+  });
+
+  it("honors configurable throttle only for non-successful results", async () => {
+    process.env["ORACLE_SCAN_THROTTLE_MS"] = "25";
+    resetConfigForTesting();
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+
+    resetPendingGames(db, { service });
+
+    seedTrackedGame(db, {
+      address: "throttle-1",
+      secret: "11".repeat(32),
+      randomHash: "22".repeat(32),
+      service,
+    });
+    seedTrackedGame(db, {
+      address: "throttle-2",
+      secret: "33".repeat(32),
+      randomHash: "44".repeat(32),
+      service,
+    });
+    seedTrackedGame(db, {
+      address: "throttle-3",
+      secret: "55".repeat(32),
+      randomHash: "66".repeat(32),
+      service,
+    });
+
+    const delayCalls: number[] = [];
+    const delaySpy = spyOn(delayModule, "delay").mockImplementation(async (ms: number) => {
+      delayCalls.push(ms);
+    });
+
+    const blockSpy = spyOn(service as any, "getBlockchainTime").mockResolvedValue(5_000);
+
+    let completionIndex = 0;
+    const outcomes = [
+      { success: true },
+      { success: false, error: "rate limit" },
+      { success: true },
+    ];
+
+    const resolveSpy = spyOn(
+      service as any,
+      "resolveContextAndReadiness"
+    ).mockImplementation(async () => ({
+      context: {
+        gamePda: Keypair.generate().publicKey,
+        secretData: { secretKey: "aa".repeat(64), randomHash: "bb".repeat(64) },
+        randomHashBuffer: Buffer.alloc(32, 0),
+      },
+      readiness: { ready: true, gameAccount: createGameAccountStub() },
+      notReady: false,
+    }));
+
+    const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockImplementation(
+      async () => outcomes[completionIndex++] ?? { success: true }
+    );
+
+    try {
+      const stats = await service.scanAndCompleteActiveGames();
+      expect(stats).toEqual({ completed: 2, errors: 1, notReady: 0 });
+      expect(delayCalls).toEqual([25]);
+      expect(attemptSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      delete process.env["ORACLE_SCAN_THROTTLE_MS"];
+      resetConfigForTesting();
+      delaySpy.mockRestore();
+      blockSpy.mockRestore();
+      resolveSpy.mockRestore();
+      attemptSpy.mockRestore();
+    }
+  });
+
   it("memoizes token program resolution and supports cache reset", async () => {
     const service = OracleService.createWith(OracleDatabase.getInstance());
     const originalConnection = (service as any).connection;
@@ -185,19 +344,46 @@ describe("OracleService internals", () => {
     }
   });
 
-  it("does not memoize fallback token program when lookup fails", async () => {
+  it("removes previously registered listeners when setup fails", async () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const originalProgram = (service as any).program;
+    const removed: number[] = [];
+    let callIndex = 0;
+
+    (service as any).program = {
+      addEventListener: async () => {
+        if (callIndex === 1) {
+          throw new Error("listener boom");
+        }
+        const id = 100 + callIndex;
+        callIndex += 1;
+        return id;
+      },
+      removeEventListener: async (id: number) => {
+        removed.push(id);
+      },
+    };
+
+    try {
+      await expect((service as any).setupEventListeners()).rejects.toThrow("listener boom");
+      expect(removed).toEqual([100]);
+    } finally {
+      (service as any).program = originalProgram;
+    }
+  });
+
+  it("retries token program resolution after transient failures without caching", async () => {
     const service = OracleService.createWith(OracleDatabase.getInstance());
     const originalConnection = (service as any).connection;
     const tokenMint = Keypair.generate().publicKey;
     const callLog: string[] = [];
-    let attempts = 0;
+    let shouldFail = true;
 
     (service as any).connection = {
       getAccountInfo: async (mint: PublicKey) => {
         callLog.push(mint.toBase58());
-        attempts += 1;
-
-        if (attempts === 1) {
+        if (shouldFail) {
+          shouldFail = false;
           throw new Error("rpc unavailable");
         }
 
@@ -208,8 +394,9 @@ describe("OracleService internals", () => {
     try {
       service.clearTokenProgramCache();
 
-      const first = await (service as any).resolveTokenProgram(null, tokenMint);
-      expect(first.equals(TOKEN_PROGRAM_ID)).toBe(true);
+      await expect(
+        (service as any).resolveTokenProgram(null, tokenMint)
+      ).rejects.toThrow("Unable to resolve token program");
       expect(callLog).toHaveLength(1);
 
       const second = await (service as any).resolveTokenProgram(null, tokenMint);
@@ -317,7 +504,7 @@ describe("OracleService internals", () => {
 
     (service as any).cleanupOldRecords = (hours: number) => {
       cleanupCalls.push(hours);
-      return { deletedSecrets: 0, deletedGames: 0 };
+      return { deletedSecrets: 0, deletedGames: 0, deletedPlayers: 0 };
     };
 
     const abortController = new AbortController();
@@ -539,7 +726,7 @@ describe("OracleService internals", () => {
     const originalEvaluateReadiness = (service as any).evaluateGameReadiness;
     (service as any).evaluateGameReadiness = async () => ({
       ready: false,
-      gameAccount: {},
+      gameAccount: createGameAccountStub(),
     });
     res = await service.completeGame("not-ready");
     expect(res.notReady).toBe(true);
@@ -846,7 +1033,7 @@ describe("OracleService internals", () => {
     (service as any).gameExistsOnChain = async () => ({
       gamePda: Keypair.generate().publicKey,
       secretData: { secretKey: "aa".repeat(32), randomHash: "bb".repeat(32) },
-      readiness: { ready: true, gameAccount: {} },
+      readiness: { ready: true, gameAccount: createGameAccountStub() },
     });
     (service as any).completeGame = async () => {
       attempts++;
@@ -864,6 +1051,134 @@ describe("OracleService internals", () => {
       db.markSecretKeyUsed(failingGame);
       service.cleanupOldRecords(-1);
     }
+  });
+
+  it("records completion outcomes with metrics instrumentation", async () => {
+    const metrics = new OracleMetricsRecorder();
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db, { metrics });
+
+    const baseAccount: TimbaGameAccount = {
+      creator: Keypair.generate().publicKey,
+      tokenMint: Keypair.generate().publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      ticketsCount: 1,
+      maxTickets: 1,
+      minTickets: 1,
+      lastSlot: 1,
+      timeout: 1,
+      createdAt: 1,
+    };
+
+    const context = {
+      gamePda: Keypair.generate().publicKey,
+      secretData: { secretKey: "11".repeat(64), randomHash: "22".repeat(64) },
+      randomHashBuffer: Buffer.alloc(32, 3),
+    };
+
+    const completionSpy = spyOn(service as any, "completeGame")
+      .mockResolvedValueOnce({ success: true, txHash: "tx-ok" })
+      .mockResolvedValueOnce({ success: false, notReady: true })
+      .mockResolvedValueOnce({ success: false, error: "boom" });
+
+    await (service as any).attemptGameCompletion({
+      gameAddress: "metrics-success",
+      context,
+      readiness: { ready: true, gameAccount: baseAccount },
+      skipReadinessCheck: true,
+    });
+
+    await (service as any).attemptGameCompletion({
+      gameAddress: "metrics-not-ready",
+      context,
+      readiness: { ready: true, gameAccount: baseAccount },
+      skipReadinessCheck: true,
+    });
+
+    await (service as any).attemptGameCompletion({
+      gameAddress: "metrics-error",
+      context,
+      readiness: { ready: true, gameAccount: baseAccount },
+      skipReadinessCheck: true,
+    });
+
+    const records = metrics.getCompletionRecords();
+    expect(records).toHaveLength(3);
+    expect(records[0]).toMatchObject({
+      gameAddress: "metrics-success",
+      outcome: "success",
+    });
+    expect(records[1]).toMatchObject({ outcome: "not-ready" });
+    expect(records[2]).toMatchObject({ outcome: "error", error: "boom" });
+
+    completionSpy.mockRestore();
+  });
+
+  it("captures scan cycles and cleanup sweeps in metrics", async () => {
+    const metrics = new OracleMetricsRecorder();
+    const db = OracleDatabase.getInstance();
+    resetPendingGames(db);
+    const service = OracleService.createWith(db, { metrics });
+
+    await service.scanAndCompleteActiveGames();
+    const initialCycles = metrics.getScanCycles();
+    expect(initialCycles).toHaveLength(1);
+    expect(initialCycles[0]?.pending).toBe(0);
+
+    const trackedGame = "metrics-cycle";
+    seedTrackedGame(db, {
+      address: trackedGame,
+      secret: "33".repeat(32),
+      randomHash: "44".repeat(32),
+    });
+
+    const gameAccount: TimbaGameAccount = {
+      creator: Keypair.generate().publicKey,
+      tokenMint: Keypair.generate().publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      ticketsCount: 1,
+      maxTickets: 1,
+      minTickets: 1,
+      lastSlot: 1,
+      timeout: 1,
+      createdAt: 1,
+    };
+
+    const resolveSpy = spyOn(
+      service as any,
+      "resolveContextAndReadiness"
+    ).mockImplementation(async () => ({
+      context: {
+        gamePda: Keypair.generate().publicKey,
+        secretData: { secretKey: "55".repeat(32), randomHash: "66".repeat(32) },
+        randomHashBuffer: Buffer.alloc(32, 9),
+      },
+      readiness: { ready: true, gameAccount },
+      notReady: false,
+    }));
+
+    const completionSpy = spyOn(service as any, "completeGame").mockImplementation(
+      async (address: string) => {
+        db.finalizeCompletedGame(address);
+        return { success: true, txHash: "tx-metrics" };
+      }
+    );
+
+    const stats = await service.scanAndCompleteActiveGames();
+    expect(stats.completed).toBe(1);
+
+    const cycles = metrics.getScanCycles();
+    expect(cycles).toHaveLength(2);
+    expect(cycles[1]).toMatchObject({ pending: 1, completed: 1 });
+
+    const cleanupResult = service.cleanupOldRecords(1);
+    expect(cleanupResult).toBeDefined();
+    const sweeps = metrics.getCleanupSweeps();
+    expect(sweeps.length).toBeGreaterThan(0);
+    expect(sweeps[sweeps.length - 1]).toMatchObject({ hoursOld: 1 });
+
+    resolveSpy.mockRestore();
+    completionSpy.mockRestore();
   });
 
   it("executeGameCompletion invokes RPC and confirms transaction", async () => {
@@ -932,22 +1247,42 @@ describe("OracleService internals", () => {
     expect(tokenCtx?.gameTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
   });
 
-  it("executeGameCompletion falls back to SPL token program when mint owner cannot be resolved", async () => {
+  it("executeGameCompletion surfaces token program resolution errors", async () => {
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
     try {
-      const result = await runExecuteGameCompletionScenario({
-        accountInfoImpl: async () => {
-          throw new Error("account missing");
-        },
-      });
+      await expect(
+        runExecuteGameCompletionScenario({
+          accountInfoImpl: async () => {
+            throw new Error("account missing");
+          },
+        })
+      ).rejects.toThrow("Unable to resolve token program");
 
-      expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
-      const tokenCtx = result.calls.accounts?.gameTokenCtx;
-      expect(tokenCtx?.tokenProgram?.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
       const warningMessages = warnSpy.mock.calls.map((args) => args.join(" "));
       expect(warningMessages.some((message) => message.includes("Unable to resolve token program"))).toBe(true);
     } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("rejects unknown token program owners during resolution", async () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const originalConnection = (service as any).connection;
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    const unsupportedOwner = Keypair.generate().publicKey;
+
+    (service as any).connection = {
+      getAccountInfo: async () => ({ owner: unsupportedOwner }),
+    };
+
+    try {
+      await expect(
+        (service as any).resolveTokenProgram(null, Keypair.generate().publicKey)
+      ).rejects.toThrow("Unsupported token program owner");
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      (service as any).connection = originalConnection;
       warnSpy.mockRestore();
     }
   });

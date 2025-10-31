@@ -1,11 +1,19 @@
 import * as anchor from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 
+type PublicKeyRecord = {
+  toBase58?: () => string;
+  value?: unknown;
+  some?: unknown;
+  toString?: () => unknown;
+  [key: string]: unknown;
+};
+
 type PublicKeyInput =
   | PublicKey
   | anchor.web3.PublicKey
   | string
-  | { [key: string]: any }
+  | PublicKeyRecord
   | null
   | undefined;
 
@@ -32,29 +40,39 @@ export function coercePublicKey(value: PublicKeyLike): PublicKey | null {
     }
   }
 
+  if (value instanceof Uint8Array) {
+    return new PublicKey(value);
+  }
+
+  if (Array.isArray(value)) {
+    return new PublicKey(value);
+  }
+
+  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+    return new PublicKey(new Uint8Array(value.buffer));
+  }
+
   if (typeof value === "object") {
-    if (typeof (value as any).toBase58 === "function") {
+    const candidate = value as PublicKeyRecord;
+
+    if (typeof candidate.toBase58 === "function") {
       try {
-        return new PublicKey((value as any).toBase58());
+        return new PublicKey(candidate.toBase58());
       } catch {
         return null;
       }
     }
 
-    if ("value" in (value as any)) {
-      return coercePublicKey((value as any).value);
+    if ("value" in candidate) {
+      return coercePublicKey(candidate.value as PublicKeyLike);
     }
 
-    if ("some" in (value as any)) {
-      return coercePublicKey((value as any).some);
+    if ("some" in candidate) {
+      return coercePublicKey(candidate.some as PublicKeyLike);
     }
   }
 
-  try {
-    return new PublicKey(value as any);
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 export function ensurePublicKey(value: PublicKeyLike | PublicKey): PublicKey {
@@ -75,8 +93,22 @@ export function toBase58(value: PublicKeyLike): string | undefined {
     return value;
   }
 
-  if (value && typeof (value as any).toString === "function") {
-    const asString = (value as any).toString();
+  if (value && typeof value === "object") {
+    const candidate = value as PublicKeyRecord;
+    if (typeof candidate.toString === "function") {
+      const asString = candidate.toString();
+      return typeof asString === "string" ? asString : undefined;
+    }
+  }
+
+  if (typeof value === "function") {
+    const fn = value as (...args: unknown[]) => unknown;
+    const result = fn.toString();
+    return typeof result === "string" ? result : undefined;
+  }
+
+  if (value && typeof value !== "object") {
+    const asString = String(value);
     return typeof asString === "string" ? asString : undefined;
   }
 

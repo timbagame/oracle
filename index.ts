@@ -2,6 +2,7 @@ import "./logging";
 import { delay, DEFAULT_DELAY_MS } from "./delay.ts";
 import { OracleService } from "./oracle-service.ts";
 import { getEnvironmentMode, isTestEnvironment } from "./env.ts";
+import { getConfig } from "./config.ts";
 
 // Constants
 const DEFAULT_PORT = 3001;
@@ -25,7 +26,8 @@ type HttpMethod = "GET" | "POST";
  * Provides endpoints for requesting random hashes, monitoring, and managing games
  */
 
-const PORT = Number(process.env["ORACLE_PORT"]) || DEFAULT_PORT;
+const CONFIG = getConfig();
+const PORT = CONFIG.oraclePort ?? DEFAULT_PORT;
 
 let server: ReturnType<typeof Bun.serve> | undefined;
 let backgroundLoop: Promise<void> | undefined;
@@ -116,12 +118,13 @@ function logBackgroundLoopError(loopError: unknown): void {
 }
 
 // Response helpers
-function createResponse(data: any, status: number = 200): Response {
+function createResponse(data: unknown, status: number = 200): Response {
   if (data === null || data === undefined) {
     return new Response(null, { status, headers: CORS_HEADERS });
   }
 
-  const body = typeof data === "string" ? data : JSON.stringify(data);
+  const jsonInput = data as Parameters<typeof JSON.stringify>[0];
+  const body = typeof data === "string" ? data : JSON.stringify(jsonInput);
   return new Response(body, { status, headers: CORS_HEADERS });
 }
 
@@ -190,7 +193,7 @@ export function buildHandlers(oracle: OracleApi) {
           randomHash: secrets.randomHash,
           gameAddress: secrets.gameAddress,
         });
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error("❌ Error generating hash:", error);
         return createErrorResponse("Failed to generate hash", 500);
       }
@@ -352,7 +355,7 @@ export function buildFetchRouter(handlers: ReturnType<typeof buildHandlers>) {
       }
 
       return await handler();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("❌ Server error:", error);
       return createInternalServerErrorResponse();
     }

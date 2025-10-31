@@ -347,7 +347,7 @@ function createDbStub(): { db: OracleDatabaseStub; callLog: CallLog } {
       return [];
     },
     cleanupOldRecords() {
-      return { deletedSecrets: 0, deletedGames: 0 };
+      return { deletedSecrets: 0, deletedGames: 0, deletedPlayers: 0 };
     },
     getStats() {
       return {
@@ -379,7 +379,11 @@ type OracleDatabaseStub = Partial<OracleDatabase> & {
     game_address: string;
     completion_attempts: number;
   }>;
-  cleanupOldRecords(): { deletedSecrets: number; deletedGames: number };
+  cleanupOldRecords(): {
+    deletedSecrets: number;
+    deletedGames: number;
+    deletedPlayers: number;
+  };
   getStats(): {
     totalSecrets: number;
     usedSecrets: number;

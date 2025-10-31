@@ -3,13 +3,32 @@ import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 import { Keypair } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import * as delayModule from "../delay.ts";
+import type { TimbaGameAccount } from "../types/timba.ts";
+
+function createGameAccountStub(
+  overrides: Partial<TimbaGameAccount> = {}
+): TimbaGameAccount {
+  return {
+    creator: overrides.creator ?? Keypair.generate().publicKey,
+    tokenMint: overrides.tokenMint ?? Keypair.generate().publicKey,
+    tokenProgram: overrides.tokenProgram ?? TOKEN_PROGRAM_ID,
+    ticketsCount: overrides.ticketsCount ?? 1,
+    maxTickets: overrides.maxTickets ?? 1,
+    minTickets: overrides.minTickets ?? 0,
+    lastSlot: overrides.lastSlot ?? 0,
+    timeout: overrides.timeout ?? 1,
+    createdAt: overrides.createdAt ?? 1,
+    ...overrides,
+  };
+}
 
 const makeFakeContext = () => ({
   gamePda: Keypair.generate().publicKey,
   secretData: { secretKey: "aa".repeat(32), randomHash: "bb".repeat(32) },
   randomHashBuffer: Buffer.from("bb".repeat(32), "hex"),
-  readiness: { ready: true, gameAccount: {} },
+  readiness: { ready: true, gameAccount: createGameAccountStub() },
 });
 
 const makeReadyResolution = () => {
@@ -218,7 +237,7 @@ describe("OracleService", () => {
       const stats = await service.scanAndCompleteActiveGames();
       expect(processed).toEqual(["active"]);
       expect(stats).toEqual({ completed: 1, errors: 0, notReady: 0 });
-      expect(delayCalls).toBe(1);
+      expect(delayCalls).toBe(0);
 
       const stubbornEntry = db
         .getPendingGames()
