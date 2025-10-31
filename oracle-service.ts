@@ -569,10 +569,21 @@ export class OracleService {
     cachedReadiness?: GameReadinessSnapshot,
     sharedContext?: GameOnChainContext
   ): Promise<GameCompletionResult> {
-    const recordFailure = (error: string): GameCompletionResult => {
+    const recordFailure = (
+      error: string,
+      options: { clearReadiness?: boolean } = {}
+    ): GameCompletionResult => {
       this.db.incrementCompletionAttempts(gameAddress);
+
+      if (options.clearReadiness) {
+        this.readinessCache.delete(gameAddress);
+      }
+
       return { success: false, error };
     };
+
+    const recordFatalFailure = (error: string): GameCompletionResult =>
+      recordFailure(error, { clearReadiness: true });
 
     try {
       const { context, readiness, notReady } = await this.resolveContextAndReadiness(
@@ -584,7 +595,7 @@ export class OracleService {
       );
 
       if (!context) {
-        return recordFailure(NO_SECRET_KEY_MESSAGE);
+        return recordFatalFailure(NO_SECRET_KEY_MESSAGE);
       }
 
       if (notReady || !readiness) {
@@ -594,21 +605,21 @@ export class OracleService {
       const { secretData, randomHashBuffer } = context;
       const gameAccount = readiness.gameAccount;
       if (!gameAccount) {
-        return recordFailure("On-chain game account unavailable");
+        return recordFatalFailure("On-chain game account unavailable");
       }
 
       const players = this.db.getGamePlayers(gameAddress);
       const nEntries = Number(gameAccount.ticketsCount);
 
       if (players.length === 0) {
-        return recordFailure("No players found for game");
+        return recordFatalFailure("No players found for game");
       }
 
       if (players.length !== nEntries) {
         console.error(
           `❌ Ticket registry mismatch for ${gameAddress}: expected ${nEntries}, found ${players.length}`
         );
-        return recordFailure("Ticket registry out of sync");
+        return recordFatalFailure("Ticket registry out of sync");
       }
 
       const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
@@ -620,7 +631,7 @@ export class OracleService {
       const winnerPlayerAddress = players[winnerIndex];
 
       if (!winnerPlayerAddress) {
-        return recordFailure("Unable to determine winner");
+        return recordFatalFailure("Unable to determine winner");
       }
 
       const winnerAddress = new PublicKey(winnerPlayerAddress);
@@ -634,6 +645,7 @@ export class OracleService {
       });
 
       this.db.finalizeCompletedGame(gameAddress);
+      this.readinessCache.delete(gameAddress);
 
       return { success: true, txHash };
     } catch (error: unknown) {
@@ -1142,13 +1154,19 @@ export class OracleService {
 
       const continueLoop = shouldContinue
         ? shouldContinue(stats, cycle)
-        : stats.completed > 0 || stats.notReady > 0;
+        : stats.completed > 0 || stats.notReady > 0 || stats.errors > 0;
+
+      const onlyErrorsThisCycle =
+        stats.errors > 0 && stats.completed === 0 && stats.notReady === 0;
 
       if (!continueLoop) {
         break;
       }
 
-      if (waitBetweenCyclesMs > 0 && (!waitForPendingOnly || stats.notReady > 0)) {
+      if (
+        waitBetweenCyclesMs > 0 &&
+        (!waitForPendingOnly || stats.notReady > 0 || onlyErrorsThisCycle)
+      ) {
         await waitForNextCycle();
       }
     }

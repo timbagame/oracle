@@ -203,6 +203,19 @@ describe("OracleDatabase", () => {
     expect(reopened.getConnectionInfo().file).toBe(testEnv.tempDb.path);
   });
 
+  it("ensures tracking indexes exist for scans and cleanup", () => {
+    const db = OracleDatabase.getInstance();
+    const sqlite = (db as any).db;
+
+    const indexes = sqlite
+      .query("PRAGMA index_list('game_tracking')")
+      .all() as Array<{ name: string }>;
+    const names = indexes.map((entry) => entry.name);
+
+    expect(names).toContain("idx_tracking_pending");
+    expect(names).toContain("idx_tracking_completed_at");
+  });
+
   it("falls back to safe defaults when sqlite operations fail", () => {
     const db = OracleDatabase.getInstance();
     const originalHandle = (db as any).db;

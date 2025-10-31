@@ -546,6 +546,76 @@ describe("OracleService internals", () => {
     }
   });
 
+  it("runScanLoop continues when only errors occur by default", async () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+
+    const originalScan = (service as any).scanAndCompleteActiveGames;
+
+    const firstStats = { completed: 0, errors: 1, notReady: 0 };
+    const secondStats = createEmptyCompletionStats();
+    let callCount = 0;
+
+    (service as any).scanAndCompleteActiveGames = async () => {
+      const next = callCount === 0 ? firstStats : secondStats;
+      callCount += 1;
+      return next;
+    };
+
+    try {
+      const summary = await service.runScanLoop({ waitBetweenCyclesMs: 0 });
+
+      expect(callCount).toBe(2);
+      expect(summary).toEqual({
+        cycles: 2,
+        totalCompleted: 0,
+        totalErrors: 1,
+        totalNotReady: 0,
+        lastStats: secondStats,
+      });
+    } finally {
+      (service as any).scanAndCompleteActiveGames = originalScan;
+    }
+  });
+
+  it("runScanLoop waits between cycles when pending-only mode sees only errors", async () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+
+    const originalScan = (service as any).scanAndCompleteActiveGames;
+
+    const delaySpy = spyOn(delayModule, "delay").mockImplementation(async () => {});
+
+    const firstStats = { completed: 0, errors: 2, notReady: 0 };
+    const secondStats = createEmptyCompletionStats();
+    let callCount = 0;
+
+    (service as any).scanAndCompleteActiveGames = async () => {
+      const next = callCount === 0 ? firstStats : secondStats;
+      callCount += 1;
+      return next;
+    };
+
+    try {
+      const summary = await service.runScanLoop({
+        waitBetweenCyclesMs: 50,
+        waitForPendingOnly: true,
+      });
+
+      expect(callCount).toBe(2);
+      expect(delaySpy).toHaveBeenCalledTimes(1);
+      expect(delaySpy).toHaveBeenCalledWith(50, { signal: undefined });
+      expect(summary).toEqual({
+        cycles: 2,
+        totalCompleted: 0,
+        totalErrors: 2,
+        totalNotReady: 0,
+        lastStats: secondStats,
+      });
+    } finally {
+      delaySpy.mockRestore();
+      (service as any).scanAndCompleteActiveGames = originalScan;
+    }
+  });
+
   it("resolveContextAndReadiness consumes cached readiness when on-chain lookups are optional", async () => {
     const db = OracleDatabase.getInstance();
     const service = OracleService.createWith(db);
@@ -1112,6 +1182,194 @@ describe("OracleService internals", () => {
     expect(records[2]).toMatchObject({ outcome: "error", error: "boom" });
 
     completionSpy.mockRestore();
+  });
+
+  it("completeGame clears readiness cache after successful completion", async () => {
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+
+    const gameAddress = Keypair.generate().publicKey.toBase58();
+    const randomHash = "ab".repeat(32);
+    const secretKey = "cd".repeat(32);
+    const readiness = {
+      ready: true,
+      gameAccount: createGameAccountStub({
+        ticketsCount: 1,
+        maxTickets: 1,
+        minTickets: 1,
+        lastSlot: 42,
+      }),
+    };
+    const context = {
+      gamePda: Keypair.generate().publicKey,
+      secretData: { secretKey, randomHash },
+      randomHashBuffer: Buffer.from(randomHash, "hex"),
+      readiness,
+    };
+
+    (service as any).readinessCache.set(gameAddress, readiness);
+
+    const resolveSpy = spyOn(service as any, "resolveContextAndReadiness").mockResolvedValue({
+      context,
+      readiness,
+      notReady: false,
+    });
+    const winnerIndexSpy = spyOn(service as any, "calculateWinnerIndex").mockReturnValue(0);
+    const executeSpy = spyOn(service as any, "executeGameCompletion").mockResolvedValue("tx-123");
+    const finalizeSpy = spyOn((service as any).db, "finalizeCompletedGame").mockImplementation(
+      () => undefined
+    );
+    const playersSpy = spyOn((service as any).db, "getGamePlayers").mockReturnValue([
+      Keypair.generate().publicKey.toBase58(),
+    ]);
+    const attemptsSpy = spyOn((service as any).db, "incrementCompletionAttempts").mockImplementation(
+      () => undefined
+    );
+
+    try {
+      const result = await service.completeGame(gameAddress);
+
+      expect(result).toEqual({ success: true, txHash: "tx-123" });
+      expect((service as any).readinessCache.has(gameAddress)).toBe(false);
+      expect(resolveSpy).toHaveBeenCalledWith(gameAddress, {
+        context: null,
+        readiness: undefined,
+      });
+      expect(playersSpy).toHaveBeenCalledWith(gameAddress);
+      expect(finalizeSpy).toHaveBeenCalledWith(gameAddress);
+      expect(attemptsSpy).not.toHaveBeenCalled();
+    } finally {
+      resolveSpy.mockRestore();
+      winnerIndexSpy.mockRestore();
+      executeSpy.mockRestore();
+      finalizeSpy.mockRestore();
+      playersSpy.mockRestore();
+      attemptsSpy.mockRestore();
+      (service as any).readinessCache.clear();
+    }
+  });
+
+  it("completeGame clears readiness cache when a fatal error occurs", async () => {
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+
+    const gameAddress = Keypair.generate().publicKey.toBase58();
+    const readiness = {
+      ready: true,
+      gameAccount: createGameAccountStub({
+        ticketsCount: 2,
+        maxTickets: 2,
+        minTickets: 1,
+        lastSlot: 99,
+      }),
+    };
+    const context = {
+      gamePda: Keypair.generate().publicKey,
+      secretData: { secretKey: "ef".repeat(32), randomHash: "01".repeat(32) },
+      randomHashBuffer: Buffer.from("01".repeat(32), "hex"),
+      readiness,
+    };
+
+    (service as any).readinessCache.set(gameAddress, readiness);
+
+    const resolveSpy = spyOn(service as any, "resolveContextAndReadiness").mockResolvedValue({
+      context,
+      readiness,
+      notReady: false,
+    });
+    const winnerIndexSpy = spyOn(service as any, "calculateWinnerIndex").mockReturnValue(0);
+    const executeSpy = spyOn(service as any, "executeGameCompletion");
+    const finalizeSpy = spyOn((service as any).db, "finalizeCompletedGame").mockImplementation(
+      () => undefined
+    );
+    const playersSpy = spyOn((service as any).db, "getGamePlayers").mockReturnValue([]);
+    const attemptsSpy = spyOn((service as any).db, "incrementCompletionAttempts").mockImplementation(
+      () => undefined
+    );
+
+    try {
+      const result = await service.completeGame(gameAddress);
+
+      expect(result.success).toBe(false);
+      expect(result.notReady).toBeUndefined();
+      expect(result.error).toBe("No players found for game");
+      expect((service as any).readinessCache.has(gameAddress)).toBe(false);
+      expect(attemptsSpy).toHaveBeenCalledWith(gameAddress);
+      expect(executeSpy).not.toHaveBeenCalled();
+      expect(finalizeSpy).not.toHaveBeenCalled();
+    } finally {
+      resolveSpy.mockRestore();
+      winnerIndexSpy.mockRestore();
+      executeSpy.mockRestore();
+      finalizeSpy.mockRestore();
+      playersSpy.mockRestore();
+      attemptsSpy.mockRestore();
+      (service as any).readinessCache.clear();
+    }
+  });
+
+  it("completeGame retains readiness cache on transient errors", async () => {
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+
+    const gameAddress = Keypair.generate().publicKey.toBase58();
+    const randomHash = "12".repeat(32);
+    const secretKey = "34".repeat(32);
+    const readiness = {
+      ready: true,
+      gameAccount: createGameAccountStub({
+        ticketsCount: 1,
+        maxTickets: 1,
+        minTickets: 1,
+        lastSlot: 111,
+      }),
+    };
+    const context = {
+      gamePda: Keypair.generate().publicKey,
+      secretData: { secretKey, randomHash },
+      randomHashBuffer: Buffer.from(randomHash, "hex"),
+      readiness,
+    };
+
+    (service as any).readinessCache.set(gameAddress, readiness);
+
+    const resolveSpy = spyOn(service as any, "resolveContextAndReadiness").mockResolvedValue({
+      context,
+      readiness,
+      notReady: false,
+    });
+    const winnerIndexSpy = spyOn(service as any, "calculateWinnerIndex").mockReturnValue(0);
+    const executeSpy = spyOn(service as any, "executeGameCompletion").mockRejectedValue(
+      new Error("rpc down"),
+    );
+    const finalizeSpy = spyOn((service as any).db, "finalizeCompletedGame").mockImplementation(
+      () => undefined,
+    );
+    const playersSpy = spyOn((service as any).db, "getGamePlayers").mockReturnValue([
+      Keypair.generate().publicKey.toBase58(),
+    ]);
+    const attemptsSpy = spyOn((service as any).db, "incrementCompletionAttempts").mockImplementation(
+      () => undefined,
+    );
+
+    try {
+      const result = await service.completeGame(gameAddress);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("rpc down");
+      expect((service as any).readinessCache.has(gameAddress)).toBe(true);
+      expect(attemptsSpy).toHaveBeenCalledWith(gameAddress);
+      expect(executeSpy).toHaveBeenCalled();
+      expect(finalizeSpy).not.toHaveBeenCalled();
+    } finally {
+      resolveSpy.mockRestore();
+      winnerIndexSpy.mockRestore();
+      executeSpy.mockRestore();
+      finalizeSpy.mockRestore();
+      playersSpy.mockRestore();
+      attemptsSpy.mockRestore();
+      (service as any).readinessCache.clear();
+    }
   });
 
   it("captures scan cycles and cleanup sweeps in metrics", async () => {
