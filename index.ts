@@ -118,12 +118,13 @@ function logBackgroundLoopError(loopError: unknown): void {
 }
 
 // Response helpers
-function createResponse(data: any, status: number = 200): Response {
+function createResponse(data: unknown, status: number = 200): Response {
   if (data === null || data === undefined) {
     return new Response(null, { status, headers: CORS_HEADERS });
   }
 
-  const body = typeof data === "string" ? data : JSON.stringify(data);
+  const jsonInput = data as Parameters<typeof JSON.stringify>[0];
+  const body = typeof data === "string" ? data : JSON.stringify(jsonInput);
   return new Response(body, { status, headers: CORS_HEADERS });
 }
 
@@ -192,7 +193,7 @@ export function buildHandlers(oracle: OracleApi) {
           randomHash: secrets.randomHash,
           gameAddress: secrets.gameAddress,
         });
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error("❌ Error generating hash:", error);
         return createErrorResponse("Failed to generate hash", 500);
       }
@@ -354,7 +355,7 @@ export function buildFetchRouter(handlers: ReturnType<typeof buildHandlers>) {
       }
 
       return await handler();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("❌ Server error:", error);
       return createInternalServerErrorResponse();
     }

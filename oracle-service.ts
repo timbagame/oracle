@@ -21,6 +21,7 @@ import {
   type TimbaGameStatusEvent,
   type TimbaEvent,
   type TimbaGameAccount,
+  type NumericLike,
 } from "./types/timba.ts";
 import { coercePublicKey, ensurePublicKey, toBase58 } from "./solana-utils.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
@@ -262,11 +263,16 @@ export class OracleService {
       const keypair = anchor.web3.Keypair.fromSecretKey(new Uint8Array(keypairData));
       console.log(`✅ Loaded admin keypair: ${keypair.publicKey.toBase58()}`);
       return keypair;
-    } catch (error: any) {
-      if (
-        (error?.code === "ENOENT" || error?.message?.includes("ENOENT")) &&
-        useEphemeralKeypair
-      ) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      const isMissingFile =
+        typeof error === "object" &&
+        error !== null &&
+        (("code" in error && (error as { code?: string }).code === "ENOENT") ||
+          ("message" in error && typeof (error as { message?: unknown }).message === "string" &&
+            (error as { message: string }).message.includes("ENOENT")));
+
+      if (isMissingFile && useEphemeralKeypair) {
         const keypair = anchor.web3.Keypair.generate();
         console.warn(
           `⚠️  Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${adminKeypairSource} was not found.`
@@ -274,10 +280,7 @@ export class OracleService {
         return keypair;
       }
 
-      console.error(
-        `❌ Failed to load admin keypair from ${adminKeypairPath}:`,
-        error?.message || error
-      );
+      console.error(`❌ Failed to load admin keypair from ${adminKeypairPath}:`, message);
       throw new Error(`Failed to load admin keypair from ${adminKeypairSource}`);
     }
   }
@@ -418,24 +421,36 @@ export class OracleService {
     playerAddress?: string;
     ticketIndex?: number;
   } {
-    const gameKey = (event.gameKey ?? event.gameAddress ?? (event as any).game) as PublicKeyLike;
-    const playerKey = (event.player ?? event.playerAddress) as PublicKeyLike;
+    const gameKey = (event.gameKey ?? event.gameAddress ?? event.game) as
+      | PublicKeyLike
+      | undefined;
+    const playerKey = (event.player ?? event.playerAddress) as
+      | PublicKeyLike
+      | undefined;
 
-    const resolveIndex = (value: any): number | undefined => {
+    const resolveIndex = (value: NumericLike | undefined): number | undefined => {
       if (value === undefined || value === null) return undefined;
       if (typeof value === "number") return value;
       if (typeof value === "bigint") return Number(value);
-      if (typeof value.toNumber === "function") return value.toNumber();
-      if (typeof value.valueOf === "function") {
-        const raw = value.valueOf();
-        if (typeof raw === "number") return raw;
+
+      const withToNumber = value as { toNumber?: () => number };
+      if (typeof withToNumber.toNumber === "function") {
+        return withToNumber.toNumber();
       }
+
+      const withValueOf = value as { valueOf?: () => number | bigint };
+      if (typeof withValueOf.valueOf === "function") {
+        const raw = withValueOf.valueOf();
+        if (typeof raw === "number") return raw;
+        if (typeof raw === "bigint") return Number(raw);
+      }
+
       return undefined;
     };
 
     return {
-      gameAddress: toBase58(gameKey) ?? "",
-      playerAddress: toBase58(playerKey),
+      gameAddress: gameKey ? toBase58(gameKey) ?? "" : "",
+      playerAddress: playerKey ? toBase58(playerKey) : undefined,
       ticketIndex: resolveIndex(event.ticketIndex ?? event.ticket_index),
     };
   }
@@ -621,7 +636,7 @@ export class OracleService {
       this.db.finalizeCompletedGame(gameAddress);
 
       return { success: true, txHash };
-    } catch (error: any) {
+    } catch (error: unknown) {
       return recordFailure(error instanceof Error ? error.message : String(error));
     }
   }
@@ -710,7 +725,7 @@ export class OracleService {
         return null;
       }
       return resolved;
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (error instanceof MissingSecretError) {
         this.logMissingSecret(gameAddress, requireOnChain);
         return null;
@@ -960,8 +975,17 @@ export class OracleService {
     });
   }
 
-  private isAccountNotFoundError(error: any): boolean {
-    return error.message?.includes('Account does not exist');
+  private isAccountNotFoundError(error: unknown): error is { message?: string } {
+    if (!error || typeof error !== "object") {
+      return false;
+    }
+
+    if (!("message" in error)) {
+      return false;
+    }
+
+    const { message } = error as { message?: unknown };
+    return typeof message === "string" && message.includes("Account does not exist");
   }
 
   public cleanupOldRecords(hoursOld: number = 48) {
@@ -1220,7 +1244,7 @@ export class OracleService {
   ): Promise<TimbaGameAccount | null> {
     try {
       return (await this.program.account.game.fetch(gamePda)) as TimbaGameAccount;
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (this.isAccountNotFoundError(error)) {
         this.db.markGameCompleted(gameAddress);
         return null;
