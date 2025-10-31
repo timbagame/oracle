@@ -1076,6 +1076,9 @@ export class OracleService {
 
         if (result) {
           this.updateScanStats(stats, result);
+          if (result.notReady) {
+            this.db.touchGameCheck(game.game_address);
+          }
         }
 
         if (readiness && !readiness.ready) {

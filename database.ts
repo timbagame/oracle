@@ -372,6 +372,15 @@ export class OracleDatabase {
     );
   }
 
+  public touchGameCheck(gameAddress: string): void {
+    this.runStatement(
+      "UPDATE game_tracking SET last_checked = ? WHERE game_address = ?",
+      "Failed to update last_checked for pending game",
+      Date.now(),
+      gameAddress
+    );
+  }
+
   public getPendingGames(maxAttempts?: number): PendingGame[] {
     return this.executeDbOperation(
       () => {
