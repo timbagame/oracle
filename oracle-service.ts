@@ -124,6 +124,10 @@ interface GameSecrets {
   gameAddress: string;
 }
 
+interface GenerateGameSecretsOptions {
+  gameType?: string;
+}
+
 export interface CompletionStats {
   completed: number;
   errors: number;
@@ -538,7 +542,9 @@ export class OracleService {
     return completion;
   }
 
-  public generateGameSecrets(): GameSecrets {
+  public generateGameSecrets(
+    options: GenerateGameSecretsOptions = {}
+  ): GameSecrets {
     const secretKey = randomBytes(SECRET_KEY_LENGTH);
     const randomHash = createHash('sha256').update(secretKey).digest();
     const gamePda = this.getGamePDA(randomHash);
@@ -546,13 +552,12 @@ export class OracleService {
 
     // Store in database
     this.db.saveSecretKey(gameAddress, secretKey.toString('hex'), randomHash.toString('hex'));
-    this.db.trackGame(gameAddress);
+    this.db.trackGame(gameAddress, options.gameType);
 
     const secrets: GameSecrets = {
       randomHash: randomHash.toString('hex'),
-      gameAddress
+      gameAddress,
     };
-
 
     return secrets;
   }

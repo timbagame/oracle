@@ -180,15 +180,55 @@ export type OracleApi = Pick<
   | "cleanupOldRecords"
 >;
 
+async function readJsonBody(
+  request: Request | undefined
+): Promise<Record<string, unknown> | null> {
+  if (!request || request.bodyUsed) {
+    return null;
+  }
+
+  const contentType = request.headers.get("content-type") ?? "";
+  if (contentType && !contentType.toLowerCase().includes("application/json")) {
+    return null;
+  }
+
+  try {
+    const rawBody = await request.text();
+    if (!rawBody) {
+      return null;
+    }
+    const parsed = JSON.parse(rawBody);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch (error) {
+    console.warn("⚠️  Failed to parse /generate-hash payload:", error);
+  }
+
+  return null;
+}
+
 export function buildHandlers(oracle: OracleApi) {
   return {
-    async handleHealth(): Promise<Response> {
+    async handleHealth(_request?: Request): Promise<Response> {
       return createSuccessResponse({ status: "healthy" });
     },
 
-    async handleGenerateHash(): Promise<Response> {
+    async handleGenerateHash(request?: Request): Promise<Response> {
       try {
-        const secrets = oracle.generateGameSecrets();
+        let gameType: string | undefined;
+        if (request) {
+          const body = await readJsonBody(request);
+          const provided = body ? body["gameType"] : undefined;
+          if (typeof provided === "string") {
+            const trimmed = provided.trim();
+            if (trimmed.length > 0) {
+              gameType = trimmed;
+            }
+          }
+        }
+
+        const secrets = oracle.generateGameSecrets({ gameType });
         return createSuccessResponse({
           randomHash: secrets.randomHash,
           gameAddress: secrets.gameAddress,
@@ -199,7 +239,7 @@ export function buildHandlers(oracle: OracleApi) {
       }
     },
 
-    async handleStats(): Promise<Response> {
+    async handleStats(_request?: Request): Promise<Response> {
       const stats = oracle.getStats();
       return createSuccessResponse({ stats });
     },
@@ -354,7 +394,7 @@ export function buildFetchRouter(handlers: ReturnType<typeof buildHandlers>) {
         return createInternalServerErrorResponse();
       }
 
-      return await handler();
+      return await handler(request);
     } catch (error: unknown) {
       console.error("❌ Server error:", error);
       return createInternalServerErrorResponse();

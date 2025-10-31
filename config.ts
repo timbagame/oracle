@@ -1,9 +1,5 @@
 import * as path from "path";
-import {
-  getEnvironmentMode,
-  isCiEnvironment,
-  isTestEnvironment,
-} from "./env.ts";
+import { getEnvironmentMode, shouldUseEphemeralKeypair } from "./env.ts";
 
 const DEFAULT_PORT = 3001;
 const DEFAULT_DATABASE_FILE = "oracle.sqlite";
@@ -35,6 +31,13 @@ function parseInteger(
   if (!Number.isFinite(parsed)) {
     console.warn(
       `⚠️  Ignoring invalid numeric value '${value}' for ${key}; using ${defaultValue}.`
+    );
+    return defaultValue;
+  }
+
+  if (!Number.isInteger(parsed)) {
+    console.warn(
+      `⚠️  ${key} must be an integer, received ${parsed}; using ${defaultValue}.`
     );
     return defaultValue;
   }
@@ -86,13 +89,6 @@ export interface OracleRuntimeConfig {
 
 let cachedConfig: OracleRuntimeConfig | null = null;
 
-function determineUseEphemeralKeypair(): boolean {
-  if (isTestEnvironment() || isCiEnvironment()) {
-    return true;
-  }
-  return process.env["USE_FAKE_KEYPAIR"] === "true";
-}
-
 function loadConfig(): OracleRuntimeConfig {
   const environment = getEnvironmentMode();
   const solanaNetwork = readEnv("SOLANA_NETWORK");
@@ -117,7 +113,7 @@ function loadConfig(): OracleRuntimeConfig {
     key: "ORACLE_SCAN_THROTTLE_MS",
   });
 
-  const useEphemeralKeypair = determineUseEphemeralKeypair();
+  const useEphemeralKeypair = shouldUseEphemeralKeypair();
 
   return {
     solanaNetwork,

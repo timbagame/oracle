@@ -63,6 +63,15 @@ describe("OracleService", () => {
     expect(stored?.randomHash).toBe(randomHash);
   });
 
+  it("persists provided game type when tracking new games", () => {
+    const service = OracleService.getInstance();
+    service.cleanupOldRecords(-1);
+    const { gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
+
+    const db = OracleDatabase.getInstance();
+    expect(db.getGameType(gameAddress)).toBe("coinflip");
+  });
+
   it("cleans up records and reports stats", () => {
     const service = OracleService.getInstance();
     service.cleanupOldRecords(-1);

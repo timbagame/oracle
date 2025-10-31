@@ -28,20 +28,31 @@ export interface OracleMetrics {
 }
 
 export class OracleMetricsRecorder implements OracleMetrics {
+  private static readonly DEFAULT_MAX_HISTORY = 500;
+
   private completionRecords: CompletionRecord[] = [];
   private scanCycles: ScanCycleRecord[] = [];
   private cleanupSweeps: CleanupRecord[] = [];
+  private readonly maxHistory: number;
+
+  constructor(options: { maxHistory?: number } = {}) {
+    const configured = options.maxHistory ?? OracleMetricsRecorder.DEFAULT_MAX_HISTORY;
+    this.maxHistory = configured > 0 ? configured : OracleMetricsRecorder.DEFAULT_MAX_HISTORY;
+  }
 
   recordCompletion(record: CompletionRecord): void {
     this.completionRecords.push(record);
+    this.trimBuffer(this.completionRecords);
   }
 
   recordScanCycle(record: ScanCycleRecord): void {
     this.scanCycles.push(record);
+    this.trimBuffer(this.scanCycles);
   }
 
   recordCleanupSweep(record: CleanupRecord): void {
     this.cleanupSweeps.push(record);
+    this.trimBuffer(this.cleanupSweeps);
   }
 
   reset(): void {
@@ -60,6 +71,13 @@ export class OracleMetricsRecorder implements OracleMetrics {
 
   getCleanupSweeps(): CleanupRecord[] {
     return [...this.cleanupSweeps];
+  }
+
+  private trimBuffer<T>(buffer: T[]): void {
+    const overflow = buffer.length - this.maxHistory;
+    if (overflow > 0) {
+      buffer.splice(0, overflow);
+    }
   }
 }
 
