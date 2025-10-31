@@ -44,7 +44,9 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
 
   return {
     generateGameSecrets:
-      generateGameSecrets ?? (() => ({ randomHash: "test-hash", gameAddress: "game-123" })),
+      generateGameSecrets ?? ((
+        _options?: Parameters<OracleApi["generateGameSecrets"]>[0]
+      ) => ({ randomHash: "test-hash", gameAddress: "game-123" })),
     getStats:
       getStats ?? (() => createBasicStats(stats)),
     scanAndCompleteActiveGames:

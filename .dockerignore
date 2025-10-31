@@ -1,0 +1,24 @@
+# Dependencies
+node_modules
+bun.lockb
+
+# Build outputs
+build
+dist
+
+# Version control and tooling
+.git
+.gitignore
+.vscode
+
+# Tests and local data
+coverage
+tests
+*.sqlite
+
+# Environment files
+.env
+.env.*
+
+# Misc
+.DS_Store

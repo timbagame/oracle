@@ -21,7 +21,7 @@ describe("index router", () => {
     routeMetadata = indexModule.ROUTE_METADATA;
     handlers = buildHandlers(
       createBasicOracle({
-        generateGameSecrets: () => ({ randomHash: "abc", gameAddress: "game123" }),
+        generateGameSecrets: (_options) => ({ randomHash: "abc", gameAddress: "game123" }),
         getStats: () => ({
           ...createBasicStats(),
           recentCompletions: 0,
@@ -52,7 +52,13 @@ describe("index router", () => {
   });
 
   test("POST /generate-hash returns secrets", async () => {
-    const res = await router(new Request("http://localhost:3001/generate-hash", { method: "POST" }));
+    const res = await router(
+      new Request("http://localhost:3001/generate-hash", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ gameType: "coinflip" }),
+      })
+    );
     expect(res.status).toBe(200);
     const json: any = await res.json();
     expect(json.success).toBe(true);
@@ -93,13 +99,19 @@ describe("index router", () => {
   test("router catches handler errors and returns 500", async () => {
     const badHandlers = buildHandlers(
       createBasicOracle({
-        generateGameSecrets: () => {
+        generateGameSecrets: (_options) => {
           throw new Error("boom");
         },
       })
     );
     const badRouter = buildFetchRouter(badHandlers);
-    const res = await badRouter(new Request("http://localhost:3001/generate-hash", { method: "POST" }));
+    const res = await badRouter(
+      new Request("http://localhost:3001/generate-hash", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ gameType: "coinflip" }),
+      })
+    );
     expect(res.status).toBe(500);
     const json: any = await res.json();
     expect(json.success).toBe(false);
@@ -115,11 +127,11 @@ describe("index router", () => {
 
     try {
       const failingRouter = buildFetchRouter({
-        handleHealth: async () => {
+        handleHealth: async (_request: Request) => {
           throw new Error("explode");
         },
-        handleGenerateHash: async () => new Response("ok"),
-        handleStats: async () => new Response("ok"),
+        handleGenerateHash: async (_request: Request) => new Response("ok"),
+        handleStats: async (_request: Request) => new Response("ok"),
       });
 
       const res = await failingRouter(new Request("http://localhost:3001/health", { method: "GET" }));

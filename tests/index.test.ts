@@ -22,7 +22,7 @@ afterAll(() => {
 describe("API handlers", () => {
   it("returns health status", async () => {
     const { handleHealth } = buildHandlers(createBasicOracle());
-    const res = await handleHealth();
+    const res = await handleHealth(new Request("http://localhost/health", { method: "GET" }));
     expect(res.status).toBe(200);
     const data = (await res.json()) as { success: boolean; status: string };
     expect(data.success).toBe(true);
@@ -31,7 +31,13 @@ describe("API handlers", () => {
 
   it("generates game secrets", async () => {
     const { handleGenerateHash } = buildHandlers(createBasicOracle());
-    const res = await handleGenerateHash();
+    const res = await handleGenerateHash(
+      new Request("http://localhost/generate-hash", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ gameType: "coinflip" }),
+      })
+    );
     expect(res.status).toBe(200);
     const data = (await res.json()) as {
       success: boolean;
@@ -43,9 +49,32 @@ describe("API handlers", () => {
     expect(typeof data.gameAddress).toBe("string");
   });
 
+  it("forwards game type from request body to the oracle", async () => {
+    let receivedGameType: string | undefined;
+    const { handleGenerateHash } = buildHandlers(
+      createBasicOracle({
+        generateGameSecrets: (options) => {
+          receivedGameType = options?.gameType;
+          return { randomHash: "forwarded-hash", gameAddress: "forwarded-game" };
+        },
+      })
+    );
+
+    const res = await handleGenerateHash(
+      new Request("http://localhost/generate-hash", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ gameType: "  giveaway  " }),
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(receivedGameType).toBe("giveaway");
+  });
+
   it("provides stats", async () => {
     const { handleStats } = buildHandlers(createBasicOracle());
-    const res = await handleStats();
+    const res = await handleStats(new Request("http://localhost/stats", { method: "GET" }));
     expect(res.status).toBe(200);
     const data = (await res.json()) as { success: boolean; stats: unknown };
     expect(data.success).toBe(true);
@@ -55,12 +84,18 @@ describe("API handlers", () => {
   it("handles generate hash errors", async () => {
     const { handleGenerateHash } = buildHandlers(
       createBasicOracle({
-        generateGameSecrets: () => {
+        generateGameSecrets: (_options) => {
           throw new Error("boom");
         },
       })
     );
-    const res = await handleGenerateHash();
+    const res = await handleGenerateHash(
+      new Request("http://localhost/generate-hash", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ gameType: "coinflip" }),
+      })
+    );
     expect(res.status).toBe(500);
     const data = (await res.json()) as {
       success: boolean;
