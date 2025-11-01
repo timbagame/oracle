@@ -1,18 +1,9 @@
 import * as path from "path";
-import { getEnvironmentMode, shouldUseEphemeralKeypair } from "./env.ts";
+import { getEnvironmentMode, readEnv, shouldUseEphemeralKeypair } from "./env.ts";
 
 const DEFAULT_PORT = 3001;
 const DEFAULT_DATABASE_FILE = "oracle.sqlite";
 const DEFAULT_KEYPAIR_FILE = "admin-keypair.json";
-
-function readEnv(key: string): string | undefined {
-  const value = process.env[key];
-  if (!value) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 function parseInteger(
   value: string | undefined,

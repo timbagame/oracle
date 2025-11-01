@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
+import * as anchor from "@coral-xyz/anchor";
 import { GameCompletionManager } from "../oracle-completion-manager.ts";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
@@ -53,7 +54,7 @@ function createManager(overrides: {
     metrics,
     getConnection: () => connection as any,
     getProgram: () => program as any,
-    adminKeypair: Keypair.generate(),
+    adminKeypair: anchor.web3.Keypair.generate(),
     readinessCache,
     tokenProgramCache,
     secretKeyLength: overrides.secretKeyLength ?? 32,

@@ -207,7 +207,7 @@ export class ScanLoopRunner {
     };
   }
 
-  private shouldThrottleBetweenGames(
+  public shouldThrottleBetweenGames(
     result: GameCompletionResult | null,
     index: number,
     total: number,
@@ -227,7 +227,7 @@ export class ScanLoopRunner {
     return !result.success;
   }
 
-  private updateScanStats(stats: CompletionStats, result: GameCompletionResult): void {
+  public updateScanStats(stats: CompletionStats, result: GameCompletionResult): void {
     if (result.success) {
       stats.completed++;
     } else if (result.notReady) {
@@ -237,7 +237,7 @@ export class ScanLoopRunner {
     }
   }
 
-  private logScanResults(stats: CompletionStats): void {
+  public logScanResults(stats: CompletionStats): void {
     if (stats.completed > 0 || stats.errors > 0 || stats.notReady > 0) {
       const parts = [] as string[];
       if (stats.completed > 0) parts.push(`${stats.completed} completed`);
@@ -248,4 +248,3 @@ export class ScanLoopRunner {
     }
   }
 }
-

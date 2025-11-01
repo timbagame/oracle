@@ -124,22 +124,6 @@ export class GameCompletionManager {
     cachedReadiness?: GameReadinessSnapshot,
     sharedContext?: GameOnChainContext,
   ): Promise<GameCompletionResult> {
-    const recordFailure = (
-      error: string,
-      options: { clearReadiness?: boolean } = {},
-    ): GameCompletionResult => {
-      this.options.db.incrementCompletionAttempts(gameAddress);
-
-      if (options.clearReadiness) {
-        this.options.readinessCache.delete(gameAddress);
-      }
-
-      return { success: false, error };
-    };
-
-    const recordFatalFailure = (error: string): GameCompletionResult =>
-      recordFailure(error, { clearReadiness: true });
-
     try {
       const { context, readiness, notReady } = await this.resolveContextAndReadiness(
         gameAddress,
@@ -150,7 +134,7 @@ export class GameCompletionManager {
       );
 
       if (!context) {
-        return recordFatalFailure(this.options.noSecretKeyMessage);
+        return this.recordFatalCompletionFailure(gameAddress, this.options.noSecretKeyMessage);
       }
 
       if (notReady || !readiness) {
@@ -160,33 +144,33 @@ export class GameCompletionManager {
       const { secretData, randomHashBuffer } = context;
       const gameAccount = readiness.gameAccount;
       if (!gameAccount) {
-        return recordFatalFailure("On-chain game account unavailable");
+        return this.recordFatalCompletionFailure(
+          gameAddress,
+          "On-chain game account unavailable",
+        );
       }
 
       const players = this.options.db.getGamePlayers(gameAddress);
-      const nEntries = Number(gameAccount.ticketsCount);
-
-      if (players.length === 0) {
-        return recordFatalFailure("No players found for game");
-      }
-
-      if (players.length !== nEntries) {
-        console.error(
-          `❌ Ticket registry mismatch for ${gameAddress}: expected ${nEntries}, found ${players.length}`,
-        );
-        return recordFatalFailure("Ticket registry out of sync");
+      const expectedEntries = Number(gameAccount.ticketsCount);
+      const playerValidation = this.ensurePlayersInSync(
+        gameAddress,
+        players,
+        expectedEntries,
+      );
+      if (playerValidation) {
+        return playerValidation;
       }
 
       const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
       const winnerIndex = this.calculateWinnerIndex(
         secretKeyBuffer,
         Number(gameAccount.lastSlot),
-        nEntries,
+        players.length,
       );
       const winnerPlayerAddress = players[winnerIndex];
 
       if (!winnerPlayerAddress) {
-        return recordFatalFailure("Unable to determine winner");
+        return this.recordFatalCompletionFailure(gameAddress, "Unable to determine winner");
       }
 
       const winnerAddress = new PublicKey(winnerPlayerAddress);
@@ -199,13 +183,58 @@ export class GameCompletionManager {
         winnerIndex,
       });
 
-      this.options.db.finalizeCompletedGame(gameAddress);
-      this.options.readinessCache.delete(gameAddress);
+      this.finalizeSuccessfulCompletion(gameAddress);
 
       return { success: true, txHash };
     } catch (error: unknown) {
-      return recordFailure(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      return this.recordCompletionFailure(gameAddress, message);
     }
+  }
+
+  private recordCompletionFailure(
+    gameAddress: string,
+    error: string,
+    options: { clearReadiness?: boolean } = {},
+  ): GameCompletionResult {
+    this.options.db.incrementCompletionAttempts(gameAddress);
+
+    if (options.clearReadiness) {
+      this.options.readinessCache.delete(gameAddress);
+    }
+
+    return { success: false, error };
+  }
+
+  private recordFatalCompletionFailure(
+    gameAddress: string,
+    error: string,
+  ): GameCompletionResult {
+    return this.recordCompletionFailure(gameAddress, error, { clearReadiness: true });
+  }
+
+  private ensurePlayersInSync(
+    gameAddress: string,
+    players: string[],
+    expectedEntries: number,
+  ): GameCompletionResult | null {
+    if (players.length === 0) {
+      return this.recordFatalCompletionFailure(gameAddress, "No players found for game");
+    }
+
+    if (players.length !== expectedEntries) {
+      console.error(
+        `❌ Ticket registry mismatch for ${gameAddress}: expected ${expectedEntries}, found ${players.length}`,
+      );
+      return this.recordFatalCompletionFailure(gameAddress, "Ticket registry out of sync");
+    }
+
+    return null;
+  }
+
+  private finalizeSuccessfulCompletion(gameAddress: string): void {
+    this.options.db.finalizeCompletedGame(gameAddress);
+    this.options.readinessCache.delete(gameAddress);
   }
 
   public async resolveContextAndReadiness(
@@ -228,26 +257,6 @@ export class GameCompletionManager {
       blockTime,
     } = options;
 
-    const attachReadiness = (
-      ctx: GameOnChainContext | null,
-      readinessValue?: GameReadinessSnapshot,
-    ): GameOnChainContext | null => {
-      if (ctx && readinessValue) {
-        return ctx.readiness === readinessValue ? ctx : { ...ctx, readiness: readinessValue };
-      }
-      return ctx;
-    };
-
-    const finalize = (
-      ctx: GameOnChainContext | null,
-      readinessValue: GameReadinessSnapshot | undefined,
-      notReady: boolean,
-    ) => ({
-      context: attachReadiness(ctx, readinessValue),
-      readiness: readinessValue,
-      notReady,
-    });
-
     const resolvedContext = await this.resolveGameContext(
       gameAddress,
       providedContext,
@@ -255,23 +264,51 @@ export class GameCompletionManager {
     );
 
     if (!resolvedContext) {
-      return finalize(null, undefined, false);
+      return this.buildResolution(null, undefined, false);
     }
+
+    const initialReadiness = providedReadiness ?? providedContext?.readiness;
 
     const { readiness, notReady, missingOnChain } = await this.resolveReadinessState({
       gameAddress,
       context: resolvedContext,
-      providedReadiness: providedReadiness ?? providedContext?.readiness,
+      providedReadiness: initialReadiness,
       requireOnChain,
       blockTime,
     });
 
     if (missingOnChain && requireOnChain) {
       console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
-      return finalize(null, undefined, false);
+      return this.buildResolution(null, undefined, false);
     }
 
-    return finalize(resolvedContext, readiness, notReady);
+    return this.buildResolution(resolvedContext, readiness, notReady);
+  }
+
+  private attachReadinessToContext(
+    ctx: GameOnChainContext | null,
+    readiness?: GameReadinessSnapshot,
+  ): GameOnChainContext | null {
+    if (ctx && readiness && ctx.readiness !== readiness) {
+      return { ...ctx, readiness };
+    }
+    return ctx;
+  }
+
+  private buildResolution(
+    context: GameOnChainContext | null,
+    readiness: GameReadinessSnapshot | undefined,
+    notReady: boolean,
+  ): {
+    context: GameOnChainContext | null;
+    readiness?: GameReadinessSnapshot;
+    notReady: boolean;
+  } {
+    return {
+      context: this.attachReadinessToContext(context, readiness),
+      readiness,
+      notReady,
+    };
   }
 
   public consumeReadiness(gameAddress: string): GameReadinessSnapshot | undefined {
@@ -646,4 +683,3 @@ class MissingSecretError extends Error {
     this.name = "MissingSecretError";
   }
 }
-

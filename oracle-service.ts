@@ -19,8 +19,6 @@ import {
   type ScanLoopOptions,
   type ScanLoopSummary,
 } from "./oracle-service.types.ts";
-import { GAME_SEED } from "./oracle-accounts.ts";
-import { ensurePublicKey } from "./solana-utils.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 import type { Timba } from "./idl/idlType.ts";
 import type { TimbaGameAccount } from "./types/timba.ts";
@@ -226,7 +224,7 @@ export class OracleService {
   ): GameSecrets {
     const secretKey = randomBytes(SECRET_KEY_LENGTH);
     const randomHash = createHash("sha256").update(secretKey).digest();
-    const gamePda = this.getGamePDA(randomHash);
+    const gamePda = this.completion.getGamePDA(randomHash);
     const gameAddress = gamePda.toBase58();
 
     this.db.saveSecretKey(gameAddress, secretKey.toString("hex"), randomHash.toString("hex"));
@@ -368,30 +366,11 @@ export class OracleService {
   }
 
   public updateScanStats(stats: CompletionStats, result: GameCompletionResult): void {
-    if (result.success) {
-      stats.completed++;
-    } else if (result.notReady) {
-      stats.notReady++;
-    } else {
-      stats.errors++;
-    }
+    this.scanner.updateScanStats(stats, result);
   }
 
   public logScanResults(stats: CompletionStats): void {
-    if (stats.completed > 0 || stats.errors > 0 || stats.notReady > 0) {
-      const parts: string[] = [];
-      if (stats.completed > 0) parts.push(`${stats.completed} completed`);
-      if (stats.errors > 0) parts.push(`${stats.errors} errors`);
-      if (stats.notReady > 0) parts.push(`${stats.notReady} not ready`);
-
-      console.log(`📊 Scan: ${parts.join(", ")}`);
-    }
-  }
-
-  public getGamePDA(randomHash: Buffer): PublicKey {
-    const programId = ensurePublicKey(this.program.programId);
-    const [pda] = PublicKey.findProgramAddressSync([GAME_SEED, randomHash], programId);
-    return pda;
+    this.scanner.logScanResults(stats);
   }
 
   public async evaluateGameReadiness(
@@ -450,19 +429,6 @@ export class OracleService {
     index: number,
     total: number,
   ): boolean {
-    if (this.interGameDelayMs <= 0) {
-      return false;
-    }
-
-    if (index >= total - 1) {
-      return false;
-    }
-
-    if (!result) {
-      return true;
-    }
-
-    return !result.success;
+    return this.scanner.shouldThrottleBetweenGames(result, index, total);
   }
 }
-

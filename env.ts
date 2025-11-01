@@ -1,10 +1,13 @@
 const ENV_KEYS = ["NODE_ENV", "BUN_ENV"] as const;
 
-type EnvKey = (typeof ENV_KEYS)[number];
-
-function readEnv(key: EnvKey): string | undefined {
+export function readEnv(key: string): string | undefined {
   const value = process.env[key];
-  return value && value.trim().length > 0 ? value.trim() : undefined;
+  if (!value) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 export function isCiEnvironment(): boolean {
