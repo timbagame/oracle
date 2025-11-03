@@ -8,6 +8,7 @@ import { getOracleMetrics, type OracleMetrics } from "./metrics.ts";
 import { OracleEventProcessor, EVENT_HANDLER_CONFIG } from "./oracle-event-processor.ts";
 import { GameCompletionManager } from "./oracle-completion-manager.ts";
 import { ScanLoopRunner } from "./oracle-scan-runner.ts";
+import { logger } from "./logger.ts";
 import {
   type AttemptGameCompletionOptions,
   type GameCompletionResult,
@@ -123,7 +124,7 @@ export class OracleService {
     try {
       const keypairData = JSON.parse(fs.readFileSync(adminKeypairPath, "utf-8"));
       const keypair = anchor.web3.Keypair.fromSecretKey(new Uint8Array(keypairData));
-      console.log(`✅ Loaded admin keypair: ${keypair.publicKey.toBase58()}`);
+      logger.success(`Loaded admin keypair: ${keypair.publicKey.toBase58()}`);
       return keypair;
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -136,13 +137,13 @@ export class OracleService {
 
       if (isMissingFile && useEphemeralKeypair) {
         const keypair = anchor.web3.Keypair.generate();
-        console.warn(
-          `⚠️  Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${adminKeypairSource} was not found.`,
+        logger.warning(
+          `Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${adminKeypairSource} was not found.`,
         );
         return keypair;
       }
 
-      console.error(`❌ Failed to load admin keypair from ${adminKeypairPath}:`, message);
+      logger.failure(`Failed to load admin keypair from ${adminKeypairPath}:`, message);
       throw new Error(`Failed to load admin keypair from ${adminKeypairSource}`);
     }
   }
@@ -164,7 +165,7 @@ export class OracleService {
     try {
       await this.eventProcessor.startListening();
     } catch (error) {
-      console.error(EVENT_LISTENER_FAILURE_MESSAGE, error);
+      logger.failure(EVENT_LISTENER_FAILURE_MESSAGE, error);
       throw error;
     }
   }

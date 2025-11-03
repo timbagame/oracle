@@ -5,6 +5,7 @@ import type { TimbaEventMap, TimbaEvent, TimbaPlayerEvent, TimbaGameStatusEvent,
 import type { PublicKeyLike } from "./solana-utils.ts";
 import type { EventHandlerConfig } from "./oracle-service.types.ts";
 import { toBase58, resolveNumericLike } from "./solana-utils.ts";
+import { logger } from "./logger.ts";
 
 export interface OracleEventProcessorOptions {
   getProgram: () => anchor.Program<Timba>;
@@ -20,12 +21,36 @@ export class OracleEventProcessor {
 
   constructor(private readonly options: OracleEventProcessorOptions) {}
 
+  /**
+   * Generic wrapper for event validation and error handling
+   */
+  private withEventValidation<T>(
+    eventData: { gameAddress: string; playerAddress?: string; ticketIndex?: number },
+    eventType: string,
+    validationOptions: { requireTicketIndex?: boolean; requirePlayerAddress?: boolean },
+    handler: () => T | Promise<T>,
+  ): Promise<void> {
+    return (async () => {
+      const validation = this.validateEventData(eventData, eventType, validationOptions);
+      if (!validation.valid) {
+        logger.warn(validation.message);
+        return;
+      }
+
+      try {
+        await handler();
+      } catch (error) {
+        logger.failure(`Error in ${eventType} event:`, error);
+      }
+    })();
+  }
+
   public async startListening(): Promise<void> {
     if (this.listening) {
       return;
     }
 
-    console.log("🎧 Starting event listeners...");
+    logger.info("🎧 Starting event listeners...");
     this.listenerIds = await this.setupEventListeners();
     this.listening = true;
   }
@@ -85,31 +110,25 @@ export class OracleEventProcessor {
   ): Promise<void> {
     const eventData = this.extractEventData(event);
 
-    const validation = this.validateEventData(eventData, `player ${action}`, {
-      requireTicketIndex: true,
-      requirePlayerAddress: action === "joined",
-    });
-    if (!validation.valid) {
-      console.warn(validation.message);
-      return;
-    }
+    await this.withEventValidation(
+      eventData,
+      `player ${action}`,
+      { requireTicketIndex: true, requirePlayerAddress: action === "joined" },
+      async () => {
+        const { gameAddress, playerAddress, ticketIndex } = eventData;
 
-    try {
-      const { gameAddress, playerAddress, ticketIndex } = eventData;
+        switch (action) {
+          case "joined":
+            this.options.db.addPlayerToGame(gameAddress, playerAddress!, ticketIndex!);
+            break;
+          case "unjoined":
+            this.options.db.removePlayerFromGame(gameAddress, ticketIndex!);
+            break;
+        }
 
-      switch (action) {
-        case "joined":
-          this.options.db.addPlayerToGame(gameAddress, playerAddress!, ticketIndex!);
-          break;
-        case "unjoined":
-          this.options.db.removePlayerFromGame(gameAddress, ticketIndex!);
-          break;
-      }
-
-      await this.options.tryAutoComplete(event.gameKey, gameAddress, action);
-    } catch (error) {
-      console.error(`❌ Error in player ${action} event:`, error);
-    }
+        await this.options.tryAutoComplete(event.gameKey, gameAddress, action);
+      },
+    );
   }
 
   public handleGameStatusChange(
@@ -118,13 +137,7 @@ export class OracleEventProcessor {
   ): void {
     const eventData = this.extractEventData(event);
 
-    const validation = this.validateEventData(eventData, `game ${status}`);
-    if (!validation.valid) {
-      console.warn(validation.message);
-      return;
-    }
-
-    try {
+    this.withEventValidation(eventData, `game ${status}`, {}, () => {
       const { gameAddress } = eventData;
 
       if (status === "completed") {
@@ -132,34 +145,28 @@ export class OracleEventProcessor {
       } else {
         this.options.db.markGameClosed(gameAddress);
         this.options.db.clearStalePlayersForGame(gameAddress);
-        console.log(`🚫 Game closed: ${gameAddress}`);
+        logger.info(`🚫 Game closed: ${gameAddress}`);
       }
-    } catch (error) {
-      console.error(`❌ Error in game ${status} event:`, error);
-    }
+    });
   }
 
   public handleGameInitialized(event: TimbaGameInitializedEvent): void {
     const eventData = this.extractEventData(event);
 
-    const validation = this.validateEventData(eventData, "game initialized");
-    if (!validation.valid) {
-      console.warn(validation.message);
-      return;
-    }
+    this.withEventValidation(eventData, "game initialized", {}, () => {
+      const { gameAddress } = eventData;
 
-    const { gameAddress } = eventData;
-
-    let gameType: string | undefined = undefined;
-    if (event.gameType) {
-      const gameTypeKeys = Object.keys(event.gameType);
-      if (gameTypeKeys.length > 0 && gameTypeKeys[0]) {
-        gameType = gameTypeKeys[0].toLowerCase();
+      let gameType: string | undefined = undefined;
+      if (event.gameType) {
+        const gameTypeKeys = Object.keys(event.gameType);
+        if (gameTypeKeys.length > 0 && gameTypeKeys[0]) {
+          gameType = gameTypeKeys[0].toLowerCase();
+        }
       }
-    }
 
-    console.log(`🎮 Game initialized: ${gameAddress}, Type: ${gameType || "unknown"}`);
-    this.options.db.trackGame(gameAddress, gameType);
+      logger.info(`🎮 Game initialized: ${gameAddress}, Type: ${gameType || "unknown"}`);
+      this.options.db.trackGame(gameAddress, gameType);
+    });
   }
 
   private validateEventData(

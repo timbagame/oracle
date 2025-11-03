@@ -2,6 +2,20 @@ import type * as anchor from "@coral-xyz/anchor";
 import type { PublicKey } from "@solana/web3.js";
 import type { TimbaEventMap, TimbaGameAccount } from "./types/timba.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
+import type { OracleDatabase } from "./database.ts";
+import type { OracleMetrics } from "./metrics.ts";
+import type { Timba } from "./idl/idlType.ts";
+
+/**
+ * Core dependencies shared between OracleService and GameCompletionManager
+ */
+export interface CoreOracleDependencies {
+  db: OracleDatabase;
+  metrics: OracleMetrics;
+  getConnection: () => anchor.web3.Connection;
+  getProgram: () => anchor.Program<Timba>;
+  adminKeypair: anchor.web3.Keypair;
+}
 
 export interface GameCompletionResult {
   success: boolean;
@@ -186,4 +200,3 @@ export interface OracleScanDependencies {
   delay: (ms: number) => Promise<void>;
   interGameDelayMs: number;
 }
-

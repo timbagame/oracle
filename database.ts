@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { getConfig } from "./config.ts";
+import { logger } from "./logger.ts";
 
 // Constants
 const DEFAULT_STATUS = "pending";
@@ -127,6 +128,12 @@ const TRACKING_INDEX_DEFINITIONS: ReadonlyArray<{
   },
 ];
 
+interface SchemaStep {
+  sql: string;
+  log: string;
+  error: string;
+}
+
 export const EMPTY_DATABASE_STATS: Readonly<DatabaseStats> = Object.freeze({
   totalSecrets: 0,
   usedSecrets: 0,
@@ -162,19 +169,22 @@ export class OracleDatabase {
   private initializeDatabase(): void {
     try {
       this.createTables();
-      console.log("✅ Oracle database initialized");
+      logger.success("Oracle database initialized");
     } catch (error) {
-      console.error("❌ Database initialization failed:", error);
+      logger.failure("Database initialization failed:", error);
       throw error;
     }
   }
 
-  private createTables(): void {
-    for (const definition of TABLE_DEFINITIONS) {
-      console.log(`🛠️ ${definition.log}`);
-      this.runStatement(definition.sql, definition.error);
+  private executeSchemaSteps(steps: ReadonlyArray<SchemaStep>): void {
+    for (const step of steps) {
+      logger.info(`🛠️ ${step.log}`);
+      this.runStatement(step.sql, step.error);
     }
+  }
 
+  private createTables(): void {
+    this.executeSchemaSteps(TABLE_DEFINITIONS);
     this.ensureTicketSchema();
     this.ensureTrackingIndexes();
   }
@@ -186,23 +196,14 @@ export class OracleDatabase {
     const hasTicketIndex = tableInfo.some((column) => column.name === "ticket_index");
 
     if (!hasTicketIndex) {
-      for (const statement of LEGACY_TICKET_MIGRATIONS) {
-        console.log(`🛠️ ${statement.log}`);
-        this.runStatement(statement.sql, statement.error);
-      }
+      this.executeSchemaSteps(LEGACY_TICKET_MIGRATIONS);
     }
 
-    for (const definition of PLAYER_INDEX_DEFINITIONS) {
-      console.log(`🛠️ ${definition.log}`);
-      this.runStatement(definition.sql, definition.error);
-    }
+    this.executeSchemaSteps(PLAYER_INDEX_DEFINITIONS);
   }
 
   private ensureTrackingIndexes(): void {
-    for (const definition of TRACKING_INDEX_DEFINITIONS) {
-      console.log(`🛠️ ${definition.log}`);
-      this.runStatement(definition.sql, definition.error);
-    }
+    this.executeSchemaSteps(TRACKING_INDEX_DEFINITIONS);
   }
 
   private executeDbOperation<T>(
@@ -213,7 +214,7 @@ export class OracleDatabase {
     try {
       return operation();
     } catch (error) {
-      console.error(`❌ ${errorMessage}:`, error);
+      logger.failure(`${errorMessage}:`, error);
       if (defaultValue !== undefined) {
         return defaultValue;
       }
@@ -447,7 +448,7 @@ export class OracleDatabase {
         cancelledGames: gamesStats.cancelled || 0,
       };
     } catch (error) {
-      console.error("❌ Failed to get stats:", error);
+      logger.failure("Failed to get stats:", error);
       return createEmptyStats();
     }
   }
@@ -535,13 +536,13 @@ export class OracleDatabase {
         deletedPlayers,
       };
 
-      console.log(
+      logger.info(
         `🧹 Cleanup completed - Secrets: ${deletedCounts.deletedSecrets}, Games: ${deletedCounts.deletedGames}, Players: ${deletedCounts.deletedPlayers}`
       );
 
       return deletedCounts;
     } catch (error) {
-      console.error("❌ Failed to cleanup old records:", error);
+      logger.failure("Failed to cleanup old records:", error);
       return { deletedSecrets: 0, deletedGames: 0, deletedPlayers: 0 };
     }
   }
@@ -551,7 +552,7 @@ export class OracleDatabase {
       this.db.close();
       this.closed = true;
     } catch (error) {
-      console.error("❌ Failed to close database:", error);
+      logger.failure("Failed to close database:", error);
     }
   }
 
@@ -595,7 +596,7 @@ export class OracleDatabase {
       "Failed to clear stale players for game",
       gameAddress
     );
-    console.log(`🧹 Cleared stale player data for game ${gameAddress}`);
+    logger.info(`🧹 Cleared stale player data for game ${gameAddress}`);
   }
 
   public getGamePlayers(gameAddress: string): string[] {

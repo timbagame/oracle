@@ -3,13 +3,11 @@ import { PublicKey } from "@solana/web3.js";
 import { createHash } from "crypto";
 import {
   type AttemptGameCompletionOptions,
+  type CoreOracleDependencies,
   type GameCompletionResult,
   type GameOnChainContext,
   type GameReadinessSnapshot,
 } from "./oracle-service.types.ts";
-import type { OracleDatabase } from "./database.ts";
-import type { OracleMetrics } from "./metrics.ts";
-import type { Timba } from "./idl/idlType.ts";
 import type { TimbaGameAccount } from "./types/timba.ts";
 import { coercePublicKey, ensurePublicKey } from "./solana-utils.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
@@ -22,13 +20,9 @@ import {
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
+import { logger } from "./logger.ts";
 
-export interface GameCompletionManagerOptions {
-  db: OracleDatabase;
-  metrics: OracleMetrics;
-  getConnection: () => anchor.web3.Connection;
-  getProgram: () => anchor.Program<Timba>;
-  adminKeypair: anchor.web3.Keypair;
+export interface GameCompletionManagerOptions extends CoreOracleDependencies {
   readinessCache: Map<string, GameReadinessSnapshot>;
   tokenProgramCache: Map<string, PublicKey>;
   secretKeyLength: number;
@@ -107,12 +101,12 @@ export class GameCompletionManager {
     if (completion.success) {
       const message = successLog?.(gameAddress);
       if (message) {
-        console.log(message);
+        logger.info(message);
       }
     } else if (!completion.notReady) {
       const message = failureLog?.(gameAddress, completion.error);
       if (message) {
-        console.error(message);
+        logger.error(message);
       }
     }
 
@@ -223,8 +217,8 @@ export class GameCompletionManager {
     }
 
     if (players.length !== expectedEntries) {
-      console.error(
-        `❌ Ticket registry mismatch for ${gameAddress}: expected ${expectedEntries}, found ${players.length}`,
+      logger.failure(
+        `Ticket registry mismatch for ${gameAddress}: expected ${expectedEntries}, found ${players.length}`,
       );
       return this.recordFatalCompletionFailure(gameAddress, "Ticket registry out of sync");
     }
@@ -257,6 +251,7 @@ export class GameCompletionManager {
       blockTime,
     } = options;
 
+    // Step 1: Resolve context
     const resolvedContext = await this.resolveGameContext(
       gameAddress,
       providedContext,
@@ -267,58 +262,30 @@ export class GameCompletionManager {
       return { context: null, readiness: undefined, notReady: false };
     }
 
-    const readinessSnapshot = await this.resolveReadinessSnapshot(
-      gameAddress,
-      resolvedContext,
-      providedReadiness,
-      providedContext?.readiness,
-      requireOnChain,
-      blockTime,
-    );
+    // Step 2: Get readiness from available sources
+    let readinessSnapshot = providedReadiness ?? providedContext?.readiness;
 
-    if (!readinessSnapshot) {
-      return { context: null, readiness: undefined, notReady: false };
-    }
-
-    const contextWithReadiness =
-      readinessSnapshot && resolvedContext.readiness !== readinessSnapshot
-        ? { ...resolvedContext, readiness: readinessSnapshot }
-        : resolvedContext;
-
-    const notReady =
-      !readinessSnapshot ||
-      !readinessSnapshot.ready ||
-      !readinessSnapshot.gameAccount;
-
-    return {
-      context: contextWithReadiness,
-      readiness: readinessSnapshot,
-      notReady,
-    };
-  }
-
-  private async resolveReadinessSnapshot(
-    gameAddress: string,
-    resolvedContext: GameOnChainContext,
-    providedReadiness: GameReadinessSnapshot | undefined,
-    contextReadiness: GameReadinessSnapshot | undefined,
-    requireOnChain: boolean,
-    blockTime: number | undefined,
-  ): Promise<GameReadinessSnapshot | null | undefined> {
-    let readinessSnapshot = providedReadiness ?? contextReadiness;
-
+    // If requireOnChain but readiness lacks gameAccount, invalidate it
     if (readinessSnapshot && requireOnChain && !readinessSnapshot.gameAccount) {
       readinessSnapshot = undefined;
     }
 
+    // Step 3: Try cache if no readiness and not requiring on-chain
     if (!readinessSnapshot && !requireOnChain) {
       readinessSnapshot = this.consumeReadiness(gameAddress);
     }
 
-    if (!requireOnChain && readinessSnapshot) {
-      return readinessSnapshot;
+    // Step 4: If we have readiness and not requiring on-chain, use it
+    if (readinessSnapshot && !requireOnChain) {
+      const contextWithReadiness = resolvedContext.readiness !== readinessSnapshot
+        ? { ...resolvedContext, readiness: readinessSnapshot }
+        : resolvedContext;
+
+      const notReady = !readinessSnapshot.ready || !readinessSnapshot.gameAccount;
+      return { context: contextWithReadiness, readiness: readinessSnapshot, notReady };
     }
 
+    // Step 5: Fetch from blockchain if required or no readiness available
     if (requireOnChain || !readinessSnapshot) {
       const evaluation = await this.evaluateAndCacheReadiness(
         resolvedContext.gamePda,
@@ -327,14 +294,25 @@ export class GameCompletionManager {
       );
 
       if (!evaluation.gameAccount && requireOnChain) {
-        console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
-        return null;
+        logger.warning(`Game ${gameAddress} no longer exists on-chain`);
+        return { context: null, readiness: undefined, notReady: false };
       }
 
-      return evaluation;
+      readinessSnapshot = evaluation;
     }
 
-    return readinessSnapshot;
+    // Step 6: Build final result
+    const contextWithReadiness = resolvedContext.readiness !== readinessSnapshot
+      ? { ...resolvedContext, readiness: readinessSnapshot }
+      : resolvedContext;
+
+    const notReady = !readinessSnapshot || !readinessSnapshot.ready || !readinessSnapshot.gameAccount;
+
+    return {
+      context: contextWithReadiness,
+      readiness: readinessSnapshot,
+      notReady,
+    };
   }
 
   public consumeReadiness(gameAddress: string): GameReadinessSnapshot | undefined {
@@ -535,8 +513,8 @@ export class GameCompletionManager {
       return resolved;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(
-        `⚠️  Unable to resolve token program for mint ${tokenMint.toBase58()}:`,
+      logger.warning(
+        `Unable to resolve token program for mint ${tokenMint.toBase58()}:`,
         message,
       );
       throw new Error(
@@ -610,7 +588,7 @@ export class GameCompletionManager {
     if (!requireOnChain) {
       return;
     }
-    console.log(`⚠️  ${this.options.noSecretKeyMessage} for game ${gameAddress}`);
+    logger.warning(`${this.options.noSecretKeyMessage} for game ${gameAddress}`);
   }
 
   public resolveStoredGame(
