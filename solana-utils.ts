@@ -153,7 +153,8 @@ export function resolveNumericLike(value: unknown): number | undefined {
 
 /**
  * Confirms a transaction using modern or legacy Solana connection methods.
- * Handles both getLatestBlockhash + confirmTransaction and legacy confirmTransaction(signature) patterns.
+ * Prefers the modern pattern (getLatestBlockhash + confirmTransaction) for newer Solana SDK versions.
+ * Falls back to the legacy confirmTransaction(signature) pattern for compatibility with older SDK versions.
  */
 export async function confirmTransaction(
   connection: anchor.web3.Connection,
