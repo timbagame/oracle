@@ -264,49 +264,56 @@ export class GameCompletionManager {
     );
 
     if (!resolvedContext) {
-      return this.buildResolution(null, undefined, false);
+      return { context: null, readiness: undefined, notReady: false };
     }
 
-    const initialReadiness = providedReadiness ?? providedContext?.readiness;
+    let readinessSnapshot = providedReadiness ?? providedContext?.readiness;
 
-    const { readiness, notReady, missingOnChain } = await this.resolveReadinessState({
-      gameAddress,
-      context: resolvedContext,
-      providedReadiness: initialReadiness,
-      requireOnChain,
-      blockTime,
-    });
+    if (readinessSnapshot && requireOnChain && !readinessSnapshot.gameAccount) {
+      readinessSnapshot = undefined;
+    }
+
+    if (!readinessSnapshot && !requireOnChain) {
+      readinessSnapshot = this.consumeReadiness(gameAddress);
+    }
+
+    let missingOnChain = false;
+
+    if (requireOnChain || !readinessSnapshot) {
+      const evaluation = await this.evaluateAndCacheReadiness(
+        resolvedContext.gamePda,
+        gameAddress,
+        blockTime,
+      );
+
+      if (!evaluation.gameAccount) {
+        missingOnChain = true;
+        readinessSnapshot = undefined;
+      } else if (!requireOnChain && !evaluation.ready) {
+        return { context: resolvedContext, readiness: undefined, notReady: true };
+      } else {
+        readinessSnapshot = evaluation;
+      }
+    }
 
     if (missingOnChain && requireOnChain) {
       console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
-      return this.buildResolution(null, undefined, false);
+      return { context: null, readiness: undefined, notReady: false };
     }
 
-    return this.buildResolution(resolvedContext, readiness, notReady);
-  }
+    const contextWithReadiness =
+      readinessSnapshot && resolvedContext.readiness !== readinessSnapshot
+        ? { ...resolvedContext, readiness: readinessSnapshot }
+        : resolvedContext;
 
-  private attachReadinessToContext(
-    ctx: GameOnChainContext | null,
-    readiness?: GameReadinessSnapshot,
-  ): GameOnChainContext | null {
-    if (ctx && readiness && ctx.readiness !== readiness) {
-      return { ...ctx, readiness };
-    }
-    return ctx;
-  }
+    const notReady =
+      !readinessSnapshot ||
+      !readinessSnapshot.ready ||
+      !readinessSnapshot.gameAccount;
 
-  private buildResolution(
-    context: GameOnChainContext | null,
-    readiness: GameReadinessSnapshot | undefined,
-    notReady: boolean,
-  ): {
-    context: GameOnChainContext | null;
-    readiness?: GameReadinessSnapshot;
-    notReady: boolean;
-  } {
     return {
-      context: this.attachReadinessToContext(context, readiness),
-      readiness,
+      context: contextWithReadiness,
+      readiness: readinessSnapshot,
       notReady,
     };
   }
@@ -359,57 +366,6 @@ export class GameCompletionManager {
       }
       throw error;
     }
-  }
-
-  private async resolveReadinessState(args: {
-    gameAddress: string;
-    context: GameOnChainContext;
-    providedReadiness?: GameReadinessSnapshot;
-    requireOnChain: boolean;
-    blockTime?: number;
-  }): Promise<{
-    readiness?: GameReadinessSnapshot;
-    notReady: boolean;
-    missingOnChain: boolean;
-  }> {
-    const { gameAddress, context, providedReadiness, requireOnChain, blockTime } = args;
-
-    let readinessSnapshot = providedReadiness ?? context.readiness;
-    let missingOnChain = false;
-
-    if (readinessSnapshot && requireOnChain && !readinessSnapshot.gameAccount) {
-      readinessSnapshot = undefined;
-    }
-
-    if (!readinessSnapshot && !requireOnChain) {
-      readinessSnapshot = this.consumeReadiness(gameAddress);
-    }
-
-    const shouldEvaluateReadiness = requireOnChain || !readinessSnapshot;
-
-    if (shouldEvaluateReadiness) {
-      const evaluation = await this.evaluateAndCacheReadiness(
-        context.gamePda,
-        gameAddress,
-        blockTime,
-      );
-
-      if (!evaluation.gameAccount) {
-        missingOnChain = true;
-        readinessSnapshot = undefined;
-      } else if (!requireOnChain && !evaluation.ready) {
-        return { readiness: undefined, notReady: true, missingOnChain };
-      } else {
-        readinessSnapshot = evaluation;
-      }
-    }
-
-    const notReady =
-      !readinessSnapshot ||
-      !readinessSnapshot.ready ||
-      !readinessSnapshot.gameAccount;
-
-    return { readiness: readinessSnapshot, notReady, missingOnChain };
   }
 
   private async evaluateAndCacheReadiness(

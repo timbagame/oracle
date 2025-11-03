@@ -3,9 +3,6 @@
   "scripts": {
     "start": "bun run index.ts",
     "dev": "bun run --watch index.ts",
-    "test": "bun test",
-    "coverage": "bun test --coverage",
-    "tsc": "bun x tsc -p tsconfig.json --noEmit",
     "typecheck": "bun x tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

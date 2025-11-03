@@ -10,7 +10,7 @@ async function runManualShutdown() {
   await oracle.stopEventListening();
 
   const waitMs = 30_000;
-  const summary = await oracle.runScanLoop({
+  const summary = await oracle.scanRunner.runScanLoop({
     waitBetweenCyclesMs: waitMs,
     waitForPendingOnly: true,
     onCycleStart: (cycle) => {

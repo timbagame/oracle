@@ -10,18 +10,14 @@ import { GameCompletionManager } from "./oracle-completion-manager.ts";
 import { ScanLoopRunner } from "./oracle-scan-runner.ts";
 import {
   type AttemptGameCompletionOptions,
-  type CompletionStats,
   type GameCompletionResult,
   type GameOnChainContext,
   type GameReadinessSnapshot,
   type GameSecrets,
   type GenerateGameSecretsOptions,
-  type ScanLoopOptions,
-  type ScanLoopSummary,
 } from "./oracle-service.types.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 import type { Timba } from "./idl/idlType.ts";
-import type { TimbaGameAccount } from "./types/timba.ts";
 import idl from "./idl/idl.json" with { type: "json" };
 
 export { deriveGameAccounts, type DerivedGameAccounts } from "./oracle-accounts.ts";
@@ -51,8 +47,6 @@ export class OracleService {
   private readonly eventProcessor: OracleEventProcessor;
   private readonly completion: GameCompletionManager;
   private readonly scanner: ScanLoopRunner;
-  private eventListeners: number[] = [];
-  private isListening = false;
   public readonly readinessCache: Map<string, GameReadinessSnapshot>;
   public readonly tokenProgramCache: Map<string, PublicKey>;
 
@@ -86,17 +80,7 @@ export class OracleService {
       tryAutoComplete: (gameKey, gameAddress, trigger) =>
         this.tryAutoComplete(gameKey ?? this.ensureGameKey(gameAddress), gameAddress, trigger),
       config: EVENT_HANDLER_CONFIG,
-      listenerState: {
-        getListeners: () => this.eventListeners,
-        setListeners: (ids) => {
-          this.eventListeners = ids;
-        },
-        isListening: () => this.isListening,
-        setListening: (value) => {
-          this.isListening = value;
-        },
-      },
-      clearTokenProgramCache: () => this.clearTokenProgramCache(),
+      clearTokenProgramCache: () => this.completion.clearTokenProgramCache(),
     });
 
     this.scanner = new ScanLoopRunner({
@@ -104,10 +88,10 @@ export class OracleService {
       metrics: this.metrics,
       completion: {
         resolveContextAndReadiness: (address, options) =>
-          this.resolveContextAndReadiness(address, options),
+          this.completion.resolveContextAndReadiness(address, options),
         attemptGameCompletion: (options) => this.attemptGameCompletion(options),
-        consumeReadiness: (address) => this.consumeReadiness(address),
-        getBlockchainTime: () => this.getBlockchainTime(),
+        consumeReadiness: (address) => this.completion.consumeReadiness(address),
+        getBlockchainTime: () => this.completion.getBlockchainTime(),
       },
       interGameDelayMs: this.interGameDelayMs,
       maxCompletionAttempts: MAX_COMPLETION_ATTEMPTS,
@@ -174,7 +158,7 @@ export class OracleService {
   }
 
   public async startEventListening(): Promise<void> {
-    if (this.isListening) return;
+    if (this.eventProcessor.isListening()) return;
 
     try {
       await this.eventProcessor.startListening();
@@ -185,38 +169,8 @@ export class OracleService {
   }
 
   public async stopEventListening(): Promise<void> {
-    if (!this.isListening) return;
+    if (!this.eventProcessor.isListening()) return;
     await this.eventProcessor.stopListening();
-  }
-
-  public async setupEventListeners(): Promise<number[]> {
-    return this.eventProcessor.setupEventListeners();
-  }
-
-  public async handlePlayerEvent(
-    action: "joined" | "unjoined",
-    event: Parameters<OracleEventProcessor["handlePlayerEvent"]>[1],
-  ): Promise<void> {
-    await this.eventProcessor.handlePlayerEvent(action, event);
-  }
-
-  public handleGameStatusChange(
-    status: "completed" | "closed",
-    event: Parameters<OracleEventProcessor["handleGameStatusChange"]>[1],
-  ): void {
-    this.eventProcessor.handleGameStatusChange(status, event);
-  }
-
-  public handleGameInitialized(
-    event: Parameters<OracleEventProcessor["handleGameInitialized"]>[0],
-  ): void {
-    this.eventProcessor.handleGameInitialized(event);
-  }
-
-  public extractEventData(
-    event: Parameters<OracleEventProcessor["extractEventData"]>[0],
-  ) {
-    return this.eventProcessor.extractEventData(event);
   }
 
   public generateGameSecrets(
@@ -234,10 +188,6 @@ export class OracleService {
       randomHash: randomHash.toString("hex"),
       gameAddress,
     };
-  }
-
-  public async isGameReadyForCompletion(gamePda: PublicKey): Promise<boolean> {
-    return this.completion.isGameReadyForCompletion(gamePda);
   }
 
   public async completeGame(
@@ -266,7 +216,7 @@ export class OracleService {
     return new PublicKey(gameAddress);
   }
 
-  public async attemptGameCompletion(
+  private async attemptGameCompletion(
     options: AttemptGameCompletionOptions,
   ): Promise<GameCompletionResult | null> {
     const completeOverride =
@@ -282,26 +232,6 @@ export class OracleService {
     return this.completion.attemptGameCompletion(options, {
       completeGame: completeOverride,
     });
-  }
-
-  public async resolveContextAndReadiness(
-    gameAddress: string,
-    options: {
-      context?: GameOnChainContext | null;
-      readiness?: GameReadinessSnapshot;
-      requireOnChain?: boolean;
-      blockTime?: number;
-    } = {},
-  ) {
-    return this.completion.resolveContextAndReadiness(gameAddress, options);
-  }
-
-  public consumeReadiness(gameAddress: string): GameReadinessSnapshot | undefined {
-    return this.completion.consumeReadiness(gameAddress);
-  }
-
-  public async getBlockchainTime(): Promise<number> {
-    return this.completion.getBlockchainTime();
   }
 
   public async confirmTransaction(signature: string): Promise<void> {
@@ -348,87 +278,20 @@ export class OracleService {
   public getStats() {
     return {
       ...this.db.getStats(),
-      eventListening: this.isListening,
-      activeListeners: this.eventListeners.length,
+      eventListening: this.eventProcessor.isListening(),
+      activeListeners: this.eventProcessor.getActiveListenerCount(),
     };
   }
 
-  public clearTokenProgramCache(): void {
-    this.completion.clearTokenProgramCache();
+  public get completionManager(): GameCompletionManager {
+    return this.completion;
   }
 
-  public async scanAndCompleteActiveGames(): Promise<CompletionStats> {
-    return this.scanner.scanAndCompleteActiveGames();
+  public get scanRunner(): ScanLoopRunner {
+    return this.scanner;
   }
 
-  public async runScanLoop(options: ScanLoopOptions = {}): Promise<ScanLoopSummary> {
-    return this.scanner.runScanLoop(options);
-  }
-
-  public updateScanStats(stats: CompletionStats, result: GameCompletionResult): void {
-    this.scanner.updateScanStats(stats, result);
-  }
-
-  public logScanResults(stats: CompletionStats): void {
-    this.scanner.logScanResults(stats);
-  }
-
-  public async evaluateGameReadiness(
-    gamePda: PublicKey,
-    gameAddress: string,
-    blockTime?: number,
-  ): Promise<GameReadinessSnapshot> {
-    return this.completion.evaluateGameReadiness(gamePda, gameAddress, blockTime);
-  }
-
-  public async fetchGameAccount(
-    gamePda: PublicKey,
-    gameAddress: string,
-  ) {
-    return this.completion.fetchGameAccount(gamePda, gameAddress);
-  }
-
-  public isAccountNotFoundError(error: unknown): error is { message?: string } {
-    return this.completion.isAccountNotFoundError(error);
-  }
-
-  public resolveStoredGame(
-    gameAddress: string,
-    options: { throwIfMissing?: boolean } = {},
-  ) {
-    return this.completion.resolveStoredGame(gameAddress, options);
-  }
-
-  public async executeGameCompletion(args: {
-    gameAccount: TimbaGameAccount;
-    winnerAddress: PublicKey;
-    randomHashBuffer: Buffer;
-    secretKeyBuffer: Buffer;
-    winnerIndex: number;
-  }) {
-    return this.completion.executeGameCompletion(args);
-  }
-
-  public async resolveTokenProgram(
-    tokenProgram: PublicKeyLike,
-    tokenMint: PublicKey,
-  ) {
-    return this.completion.resolveTokenProgram(tokenProgram, tokenMint);
-  }
-
-  public calculateWinnerIndex(
-    secretKeyBuffer: Buffer,
-    lastSlot: number,
-    nPlayers: number,
-  ): number {
-    return this.completion.calculateWinnerIndex(secretKeyBuffer, lastSlot, nPlayers);
-  }
-
-  public shouldThrottleBetweenGames(
-    result: GameCompletionResult | null,
-    index: number,
-    total: number,
-  ): boolean {
-    return this.scanner.shouldThrottleBetweenGames(result, index, total);
+  public get events(): OracleEventProcessor {
+    return this.eventProcessor;
   }
 }

@@ -39,7 +39,10 @@ describe("OracleService event handling", () => {
 
     const statsWhileListening = service.getStats();
     expect(statsWhileListening.eventListening).toBe(true);
-    expect(statsWhileListening.activeListeners).toBe(5);
+    expect(service.events.isListening()).toBe(true);
+    expect(service.events.getActiveListenerCount()).toBe(
+      OracleServiceClass.EVENT_HANDLER_CONFIG.length
+    );
 
     await service.startEventListening();
     expect(programStub.addCalls.length).toBe(5);
@@ -49,7 +52,8 @@ describe("OracleService event handling", () => {
 
     const statsAfterStop = service.getStats();
     expect(statsAfterStop.eventListening).toBe(false);
-    expect(statsAfterStop.activeListeners).toBe(0);
+    expect(service.events.isListening()).toBe(false);
+    expect(service.events.getActiveListenerCount()).toBe(0);
   });
 
   it("awaits asynchronous event listener registration", async () => {
@@ -58,9 +62,9 @@ describe("OracleService event handling", () => {
     const service = createService(db, programStub);
 
     await service.startEventListening();
-
-    const listeners = (service as any).eventListeners as Array<number>;
-    expect(listeners.every((id) => typeof id === "number")).toBe(true);
+    expect(service.events.getActiveListenerCount()).toBe(
+      OracleServiceClass.EVENT_HANDLER_CONFIG.length
+    );
 
     await service.stopEventListening();
     expect(programStub.removeCalls).toEqual([1, 2, 3, 4, 5]);
@@ -81,7 +85,7 @@ describe("OracleService event handling", () => {
     const gameKey = Keypair.generate().publicKey;
     const playerKey = Keypair.generate().publicKey;
 
-    await (service as any).handlePlayerEvent("joined", {
+    await service.events.handlePlayerEvent("joined", {
       gameKey,
       player: playerKey,
       ticketIndex: 7,
@@ -100,7 +104,7 @@ describe("OracleService event handling", () => {
     expect(firstAddress).toBe(gameKey.toBase58());
     expect(firstTrigger).toBe("joined");
 
-    await (service as any).handlePlayerEvent("unjoined", {
+    await service.events.handlePlayerEvent("unjoined", {
       gameKey,
       player: playerKey,
       ticketIndex: 7,
@@ -129,17 +133,17 @@ describe("OracleService event handling", () => {
 
     const gameKey = Keypair.generate().publicKey;
 
-    await (service as any).handlePlayerEvent("joined", {
+    await service.events.handlePlayerEvent("joined", {
       gameKey,
       ticketIndex: 3,
     });
 
-    await (service as any).handlePlayerEvent("joined", {
+    await service.events.handlePlayerEvent("joined", {
       gameKey,
       player: Keypair.generate().publicKey,
     });
 
-    await (service as any).handlePlayerEvent("unjoined", {
+    await service.events.handlePlayerEvent("unjoined", {
       gameKey,
       player: Keypair.generate().publicKey,
     });
@@ -155,8 +159,8 @@ describe("OracleService event handling", () => {
 
     const gameKey = Keypair.generate().publicKey;
 
-    (service as any).handleGameStatusChange("completed", { gameKey });
-    (service as any).handleGameStatusChange("closed", { gameKey });
+    service.events.handleGameStatusChange("completed", { gameKey });
+    service.events.handleGameStatusChange("closed", { gameKey });
 
     expect(callLog.markCompleted).toEqual([gameKey.toBase58()]);
     expect(callLog.markClosed).toEqual([gameKey.toBase58()]);
@@ -170,12 +174,12 @@ describe("OracleService event handling", () => {
 
     const gameKey = Keypair.generate().publicKey;
 
-    (service as any).handleGameInitialized({
+    service.events.handleGameInitialized({
       gameKey,
       gameType: { Coinflip: {} },
     });
 
-    (service as any).handleGameInitialized({ gameKey });
+    service.events.handleGameInitialized({ gameKey });
 
     expect(callLog.track).toEqual([
       { game: gameKey.toBase58(), type: "coinflip" },
@@ -195,7 +199,7 @@ describe("OracleService event handling", () => {
       ticket_index: { toNumber: () => 5 },
     };
 
-    const data = (service as any).extractEventData(event);
+    const data = service.events.extractEventData(event);
 
     expect(data.gameAddress).toBe(gameKey);
     expect(data.playerAddress).toBe("player-as-string");
@@ -216,7 +220,7 @@ describe("OracleService event handling", () => {
       ticketIndex: { toNumber: () => 11 },
     };
 
-    const data = (service as any).extractEventData(event);
+    const data = service.events.extractEventData(event);
 
     expect(data.gameAddress).toBe(wrappedGameKey.toBase58());
     expect(data.playerAddress).toBe(wrappedPlayerKey.toBase58());
@@ -240,7 +244,7 @@ describe("OracleService event handling", () => {
     const programStub = createProgramStub();
     const service = createService(db, programStub);
 
-    const missing = await (service as any).resolveContextAndReadiness(
+    const missing = await service.completionManager.resolveContextAndReadiness(
       "no-secret",
       {
         requireOnChain: true,
@@ -256,7 +260,7 @@ describe("OracleService event handling", () => {
       programStub.fetchCalls.push(pda);
       return {};
     };
-    const exists = await (service as any).resolveContextAndReadiness(
+    const exists = await service.completionManager.resolveContextAndReadiness(
       activeGame,
       {
         requireOnChain: true,
@@ -274,7 +278,7 @@ describe("OracleService event handling", () => {
       throw new Error("Account does not exist");
     };
 
-    const gone = await (service as any).resolveContextAndReadiness(goneGame, {
+    const gone = await service.completionManager.resolveContextAndReadiness(goneGame, {
       requireOnChain: true,
     });
     expect(gone.context).toBeNull();
