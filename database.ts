@@ -43,6 +43,16 @@ const SQL_QUERIES = Object.freeze({
     "SELECT player_address FROM game_players WHERE game_address = ? ORDER BY ticket_index ASC",
 } satisfies Record<string, string>);
 
+const COMPLETED_GAME_PREDICATE = "status != ? AND completed_at IS NOT NULL AND completed_at < ?";
+const COMPLETED_GAME_SUBQUERY = `
+  SELECT game_address FROM game_tracking
+  WHERE ${COMPLETED_GAME_PREDICATE}
+`;
+const DELETE_COMPLETED_GAMES_SQL = `
+  DELETE FROM game_tracking
+  WHERE ${COMPLETED_GAME_PREDICATE}
+`;
+
 function getDatabaseFile(): string {
   return getConfig().databaseFile;
 }
@@ -523,10 +533,7 @@ export class OracleDatabase {
       const deletedPlayers = this.runDelete(
         `DELETE FROM game_players
          WHERE game_address IN (
-           SELECT game_address FROM game_tracking
-           WHERE status != ?
-             AND completed_at IS NOT NULL
-             AND completed_at < ?
+           ${COMPLETED_GAME_SUBQUERY}
          )`,
         "Failed to delete old player rows",
         DEFAULT_STATUS,
@@ -535,10 +542,7 @@ export class OracleDatabase {
 
       // Clean up old game tracking records (completed/cancelled games older than cutoff)
       const deletedGames = this.runDelete(
-        `DELETE FROM game_tracking
-         WHERE status != ?
-           AND completed_at IS NOT NULL
-           AND completed_at < ?`,
+        DELETE_COMPLETED_GAMES_SQL,
         "Failed to delete old game tracking rows",
         DEFAULT_STATUS,
         cutoffTime

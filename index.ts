@@ -32,55 +32,43 @@ let server: ReturnType<typeof Bun.serve> | undefined;
 let backgroundLoop: Promise<void> | undefined;
 let backgroundAbortController: AbortController | undefined;
 
-class ShutdownCoordinator {
-  private static async abortBackgroundLoop(): Promise<void> {
-    backgroundAbortController?.abort();
+async function abortBackgroundLoop(): Promise<void> {
+  backgroundAbortController?.abort();
 
-    if (!backgroundLoop) {
-      return;
-    }
+  if (!backgroundLoop) {
+    return;
+  }
 
-    const loopPromise = backgroundLoop;
-    backgroundLoop = undefined;
+  const loopPromise = backgroundLoop;
+  backgroundLoop = undefined;
 
-    const timeoutResult = await Promise.race<"completed" | "timeout">([
-      loopPromise
-        .then(() => "completed" as const)
-        .catch((error) => {
-          logger.warning("Background loop terminated with error:", error);
-          return "completed" as const;
-        }),
-      delay(BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS).then(() => "timeout" as const),
-    ]);
-
-    if (timeoutResult === "timeout") {
-      logger.warning(
-        "Background loop did not exit within the shutdown timeout; proceeding with shutdown."
-      );
-      loopPromise.catch((error) => {
+  const timeoutResult = await Promise.race<"completed" | "timeout">([
+    loopPromise
+      .then(() => "completed" as const)
+      .catch((error) => {
         logger.warning("Background loop terminated with error:", error);
-      });
-    }
+        return "completed" as const;
+      }),
+    delay(BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS).then(() => "timeout" as const),
+  ]);
 
-    backgroundAbortController = undefined;
+  if (timeoutResult === "timeout") {
+    logger.warning(
+      "Background loop did not exit within the shutdown timeout; proceeding with shutdown."
+    );
+    loopPromise.catch((error) => {
+      logger.warning("Background loop terminated with error:", error);
+    });
   }
 
-  private static async stopEventListeners(oracle: OracleApi): Promise<void> {
-    try {
-      await oracle.stopEventListening();
-    } catch (error) {
-      logger.warning("Failed to stop event listeners:", error);
-    }
-  }
+  backgroundAbortController = undefined;
+}
 
-  static async stopServer(oracle: OracleApi, exitCode?: number): Promise<void> {
-    await this.abortBackgroundLoop();
-    await this.stopEventListeners(oracle);
-    server?.stop();
-
-    if (exitCode !== undefined && !IS_TEST_ENV) {
-      process.exit(exitCode);
-    }
+async function stopEventListeners(oracle: OracleApi): Promise<void> {
+  try {
+    await oracle.stopEventListening();
+  } catch (error) {
+    logger.warning("Failed to stop event listeners:", error);
   }
 }
 
@@ -88,7 +76,13 @@ async function stopServer(
   oracle: OracleApi,
   exitCode?: number
 ): Promise<void> {
-  return ShutdownCoordinator.stopServer(oracle, exitCode);
+  await abortBackgroundLoop();
+  await stopEventListeners(oracle);
+  server?.stop();
+
+  if (exitCode !== undefined && !IS_TEST_ENV) {
+    process.exit(exitCode);
+  }
 }
 
 // Response helpers

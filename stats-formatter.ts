@@ -1,12 +1,8 @@
+import type { CompletionStats } from "./oracle-service.types.ts";
+
 /**
  * Shared utility for formatting completion statistics
  */
-
-export interface CompletionStats {
-  completed: number;
-  errors: number;
-  notReady: number;
-}
 
 /**
  * Formats completion statistics into a human-readable string

@@ -71,13 +71,7 @@ export class GameCompletionManager {
     if (!skipReadinessCheck) {
       const ready = await this.isGameReadyForCompletion(resolvedPda);
       if (!ready) {
-        const result: GameCompletionResult = { success: false, notReady: true };
-        onResult?.(result);
-        this.options.metrics.recordCompletion({
-          gameAddress,
-          outcome: "not-ready",
-        });
-        return result;
+        return this.recordNotReady(gameAddress, onResult);
       }
     }
 
@@ -92,13 +86,7 @@ export class GameCompletionManager {
     const notReady = skipReadinessCheck ? false : readinessState.notReady;
 
     if (notReady) {
-      const result: GameCompletionResult = { success: false, notReady: true };
-      onResult?.(result);
-      this.options.metrics.recordCompletion({
-        gameAddress,
-        outcome: "not-ready",
-      });
-      return result;
+      return this.recordNotReady(gameAddress, onResult);
     }
 
     const completion = await (hooks.completeGame
@@ -130,6 +118,19 @@ export class GameCompletionManager {
     }
 
     return completion;
+  }
+
+  private recordNotReady(
+    gameAddress: string,
+    onResult?: (result: GameCompletionResult) => void,
+  ): GameCompletionResult {
+    const result: GameCompletionResult = { success: false, notReady: true };
+    onResult?.(result);
+    this.options.metrics.recordCompletion({
+      gameAddress,
+      outcome: "not-ready",
+    });
+    return result;
   }
 
   public async completeGame(
