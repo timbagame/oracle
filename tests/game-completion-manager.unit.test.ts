@@ -1,13 +1,21 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as anchor from "@coral-xyz/anchor";
 import { GameCompletionManager } from "../oracle-completion-manager.ts";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import type { OracleMetrics } from "../metrics.ts";
+import type {
+  GameCompletionResult,
+  GameOnChainContext,
+  GameReadinessSnapshot,
+} from "../oracle-service.types.ts";
+import { logger } from "../logger.ts";
 
 function createManager(overrides: {
   accountInfo?: (pubkey: PublicKey) => Promise<{ owner: PublicKey | null } | null>;
   programId?: PublicKey;
   secretKeyLength?: number;
+  metrics?: Partial<OracleMetrics>;
 } = {}) {
   const secretStore = new Map<string, { secretKey: string; randomHash: string }>();
   const players = new Map<string, string[]>();
@@ -20,11 +28,11 @@ function createManager(overrides: {
     markGameCompleted: () => {},
   } as const;
 
-  const metrics = {
-    recordCompletion: () => {},
-    recordScanCycle: () => {},
-    recordCleanupSweep: () => {},
-  } as const;
+  const metrics: OracleMetrics = {
+    recordCompletion: overrides.metrics?.recordCompletion ?? (() => {}),
+    recordScanCycle: overrides.metrics?.recordScanCycle ?? (() => {}),
+    recordCleanupSweep: overrides.metrics?.recordCleanupSweep ?? (() => {}),
+  };
 
   const connection = {
     getAccountInfo: overrides.accountInfo ?? (async () => ({ owner: TOKEN_PROGRAM_ID })),
@@ -62,7 +70,15 @@ function createManager(overrides: {
     confirmTransaction: async () => {},
   });
 
-  return { manager, readinessCache, tokenProgramCache, secretStore, players, connection };
+  return {
+    manager,
+    readinessCache,
+    tokenProgramCache,
+    secretStore,
+    players,
+    connection,
+    metrics,
+  };
 }
 
 describe("GameCompletionManager.calculateWinnerIndex", () => {
@@ -158,5 +174,125 @@ describe("GameCompletionManager.resolveTokenProgram", () => {
     await expect(
       manager.resolveTokenProgram(PublicKey.default, mint)
     ).rejects.toThrow(`Unsupported token program owner ${unsupported.toBase58()}`);
+  });
+});
+
+describe("GameCompletionManager.attemptGameCompletion outcome handling", () => {
+  it("records not ready outcomes via the shared helper", async () => {
+    const records: Array<{ gameAddress: string; outcome: string; error?: string }> = [];
+    const { manager } = createManager({
+      metrics: {
+        recordCompletion: (record) => {
+          records.push(record);
+        },
+      },
+    });
+
+    const readinessSpy = spyOn(manager as any, "resolveContextAndReadiness").mockResolvedValue({
+      context: null,
+      readiness: undefined,
+      notReady: true,
+    });
+
+    const onResults: GameCompletionResult[] = [];
+    try {
+      const result = await manager.attemptGameCompletion({
+        gameAddress: "not-ready-game",
+        gameKey: Keypair.generate().publicKey,
+        onResult: (outcome) => {
+          onResults.push(outcome);
+        },
+      });
+
+      expect(result).toEqual({ success: false, notReady: true });
+      expect(onResults).toHaveLength(1);
+      expect(records).toEqual([
+        { gameAddress: "not-ready-game", outcome: "not-ready", error: undefined },
+      ]);
+    } finally {
+      readinessSpy.mockRestore();
+    }
+  });
+
+  it("logs success and failure outcomes once completion resolves", async () => {
+    const records: Array<{ gameAddress: string; outcome: string; error?: string }> = [];
+    const { manager } = createManager({
+      metrics: {
+        recordCompletion: (record) => {
+          records.push(record);
+        },
+      },
+    });
+
+    const readiness: GameReadinessSnapshot = { ready: true, gameAccount: {} as any };
+    const context: GameOnChainContext = {
+      gamePda: Keypair.generate().publicKey,
+      secretData: { secretKey: "11".repeat(32), randomHash: "22".repeat(32) },
+      randomHashBuffer: Buffer.alloc(32),
+    };
+
+    const resolveSpy = spyOn(manager as any, "resolveContextAndReadiness").mockResolvedValue({
+      context,
+      readiness,
+      notReady: false,
+    });
+
+    const infoSpy = spyOn(logger, "info").mockImplementation(() => {});
+    const errorSpy = spyOn(logger, "error").mockImplementation(() => {});
+
+    const results: GameCompletionResult[] = [];
+
+    const successLog = (address: string) => `success:${address}`;
+    const failureLog = (address: string, error?: string) => `failure:${address}:${error ?? ""}`;
+
+    try {
+      const success = await manager.attemptGameCompletion(
+        {
+          gameAddress: "success-game",
+          gameKey: Keypair.generate().publicKey,
+          onResult: (outcome) => {
+            results.push(outcome);
+          },
+          successLog,
+          failureLog,
+        },
+        {
+          completeGame: async () => ({ success: true, txHash: "tx-ok" }),
+        },
+      );
+
+      expect(success).toEqual({ success: true, txHash: "tx-ok" });
+      expect(infoSpy).toHaveBeenCalledWith("success:success-game");
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      const failure = await manager.attemptGameCompletion(
+        {
+          gameAddress: "failure-game",
+          gameKey: Keypair.generate().publicKey,
+          onResult: (outcome) => {
+            results.push(outcome);
+          },
+          successLog,
+          failureLog,
+        },
+        {
+          completeGame: async () => ({ success: false, error: "boom" }),
+        },
+      );
+
+      expect(failure).toEqual({ success: false, error: "boom" });
+      expect(errorSpy).toHaveBeenCalledWith("failure:failure-game:boom");
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+
+      expect(records).toEqual([
+        { gameAddress: "success-game", outcome: "success", error: undefined },
+        { gameAddress: "failure-game", outcome: "error", error: "boom" },
+      ]);
+      expect(results).toHaveLength(2);
+    } finally {
+      resolveSpy.mockRestore();
+      infoSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 });

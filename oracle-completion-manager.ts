@@ -30,6 +30,12 @@ export interface GameCompletionManagerOptions extends CoreOracleDependencies {
   confirmTransaction: (signature: string) => Promise<void>;
 }
 
+type CompletionCallbacks = {
+  onResult?: (result: GameCompletionResult) => void;
+  successLog?: (gameAddress: string) => string | void;
+  failureLog?: (gameAddress: string, error?: string) => string | void;
+};
+
 export class GameCompletionManager {
   constructor(private readonly options: GameCompletionManagerOptions) {}
 
@@ -68,13 +74,6 @@ export class GameCompletionManager {
       return null;
     }
 
-    if (!skipReadinessCheck) {
-      const ready = await this.isGameReadyForCompletion(resolvedPda);
-      if (!ready) {
-        return this.recordNotReady(gameAddress, onResult);
-      }
-    }
-
     const readinessState = await this.resolveContextAndReadiness(gameAddress, {
       context,
       readiness,
@@ -86,50 +85,59 @@ export class GameCompletionManager {
     const notReady = skipReadinessCheck ? false : readinessState.notReady;
 
     if (notReady) {
-      return this.recordNotReady(gameAddress, onResult);
+      return this.recordNotReady(gameAddress, { onResult });
     }
 
     const completion = await (hooks.completeGame
       ? hooks.completeGame(gameAddress, completionReadiness, completionContext)
       : this.completeGame(gameAddress, completionReadiness, completionContext));
 
-    onResult?.(completion);
+    return this.finalizeCompletionOutcome(
+      gameAddress,
+      completion,
+      { onResult, successLog, failureLog },
+    );
+  }
+
+  private recordNotReady(
+    gameAddress: string,
+    callbacks: Pick<CompletionCallbacks, "onResult"> = {},
+  ): GameCompletionResult {
+    const result: GameCompletionResult = { success: false, notReady: true };
+    return this.finalizeCompletionOutcome(gameAddress, result, callbacks);
+  }
+
+  private finalizeCompletionOutcome(
+    gameAddress: string,
+    result: GameCompletionResult,
+    callbacks: CompletionCallbacks = {},
+  ): GameCompletionResult {
+    const { onResult, successLog, failureLog } = callbacks;
+
+    onResult?.(result);
 
     this.options.metrics.recordCompletion({
       gameAddress,
-      outcome: completion.success
+      outcome: result.success
         ? "success"
-        : completion.notReady
+        : result.notReady
         ? "not-ready"
         : "error",
-      error: completion.error,
+      error: result.error,
     });
 
-    if (completion.success) {
+    if (result.success) {
       const message = successLog?.(gameAddress);
       if (message) {
         logger.info(message);
       }
-    } else if (!completion.notReady) {
-      const message = failureLog?.(gameAddress, completion.error);
+    } else if (!result.notReady) {
+      const message = failureLog?.(gameAddress, result.error);
       if (message) {
         logger.error(message);
       }
     }
 
-    return completion;
-  }
-
-  private recordNotReady(
-    gameAddress: string,
-    onResult?: (result: GameCompletionResult) => void,
-  ): GameCompletionResult {
-    const result: GameCompletionResult = { success: false, notReady: true };
-    onResult?.(result);
-    this.options.metrics.recordCompletion({
-      gameAddress,
-      outcome: "not-ready",
-    });
     return result;
   }
 
@@ -187,30 +195,30 @@ export class GameCompletionManager {
   ):
     | { context: GameOnChainContext; readiness: GameReadinessSnapshot }
     | { error: GameCompletionResult } {
-    if (!state.context) {
-      return {
-        error: this.recordFatalCompletionFailure(
-          gameAddress,
-          this.options.noSecretKeyMessage,
-        ),
-      };
+    const missingContext = this.guardFatalCompletionRequirement(
+      gameAddress,
+      state.context,
+      this.options.noSecretKeyMessage,
+    );
+    if (missingContext) {
+      return { error: missingContext };
     }
 
     if (state.notReady || !state.readiness) {
       return { error: { success: false, notReady: true } };
     }
 
-    if (!state.readiness.gameAccount) {
-      return {
-        error: this.recordFatalCompletionFailure(
-          gameAddress,
-          "On-chain game account unavailable",
-        ),
-      };
+    const missingGameAccount = this.guardFatalCompletionRequirement(
+      gameAddress,
+      state.readiness.gameAccount,
+      "On-chain game account unavailable",
+    );
+    if (missingGameAccount) {
+      return { error: missingGameAccount };
     }
 
     return {
-      context: state.context,
+      context: state.context!,
       readiness: state.readiness,
     };
   }
@@ -230,27 +238,29 @@ export class GameCompletionManager {
     | { error: GameCompletionResult } {
     const { secretData, randomHashBuffer } = context;
 
-    if (!secretData) {
-      return {
-        error: this.recordFatalCompletionFailure(
-          gameAddress,
-          this.options.noSecretKeyMessage,
-        ),
-      };
+    const missingSecret = this.guardFatalCompletionRequirement(
+      gameAddress,
+      secretData,
+      this.options.noSecretKeyMessage,
+    );
+    if (missingSecret) {
+      return { error: missingSecret };
     }
 
     const gameAccount = readiness.gameAccount;
-    if (!gameAccount) {
-      return {
-        error: this.recordFatalCompletionFailure(
-          gameAddress,
-          "On-chain game account unavailable",
-        ),
-      };
+    const missingGameAccount = this.guardFatalCompletionRequirement(
+      gameAddress,
+      gameAccount,
+      "On-chain game account unavailable",
+    );
+    if (missingGameAccount) {
+      return { error: missingGameAccount };
     }
 
+    const resolvedGameAccount = gameAccount!;
+
     const players = this.options.db.getGamePlayers(gameAddress);
-    const expectedEntries = Number(gameAccount.ticketsCount);
+    const expectedEntries = Number(resolvedGameAccount.ticketsCount);
     const playerValidation = this.ensurePlayersInSync(
       gameAddress,
       players,
@@ -260,10 +270,10 @@ export class GameCompletionManager {
       return { error: playerValidation };
     }
 
-    const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
+    const secretKeyBuffer = Buffer.from(secretData!.secretKey, "hex");
     const winnerIndex = this.calculateWinnerIndex(
       secretKeyBuffer,
-      Number(gameAccount.lastSlot),
+      Number(resolvedGameAccount.lastSlot),
       players.length,
     );
     const winnerPlayerAddress = players[winnerIndex];
@@ -280,7 +290,7 @@ export class GameCompletionManager {
     const winnerAddress = new PublicKey(winnerPlayerAddress);
 
     return {
-      gameAccount,
+      gameAccount: resolvedGameAccount,
       winnerAddress,
       winnerIndex,
       randomHashBuffer,
@@ -307,6 +317,18 @@ export class GameCompletionManager {
     error: string,
   ): GameCompletionResult {
     return this.recordCompletionFailure(gameAddress, error, { clearReadiness: true });
+  }
+
+  private guardFatalCompletionRequirement(
+    gameAddress: string,
+    value: unknown,
+    message: string,
+  ): GameCompletionResult | null {
+    if (value === null || value === undefined) {
+      return this.recordFatalCompletionFailure(gameAddress, message);
+    }
+
+    return null;
   }
 
   private ensurePlayersInSync(

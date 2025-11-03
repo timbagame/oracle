@@ -96,28 +96,42 @@ function createResponse(data: unknown, status: number = 200): Response {
   return new Response(body, { status, headers: CORS_HEADERS });
 }
 
+function createServiceResponse({
+  success,
+  status = 200,
+  payload = {},
+}: {
+  success: boolean;
+  status?: number;
+  payload?: Record<string, unknown>;
+}): Response {
+  return createResponse(buildServicePayload({ success, ...payload }), status);
+}
+
 function createHtmlResponse(html: string): Response {
   return new Response(html, { headers: { "Content-Type": "text/html" } });
 }
 
 function createErrorResponse(error: string, status: number = 500): Response {
-  return createResponse(
-    buildServicePayload({
-      success: false,
-      error,
-    }),
-    status
-  );
+  return createServiceResponse({
+    success: false,
+    status,
+    payload: { error },
+  });
 }
 
 function createInternalServerErrorResponse(): Response {
-  return createErrorResponse(INTERNAL_SERVER_ERROR_MESSAGE, 500);
+  return createServiceResponse({
+    success: false,
+    status: 500,
+    payload: { error: INTERNAL_SERVER_ERROR_MESSAGE },
+  });
 }
 
 function createSuccessResponse(
   payload: Record<string, unknown> = {}
 ): Response {
-  return createResponse(buildServicePayload({ success: true, ...payload }));
+  return createServiceResponse({ success: true, payload });
 }
 
 function buildServicePayload(extra: Record<string, unknown> = {}) {
