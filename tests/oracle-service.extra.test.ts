@@ -38,7 +38,6 @@ function createGameAccountStub(
   return {
     creator: overrides.creator ?? Keypair.generate().publicKey,
     tokenMint: overrides.tokenMint ?? Keypair.generate().publicKey,
-    tokenProgram: overrides.tokenProgram ?? TOKEN_PROGRAM_ID,
     ticketsCount: overrides.ticketsCount ?? 1,
     maxTickets: overrides.maxTickets ?? 1,
     minTickets: overrides.minTickets ?? 0,
