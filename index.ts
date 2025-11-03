@@ -9,6 +9,8 @@ const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
 const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = 5000;
 const IS_TEST_ENV = isTestEnvironment();
 const INTERNAL_SERVER_ERROR_MESSAGE = "Internal server error";
+const GAME_TYPE_FIELD = "gameType";
+const MAX_GAME_TYPE_LENGTH = 128;
 
 // CORS headers configuration
 const CORS_HEADERS = {
@@ -200,10 +202,16 @@ export function buildHandlers(oracle: OracleApi) {
         let gameType: string | undefined;
         if (request) {
           const body = await readJsonBody(request);
-          const provided = body ? body["gameType"] : undefined;
+          const provided = body ? body[GAME_TYPE_FIELD] : undefined;
           if (typeof provided === "string") {
             const trimmed = provided.trim();
             if (trimmed.length > 0) {
+              if (trimmed.length > MAX_GAME_TYPE_LENGTH) {
+                return createErrorResponse(
+                  `gameType must be at most ${MAX_GAME_TYPE_LENGTH} characters`,
+                  400,
+                );
+              }
               gameType = trimmed;
             }
           }

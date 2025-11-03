@@ -72,6 +72,26 @@ describe("OracleService", () => {
     expect(db.getGameType(gameAddress)).toBe("coinflip");
   });
 
+  it("removes stored secrets when game tracking fails", () => {
+    const service = OracleService.getInstance();
+    const db = OracleDatabase.getInstance();
+    service.cleanupOldRecords(-1);
+
+    const deleteSpy = spyOn(db, "deleteSecretKey");
+    const trackSpy = spyOn(db, "trackGame").mockImplementation(() => {
+      throw new Error("tracking failed");
+    });
+
+    try {
+      expect(() => service.generateGameSecrets()).toThrow("tracking failed");
+      expect(deleteSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      trackSpy.mockRestore();
+      deleteSpy.mockRestore();
+      service.cleanupOldRecords(-1);
+    }
+  });
+
   it("cleans up records and reports stats", () => {
     const service = OracleService.getInstance();
     service.cleanupOldRecords(-1);

@@ -10,6 +10,7 @@ const SQL_STATEMENTS = Object.freeze({
   insertSecretKey:
     "INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)",
   markSecretKeyUsed: "UPDATE secret_keys SET used = TRUE WHERE game_address = ?",
+  deleteSecretKey: "DELETE FROM secret_keys WHERE game_address = ?",
   upsertGameTracking:
     "INSERT OR REPLACE INTO game_tracking (game_address, status, game_type, last_checked) VALUES (?, ?, ?, ?)",
   updateGameStatus:
@@ -339,6 +340,14 @@ export class OracleDatabase {
     );
   }
 
+  public deleteSecretKey(gameAddress: string): void {
+    this.runStatement(
+      SQL_STATEMENTS.deleteSecretKey,
+      "Failed to delete secret key",
+      gameAddress,
+    );
+  }
+
   public getSecretKey(gameAddress: string): SecretKeyData | null {
     const result = this.queryOne<{ secret_key: string; random_hash: string }>(
       SQL_QUERIES.selectSecretKey,
@@ -512,6 +521,10 @@ export class OracleDatabase {
     deletedGames: number;
     deletedPlayers: number;
   } {
+    if (hoursOld === 0) {
+      return { deletedSecrets: 0, deletedGames: 0, deletedPlayers: 0 };
+    }
+
     try {
       const cutoffTime = Date.now() - hoursOld * 60 * 60 * 1000;
 

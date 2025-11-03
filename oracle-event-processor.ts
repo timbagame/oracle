@@ -4,7 +4,7 @@ import type { OracleDatabase } from "./database.ts";
 import type { TimbaEventMap, TimbaEvent, TimbaPlayerEvent, TimbaGameStatusEvent, TimbaGameInitializedEvent } from "./types/timba.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 import type { EventHandlerConfig } from "./oracle-service.types.ts";
-import { toBase58, resolveNumericLike } from "./solana-utils.ts";
+import { toBase58, resolveNumericLike, coercePublicKey } from "./solana-utils.ts";
 import { logger } from "./logger.ts";
 
 export interface OracleEventProcessorOptions {
@@ -18,6 +18,7 @@ export interface OracleEventProcessorOptions {
 export class OracleEventProcessor {
   private listenerIds: number[] = [];
   private listening = false;
+  private startPromise: Promise<void> | null = null;
 
   constructor(private readonly options: OracleEventProcessorOptions) {}
 
@@ -37,9 +38,29 @@ export class OracleEventProcessor {
       return;
     }
 
+    if (this.startPromise) {
+      await this.startPromise;
+      return;
+    }
+
     logger.info("🎧 Starting event listeners...");
-    this.listenerIds = await this.setupEventListeners();
-    this.listening = true;
+
+    this.startPromise = (async () => {
+      this.listening = true;
+      try {
+        this.listenerIds = await this.setupEventListeners();
+      } catch (error) {
+        this.listening = false;
+        this.listenerIds = [];
+        throw error;
+      }
+    })();
+
+    try {
+      await this.startPromise;
+    } finally {
+      this.startPromise = null;
+    }
   }
 
   public async setupEventListeners(): Promise<number[]> {
@@ -69,6 +90,14 @@ export class OracleEventProcessor {
   }
 
   public async stopListening(): Promise<void> {
+    if (this.startPromise) {
+      try {
+        await this.startPromise;
+      } catch {
+        // ignore errors from a failed startup; stop flow will still clean up
+      }
+    }
+
     if (!this.listening) {
       return;
     }
@@ -100,6 +129,7 @@ export class OracleEventProcessor {
     const validation = this.validateEventData(eventData, eventType, {
       requireTicketIndex: true,
       requirePlayerAddress: action === "joined",
+      requireValidGameAddress: true,
     });
 
     if (!validation.valid) {
@@ -126,7 +156,9 @@ export class OracleEventProcessor {
   ): void {
     const eventData = this.extractEventData(event);
     const eventType = `game ${status}`;
-    const validation = this.validateEventData(eventData, eventType, {});
+    const validation = this.validateEventData(eventData, eventType, {
+      requireValidGameAddress: true,
+    });
 
     if (!validation.valid) {
       logger.warn(validation.message);
@@ -149,7 +181,9 @@ export class OracleEventProcessor {
   public handleGameInitialized(event: TimbaGameInitializedEvent): void {
     const eventData = this.extractEventData(event);
     const eventType = "game initialized";
-    const validation = this.validateEventData(eventData, eventType, {});
+    const validation = this.validateEventData(eventData, eventType, {
+      requireValidGameAddress: true,
+    });
 
     if (!validation.valid) {
       logger.warn(validation.message);
@@ -175,12 +209,23 @@ export class OracleEventProcessor {
   private validateEventData(
     eventData: { gameAddress: string; playerAddress?: string; ticketIndex?: number },
     eventType: string,
-    options: { requireTicketIndex?: boolean; requirePlayerAddress?: boolean } = {}
+    options: {
+      requireTicketIndex?: boolean;
+      requirePlayerAddress?: boolean;
+      requireValidGameAddress?: boolean;
+    } = {}
   ): { valid: boolean; message?: string } {
     if (!eventData.gameAddress) {
       return {
         valid: false,
         message: `⚠️  Missing game address in ${eventType} event`,
+      };
+    }
+
+    if (options.requireValidGameAddress && !coercePublicKey(eventData.gameAddress)) {
+      return {
+        valid: false,
+        message: `⚠️  Invalid game address in ${eventType} event for ${eventData.gameAddress}`,
       };
     }
 

@@ -136,6 +136,37 @@ describe("OracleDatabase", () => {
     });
   });
 
+  it("keeps freshly completed games when cleanup window is zero", () => {
+    const db = OracleDatabase.getInstance();
+    const gameAddress = "fresh-complete";
+
+    db.saveSecretKey(gameAddress, "aa".repeat(32), "bb".repeat(32));
+    db.trackGame(gameAddress);
+    db.markSecretKeyUsed(gameAddress);
+    db.markGameCompleted(gameAddress);
+
+    const sqlite = (db as any).db as {
+      prepare: (
+        sql: string,
+      ) => { get: (...args: unknown[]) => { status?: string } | undefined };
+    };
+
+    const before = sqlite
+      .prepare("SELECT status FROM game_tracking WHERE game_address = ?")
+      .get(gameAddress);
+    expect(before?.status).toBe("completed");
+
+    const summary = db.cleanupOldRecords(0);
+    expect(summary).toEqual({ deletedSecrets: 0, deletedGames: 0, deletedPlayers: 0 });
+
+    const after = sqlite
+      .prepare("SELECT status FROM game_tracking WHERE game_address = ?")
+      .get(gameAddress);
+    expect(after?.status).toBe("completed");
+
+    db.cleanupOldRecords(-1);
+  });
+
   it("returns pending games ordered by last_checked and enforces scan limit", () => {
     const db = OracleDatabase.getInstance();
     const rawDb = (db as any).db as { prepare: (sql: string) => { run: (...args: any[]) => void } };

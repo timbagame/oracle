@@ -229,7 +229,12 @@ export class OracleService {
     const gameAddress = gamePda.toBase58();
 
     this.db.saveSecretKey(gameAddress, secretKey.toString("hex"), randomHash.toString("hex"));
-    this.db.trackGame(gameAddress, options.gameType);
+    try {
+      this.db.trackGame(gameAddress, options.gameType);
+    } catch (error) {
+      this.db.deleteSecretKey(gameAddress);
+      throw error;
+    }
 
     return {
       randomHash: randomHash.toString("hex"),

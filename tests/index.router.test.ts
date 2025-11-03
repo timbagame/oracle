@@ -53,6 +53,38 @@ describe("index router", () => {
     expect((json as any).randomHash).toBe("abc");
   });
 
+  test("POST /generate-hash rejects overly large game type payloads", async () => {
+    const calls: string[] = [];
+    const rejectingContext = await createIndexRouterTestContext("index-router-large", {
+      generateGameSecrets: (options) => {
+        if (options?.gameType) {
+          calls.push(options.gameType);
+        }
+        return { randomHash: "abc", gameAddress: "game123" };
+      },
+    });
+
+    try {
+      const payload = "x".repeat(512);
+      const { response, json } = await executeJsonRequest(
+        rejectingContext.router,
+        "/generate-hash",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameType: payload }),
+        },
+      );
+
+      expect(response.status).toBe(400);
+      expect((json as any).success).toBe(false);
+      expect((json as any).error).toContain("gameType");
+      expect(calls).toHaveLength(0);
+    } finally {
+      rejectingContext.testEnv.cleanup();
+    }
+  });
+
   test("GET /stats returns stats", async () => {
     const { response, json } = await executeJsonRequest(context.router, "/stats", {
       method: "GET",

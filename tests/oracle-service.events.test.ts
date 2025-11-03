@@ -70,6 +70,26 @@ describe("OracleService event handling", () => {
     expect(programStub.removeCalls).toEqual([1, 2, 3, 4, 5]);
   });
 
+  it("deduplicates concurrent listener startups", async () => {
+    const { db } = createDbStub();
+    const programStub = createProgramStub({ asyncRegistration: true });
+    const service = createService(db, programStub);
+
+    await Promise.all([
+      service.startEventListening(),
+      service.startEventListening(),
+    ]);
+
+    expect(programStub.addCalls).toHaveLength(
+      OracleServiceClass.EVENT_HANDLER_CONFIG.length
+    );
+    expect(service.events.getActiveListenerCount()).toBe(
+      OracleServiceClass.EVENT_HANDLER_CONFIG.length
+    );
+
+    await service.stopEventListening();
+  });
+
   it("processes player join and unjoin events", async () => {
     const { db, callLog } = createDbStub();
     const programStub = createProgramStub();
@@ -150,6 +170,28 @@ describe("OracleService event handling", () => {
 
     expect(callLog.addPlayer).toEqual([]);
     expect(callLog.removePlayer).toEqual([]);
+  });
+
+  it("ignores player events with invalid game addresses", async () => {
+    const { db, callLog } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub);
+
+    (service as any).tryAutoComplete = async () => {
+      throw new Error("should not attempt auto-complete");
+    };
+
+    const player = Keypair.generate().publicKey;
+
+    await expect(
+      service.events.handlePlayerEvent("joined", {
+        gameKey: "@@invalid@@",
+        player,
+        ticketIndex: 1,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(callLog.addPlayer).toEqual([]);
   });
 
   it("updates game status in response to events", async () => {
@@ -334,6 +376,9 @@ function createDbStub(): { db: OracleDatabaseStub; callLog: CallLog } {
     addPlayerToGame(game, player, index) {
       callLog.addPlayer.push({ game, player, index });
     },
+    deleteSecretKey(game) {
+      secretKeys.delete(game);
+    },
     removePlayerFromGame(game, index) {
       callLog.removePlayer.push({ game, index });
     },
@@ -390,6 +435,7 @@ type OracleDatabaseStub = Partial<OracleDatabase> & {
   markGameClosed(game: string): void;
   getSecretKey(game: string): { secretKey: string; randomHash: string } | null;
   saveSecretKey(game: string, secretKey: string, randomHash: string): void;
+  deleteSecretKey(game: string): void;
   getPendingGames(maxAttempts?: number): Array<{
     game_address: string;
     completion_attempts: number;
@@ -409,4 +455,3 @@ type OracleDatabaseStub = Partial<OracleDatabase> & {
   markSecretKeyUsed(game: string): void;
   incrementCompletionAttempts(game: string): void;
 };
-
