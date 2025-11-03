@@ -372,7 +372,9 @@ export class GameCompletionManager {
     }
 
     return resolved;
-  }  private async evaluateAndCacheReadiness(
+  }
+
+  private async evaluateAndCacheReadiness(
     gamePda: PublicKey,
     gameAddress: string,
     blockTime?: number,

@@ -113,7 +113,7 @@ class Logger {
   }
 
   public warning(...args: unknown[]): void {
-    this.warn("⚠️ ", ...args);
+    this.warn("⚠️", ...args);
   }
 
   public progress(...args: unknown[]): void {
