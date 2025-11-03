@@ -17,6 +17,7 @@ import {
   type GenerateGameSecretsOptions,
 } from "./oracle-service.types.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
+import { confirmTransaction } from "./solana-utils.ts";
 import type { Timba } from "./idl/idlType.ts";
 import idl from "./idl/idl.json" with { type: "json" };
 
@@ -71,7 +72,7 @@ export class OracleService {
       tokenProgramCache: this.tokenProgramCache,
       secretKeyLength: SECRET_KEY_LENGTH,
       noSecretKeyMessage: NO_SECRET_KEY_MESSAGE,
-      confirmTransaction: (signature) => this.confirmTransaction(signature),
+      confirmTransaction: (signature) => confirmTransaction(this.connection, signature),
     });
 
     this.eventProcessor = new OracleEventProcessor({
@@ -232,75 +233,6 @@ export class OracleService {
     return this.completion.attemptGameCompletion(options, {
       completeGame: completeOverride,
     });
-  }
-
-  public async confirmTransaction(signature: string): Promise<void> {
-    const connection = this.connection as anchor.web3.Connection & {
-      confirmTransaction?: (...args: any[]) => unknown;
-      getLatestBlockhash?: () => Promise<{ blockhash: string; lastValidBlockHeight: number }>;
-    };
-
-    if (this.supportsModernConfirmation(connection)) {
-      await this.confirmTransactionModern(connection, signature);
-      return;
-    }
-
-    if (this.supportsLegacyConfirmation(connection)) {
-      await this.confirmTransactionLegacy(connection, signature);
-      return;
-    }
-
-    throw new Error("Connection does not support transaction confirmation");
-  }
-
-  private supportsModernConfirmation(
-    connection: anchor.web3.Connection & {
-      confirmTransaction?: (...args: any[]) => unknown;
-      getLatestBlockhash?: () => Promise<{ blockhash: string; lastValidBlockHeight: number }>;
-    }
-  ): boolean {
-    return (
-      typeof connection.getLatestBlockhash === "function" &&
-      typeof connection.confirmTransaction === "function"
-    );
-  }
-
-  private supportsLegacyConfirmation(
-    connection: anchor.web3.Connection & {
-      confirmTransaction?: (...args: any[]) => unknown;
-    }
-  ): boolean {
-    return typeof connection.confirmTransaction === "function";
-  }
-
-  private async confirmTransactionModern(
-    connection: anchor.web3.Connection & {
-      confirmTransaction: (...args: any[]) => unknown;
-      getLatestBlockhash: () => Promise<{ blockhash: string; lastValidBlockHeight: number }>;
-    },
-    signature: string
-  ): Promise<void> {
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-    const result = connection.confirmTransaction({
-      signature,
-      blockhash,
-      lastValidBlockHeight,
-    });
-    if (result && typeof (result as PromiseLike<unknown>).then === "function") {
-      await result;
-    }
-  }
-
-  private async confirmTransactionLegacy(
-    connection: anchor.web3.Connection & {
-      confirmTransaction: (...args: any[]) => unknown;
-    },
-    signature: string
-  ): Promise<void> {
-    const legacyResult = connection.confirmTransaction(signature as any);
-    if (legacyResult && typeof (legacyResult as PromiseLike<unknown>).then === "function") {
-      await legacyResult;
-    }
   }
 
   public cleanupOldRecords(hoursOld: number = 48) {

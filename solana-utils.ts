@@ -134,3 +134,45 @@ export function resolveNumericLike(value: unknown): number | undefined {
 
   return undefined;
 }
+
+/**
+ * Confirms a transaction using modern or legacy Solana connection methods.
+ * Handles both getLatestBlockhash + confirmTransaction and legacy confirmTransaction(signature) patterns.
+ */
+export async function confirmTransaction(
+  connection: anchor.web3.Connection,
+  signature: string
+): Promise<void> {
+  const conn = connection as anchor.web3.Connection & {
+    confirmTransaction?: (...args: any[]) => unknown;
+    getLatestBlockhash?: () => Promise<{ blockhash: string; lastValidBlockHeight: number }>;
+  };
+
+  // Modern confirmation (preferred)
+  if (
+    typeof conn.getLatestBlockhash === "function" &&
+    typeof conn.confirmTransaction === "function"
+  ) {
+    const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash();
+    const result = conn.confirmTransaction({
+      signature,
+      blockhash,
+      lastValidBlockHeight,
+    });
+    if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+      await result;
+    }
+    return;
+  }
+
+  // Legacy confirmation fallback
+  if (typeof conn.confirmTransaction === "function") {
+    const legacyResult = conn.confirmTransaction(signature as any);
+    if (legacyResult && typeof (legacyResult as PromiseLike<unknown>).then === "function") {
+      await legacyResult;
+    }
+    return;
+  }
+
+  throw new Error("Connection does not support transaction confirmation");
+}

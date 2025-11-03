@@ -221,15 +221,45 @@ export class OracleDatabase {
     }
   }
 
+  private executeQuery<T>(
+    type: "run" | "get" | "all" | "delete",
+    sql: string,
+    errorMessage: string,
+    params: any[] = [],
+    defaultValue?: T
+  ): T {
+    return this.executeDbOperation(() => {
+      const stmt = this.db.prepare(sql);
+
+      switch (type) {
+        case "run":
+          return stmt.run(...params) as T;
+
+        case "get": {
+          const result = stmt.get(...params) as T;
+          return result || (defaultValue as T);
+        }
+
+        case "all":
+          return stmt.all(...params) as T;
+
+        case "delete": {
+          const result = stmt.run(...params);
+          return (typeof result?.changes === "number" ? result.changes : 0) as T;
+        }
+
+        default:
+          throw new Error(`Unknown query type: ${type}`);
+      }
+    }, errorMessage, defaultValue);
+  }
+
   private runStatement(
     sql: string,
     errorMessage: string,
     ...params: Parameters<ReturnType<Database["prepare"]>["run"]>
   ): ReturnType<ReturnType<Database["prepare"]>["run"]> {
-    return this.executeDbOperation(() => {
-      const stmt = this.db.prepare(sql);
-      return stmt.run(...params);
-    }, errorMessage);
+    return this.executeQuery("run", sql, errorMessage, params);
   }
 
   private runInTransaction<T>(operation: () => T, errorMessage: string): T {
@@ -244,8 +274,7 @@ export class OracleDatabase {
     errorMessage: string,
     ...params: Parameters<ReturnType<Database["prepare"]>["run"]>
   ): number {
-    const result = this.runStatement(sql, errorMessage, ...params);
-    return typeof result?.changes === "number" ? result.changes : 0;
+    return this.executeQuery<number>("delete", sql, errorMessage, params);
   }
 
   private queryOne<T>(
@@ -254,10 +283,7 @@ export class OracleDatabase {
     defaultValue: T | null,
     ...params: Parameters<ReturnType<Database["prepare"]>["get"]>
   ): T | null {
-    return this.executeDbOperation(() => {
-      const stmt = this.db.prepare(sql);
-      return (stmt.get(...params) as T) || defaultValue;
-    }, errorMessage, defaultValue);
+    return this.executeQuery<T | null>("get", sql, errorMessage, params, defaultValue);
   }
 
   private queryAll<T>(
@@ -265,10 +291,7 @@ export class OracleDatabase {
     errorMessage: string,
     ...params: Parameters<ReturnType<Database["prepare"]>["all"]>
   ): T[] {
-    return this.executeDbOperation(() => {
-      const stmt = this.db.prepare(sql);
-      return stmt.all(...params) as T[];
-    }, errorMessage, []);
+    return this.executeQuery<T[]>("all", sql, errorMessage, params, []);
   }
 
   // Secret key management

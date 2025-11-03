@@ -85,7 +85,10 @@ export class OracleEventProcessor {
   ): Promise<void> {
     const eventData = this.extractEventData(event);
 
-    const validation = this.validatePlayerEventData(action, eventData);
+    const validation = this.validateEventData(eventData, `player ${action}`, {
+      requireTicketIndex: true,
+      requirePlayerAddress: action === "joined",
+    });
     if (!validation.valid) {
       console.warn(validation.message);
       return;
@@ -115,7 +118,7 @@ export class OracleEventProcessor {
   ): void {
     const eventData = this.extractEventData(event);
 
-    const validation = this.validateGameAddressData(eventData, `game ${status}`);
+    const validation = this.validateEventData(eventData, `game ${status}`);
     if (!validation.valid) {
       console.warn(validation.message);
       return;
@@ -139,7 +142,7 @@ export class OracleEventProcessor {
   public handleGameInitialized(event: TimbaGameInitializedEvent): void {
     const eventData = this.extractEventData(event);
 
-    const validation = this.validateGameAddressData(eventData, "game initialized");
+    const validation = this.validateEventData(eventData, "game initialized");
     if (!validation.valid) {
       console.warn(validation.message);
       return;
@@ -159,9 +162,10 @@ export class OracleEventProcessor {
     this.options.db.trackGame(gameAddress, gameType);
   }
 
-  private validateGameAddressData(
+  private validateEventData(
     eventData: { gameAddress: string; playerAddress?: string; ticketIndex?: number },
-    eventType: string
+    eventType: string,
+    options: { requireTicketIndex?: boolean; requirePlayerAddress?: boolean } = {}
   ): { valid: boolean; message?: string } {
     if (!eventData.gameAddress) {
       return {
@@ -169,29 +173,18 @@ export class OracleEventProcessor {
         message: `⚠️  Missing game address in ${eventType} event`,
       };
     }
-    return { valid: true };
-  }
 
-  private validatePlayerEventData(
-    action: "joined" | "unjoined",
-    eventData: { gameAddress: string; playerAddress?: string; ticketIndex?: number }
-  ): { valid: boolean; message?: string } {
-    const baseValidation = this.validateGameAddressData(eventData, `player ${action}`);
-    if (!baseValidation.valid) {
-      return baseValidation;
-    }
-
-    if (eventData.ticketIndex === undefined) {
+    if (options.requireTicketIndex && eventData.ticketIndex === undefined) {
       return {
         valid: false,
-        message: `⚠️  Missing ticket index in ${action} event for ${eventData.gameAddress}`,
+        message: `⚠️  Missing ticket index in ${eventType} event for ${eventData.gameAddress}`,
       };
     }
 
-    if (action === "joined" && !eventData.playerAddress) {
+    if (options.requirePlayerAddress && !eventData.playerAddress) {
       return {
         valid: false,
-        message: `⚠️  Missing player address in join event for ${eventData.gameAddress}`,
+        message: `⚠️  Missing player address in ${eventType} event for ${eventData.gameAddress}`,
       };
     }
 

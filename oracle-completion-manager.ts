@@ -511,44 +511,20 @@ export class GameCompletionManager {
   ): Promise<PublicKey> {
     const cacheKey = tokenMint.toBase58();
 
-    const directProgram = this.getCachedOrDirectTokenProgram(tokenProgram, cacheKey);
-    if (directProgram) {
-      return directProgram;
-    }
-
-    return await this.fetchTokenProgramOwner(tokenMint, cacheKey);
-  }
-
-  private getCachedOrDirectTokenProgram(
-    tokenProgram: PublicKeyLike,
-    cacheKey: string,
-  ): PublicKey | null {
-    const directProgram = this.getDirectTokenProgram(tokenProgram, cacheKey);
-    if (directProgram) {
-      return directProgram;
-    }
-
-    return this.options.tokenProgramCache.get(cacheKey) || null;
-  }
-
-  private getDirectTokenProgram(
-    tokenProgram: PublicKeyLike,
-    cacheKey: string,
-  ): PublicKey | null {
+    // Try direct program ID first
     const directProgram = coercePublicKey(tokenProgram);
-
     if (directProgram && !directProgram.equals(PublicKey.default)) {
       this.options.tokenProgramCache.set(cacheKey, directProgram);
       return directProgram;
     }
 
-    return null;
-  }
+    // Check cache
+    const cached = this.options.tokenProgramCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
 
-  private async fetchTokenProgramOwner(
-    tokenMint: PublicKey,
-    cacheKey: string,
-  ): Promise<PublicKey> {
+    // Fetch from chain
     try {
       const connection = this.options.getConnection();
       const mintAccount = await connection.getAccountInfo(tokenMint);
@@ -559,7 +535,10 @@ export class GameCompletionManager {
       return resolved;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logTokenProgramError(tokenMint, message);
+      console.warn(
+        `⚠️  Unable to resolve token program for mint ${tokenMint.toBase58()}:`,
+        message,
+      );
       throw new Error(
         `Unable to resolve token program for mint ${tokenMint.toBase58()}: ${message}`,
         {
@@ -585,13 +564,6 @@ export class GameCompletionManager {
       owner
         ? `Unsupported token program owner ${owner.toBase58()}`
         : `Mint ${tokenMint.toBase58()} is missing an owner`,
-    );
-  }
-
-  private logTokenProgramError(tokenMint: PublicKey, message: string): void {
-    console.warn(
-      `⚠️  Unable to resolve token program for mint ${tokenMint.toBase58()}:`,
-      message,
     );
   }
 
