@@ -93,18 +93,22 @@ describe("OracleService", () => {
     service.cleanupOldRecords(-1);
     const { gameAddress } = service.generateGameSecrets();
 
-    const resolved: any = (service as any).resolveStoredGame(gameAddress);
+    const resolved: any = service.completionManager.resolveStoredGame(gameAddress);
     expect(resolved?.gamePda.toBase58()).toBe(gameAddress);
     expect(resolved?.randomHashBuffer).toBeInstanceOf(Buffer);
 
     const fakeAddress = Keypair.generate().publicKey.toBase58();
-    expect((service as any).resolveStoredGame(fakeAddress)).toBeNull();
-    expect(() => (service as any).resolveStoredGame(fakeAddress, { throwIfMissing: true })).toThrow();
+    expect(service.completionManager.resolveStoredGame(fakeAddress)).toBeNull();
+    expect(() =>
+      service.completionManager.resolveStoredGame(fakeAddress, { throwIfMissing: true })
+    ).toThrow();
   });
 
   it("identifies account not found errors", () => {
     const service = OracleService.getInstance();
-    const check = (service as any).isAccountNotFoundError.bind(service);
+    const check = service.completionManager.isAccountNotFoundError.bind(
+      service.completionManager
+    );
     expect(check({ message: "Account does not exist" })).toBe(true);
     expect(check({ message: "Something else" })).toBe(false);
   });
@@ -112,21 +116,25 @@ describe("OracleService", () => {
   it("computes deterministic winner index", () => {
     const service = OracleService.getInstance();
     const secret = Buffer.alloc(32, 1);
-    const winner = (service as any).calculateWinnerIndex(secret, 123456, 100);
+    const winner = service.completionManager.calculateWinnerIndex(secret, 123456, 100);
     expect(winner).toBe(2);
-    const single = (service as any).calculateWinnerIndex(secret, 123456, 1);
+    const single = service.completionManager.calculateWinnerIndex(secret, 123456, 1);
     expect(single).toBe(0);
     expect(() =>
-      (service as any).calculateWinnerIndex(Buffer.alloc(16, 1), 123456, 2)
+      service.completionManager.calculateWinnerIndex(
+        Buffer.alloc(16, 1),
+        123456,
+        2
+      )
     ).toThrow("Secret key buffer must be at least 32 bytes");
   });
 
   it("updates scan statistics correctly", () => {
     const service = OracleService.getInstance();
     const stats = { completed: 0, errors: 0, notReady: 0 };
-    (service as any).updateScanStats(stats, { success: true });
-    (service as any).updateScanStats(stats, { success: false, notReady: true });
-    (service as any).updateScanStats(stats, { success: false });
+    service.scanRunner.updateScanStats(stats, { success: true });
+    service.scanRunner.updateScanStats(stats, { success: false, notReady: true });
+    service.scanRunner.updateScanStats(stats, { success: false });
     expect(stats).toEqual({ completed: 1, errors: 1, notReady: 1 });
   });
 
@@ -135,7 +143,7 @@ describe("OracleService", () => {
     const db = OracleDatabase.getInstance();
     resetPendingGames(db, { service });
 
-    const stats = await service.scanAndCompleteActiveGames();
+    const stats = await service.scanRunner.scanAndCompleteActiveGames();
     expect(stats).toEqual({ completed: 0, errors: 0, notReady: 0 });
   });
 
@@ -172,10 +180,10 @@ describe("OracleService", () => {
       randomHash: "hash",
     });
 
-    const originalResolve = (service as any).resolveContextAndReadiness;
+    const originalResolve = service.completionManager.resolveContextAndReadiness;
     const originalComplete = (service as any).completeGame;
 
-    (service as any).resolveContextAndReadiness = async (addr: string) => {
+    service.completionManager.resolveContextAndReadiness = async (addr: string) => {
       if (addr === "gameGone") {
         return { context: null, readiness: undefined, notReady: false };
       }
@@ -196,14 +204,14 @@ describe("OracleService", () => {
       throw new Error("unexpected game");
     };
 
-    const stats = await service.scanAndCompleteActiveGames();
+    const stats = await service.scanRunner.scanAndCompleteActiveGames();
     expect(stats).toEqual({ completed: 1, errors: 1, notReady: 1 });
 
     // gameGone should be marked completed due to missing on-chain account
     const pending = db.getPendingGames().map((g) => g.game_address);
     expect(pending).not.toContain("gameGone");
 
-    (service as any).resolveContextAndReadiness = originalResolve;
+    service.completionManager.resolveContextAndReadiness = originalResolve;
     (service as any).completeGame = originalComplete;
   });
 
@@ -238,7 +246,10 @@ describe("OracleService", () => {
     const lastCheckedBefore = getLastChecked();
 
     const context = makeFakeContext();
-    const resolveSpy = spyOn(service as any, "resolveContextAndReadiness").mockResolvedValue({
+    const resolveSpy = spyOn(
+      service.completionManager,
+      "resolveContextAndReadiness"
+    ).mockResolvedValue({
       context,
       readiness: context.readiness,
       notReady: true,
@@ -249,7 +260,7 @@ describe("OracleService", () => {
     });
 
     try {
-      const stats = await service.scanAndCompleteActiveGames();
+      const stats = await service.scanRunner.scanAndCompleteActiveGames();
       const lastCheckedAfter = getLastChecked();
 
       expect(stats.notReady).toBeGreaterThan(0);
@@ -280,13 +291,14 @@ describe("OracleService", () => {
       randomHash: "f".repeat(64),
     });
 
-    const originalResolve = (service as any).resolveContextAndReadiness;
+    const originalResolve = service.completionManager.resolveContextAndReadiness;
     const originalComplete = (service as any).completeGame;
 
     const processed: string[] = [];
     let delayCalls = 0;
 
-    (service as any).resolveContextAndReadiness = async () => makeReadyResolution();
+    service.completionManager.resolveContextAndReadiness = async () =>
+      makeReadyResolution();
     (service as any).completeGame = async (addr: string) => {
       processed.push(addr);
       return { success: true };
@@ -296,7 +308,7 @@ describe("OracleService", () => {
     });
 
     try {
-      const stats = await service.scanAndCompleteActiveGames();
+      const stats = await service.scanRunner.scanAndCompleteActiveGames();
       expect(processed).toEqual(["active"]);
       expect(stats).toEqual({ completed: 1, errors: 0, notReady: 0 });
       expect(delayCalls).toBe(0);
@@ -311,7 +323,7 @@ describe("OracleService", () => {
           .some((entry) => entry.game_address === "stubborn")
       ).toBe(false);
     } finally {
-      (service as any).resolveContextAndReadiness = originalResolve;
+      service.completionManager.resolveContextAndReadiness = originalResolve;
       (service as any).completeGame = originalComplete;
       delaySpy.mockRestore();
     }

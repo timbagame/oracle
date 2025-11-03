@@ -101,12 +101,6 @@ export interface EventData {
 export interface OracleEventProcessorDependencies {
   program: { addEventListener: (...args: any[]) => Promise<number>; removeEventListener: (id: number) => Promise<void> };
   config: ReadonlyArray<EventHandlerConfig<keyof TimbaEventMap>>;
-  listenerState: {
-    getListeners: () => number[];
-    setListeners: (ids: number[]) => void;
-    isListening: () => boolean;
-    setListening: (value: boolean) => void;
-  };
   createHandlerContext: () => OracleEventHandlerContext;
 }
 

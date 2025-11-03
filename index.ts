@@ -2,10 +2,9 @@ import "./logging";
 import { delay, DEFAULT_DELAY_MS } from "./delay.ts";
 import { OracleService } from "./oracle-service.ts";
 import { getEnvironmentMode, isTestEnvironment } from "./env.ts";
-import { getConfig } from "./config.ts";
+import { getConfig, DEFAULT_ORACLE_PORT } from "./config.ts";
+import type { CompletionStats } from "./oracle-service.types.ts";
 
-// Constants
-const DEFAULT_PORT = 3001;
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
 const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = 5000;
 const IS_TEST_ENV = isTestEnvironment();
@@ -27,7 +26,7 @@ type HttpMethod = "GET" | "POST";
  */
 
 const CONFIG = getConfig();
-const PORT = CONFIG.oraclePort ?? DEFAULT_PORT;
+const PORT = CONFIG.oraclePort ?? DEFAULT_ORACLE_PORT;
 
 let server: ReturnType<typeof Bun.serve> | undefined;
 let backgroundLoop: Promise<void> | undefined;
@@ -170,15 +169,14 @@ function buildServicePayload(extra: Record<string, unknown> = {}) {
 }
 
 // Handlers factory for clean DI and testing
-export type OracleApi = Pick<
-  OracleService,
-  | "generateGameSecrets"
-  | "getStats"
-  | "scanAndCompleteActiveGames"
-  | "startEventListening"
-  | "stopEventListening"
-  | "cleanupOldRecords"
->;
+export interface OracleApi {
+  generateGameSecrets: OracleService["generateGameSecrets"];
+  getStats: () => ReturnType<OracleService["getStats"]>;
+  scanAndCompleteActiveGames: () => Promise<CompletionStats>;
+  startEventListening: () => ReturnType<OracleService["startEventListening"]>;
+  stopEventListening: () => ReturnType<OracleService["stopEventListening"]>;
+  cleanupOldRecords: OracleService["cleanupOldRecords"];
+}
 
 async function readJsonBody(
   request: Request | undefined
@@ -405,7 +403,15 @@ export function buildFetchRouter(handlers: ReturnType<typeof buildHandlers>) {
 // Main server
 if (!IS_TEST_ENV) {
   const realOracle = OracleService.getInstance();
-  const handlers = buildHandlers(realOracle);
+  const oracleApi: OracleApi = {
+    generateGameSecrets: (options) => realOracle.generateGameSecrets(options),
+    getStats: () => realOracle.getStats(),
+    scanAndCompleteActiveGames: () => realOracle.scanRunner.scanAndCompleteActiveGames(),
+    startEventListening: () => realOracle.startEventListening(),
+    stopEventListening: () => realOracle.stopEventListening(),
+    cleanupOldRecords: (hoursOld) => realOracle.cleanupOldRecords(hoursOld),
+  };
+  const handlers = buildHandlers(oracleApi);
   const fetchRouter = buildFetchRouter(handlers);
   server = Bun.serve({
     port: PORT,
@@ -427,7 +433,7 @@ if (!IS_TEST_ENV) {
         let retryDelayMs: number | undefined;
 
         try {
-          await realOracle.runScanLoop({
+          await realOracle.scanRunner.runScanLoop({
             waitBetweenCyclesMs: FALLBACK_SCAN_INTERVAL,
             waitForPendingOnly: false,
             cleanupAfterCycleHours: 48,
@@ -478,7 +484,7 @@ if (!IS_TEST_ENV) {
       });
   };
 
-  initialize(realOracle)
+  initialize(oracleApi)
     .then(() => {
       startBackgroundTasks();
     })
@@ -488,7 +494,7 @@ if (!IS_TEST_ENV) {
       let stopResult: StopServerResult | undefined;
 
       try {
-        stopResult = await stopServer(realOracle, exitCode);
+        stopResult = await stopServer(oracleApi, exitCode);
       } catch (shutdownError) {
         console.error("❌ Failed to stop server after init error:", shutdownError);
       } finally {
@@ -496,8 +502,8 @@ if (!IS_TEST_ENV) {
       }
     });
 
-  process.once("SIGINT", () => shutdown(realOracle, "SIGINT"));
-  process.once("SIGTERM", () => shutdown(realOracle, "SIGTERM"));
+  process.once("SIGINT", () => shutdown(oracleApi, "SIGINT"));
+  process.once("SIGTERM", () => shutdown(oracleApi, "SIGTERM"));
 }
 
 // Initialize and start services

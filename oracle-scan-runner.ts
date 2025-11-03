@@ -51,7 +51,7 @@ export class ScanLoopRunner {
     const pendingCount = pendingGames.length;
     const scanStart = performance.now();
 
-    if (pendingCount === 0) {
+    const recordCycle = () => {
       this.options.metrics.recordScanCycle({
         durationMs: performance.now() - scanStart,
         completed: stats.completed,
@@ -59,6 +59,10 @@ export class ScanLoopRunner {
         notReady: stats.notReady,
         pending: pendingCount,
       });
+    };
+
+    if (pendingCount === 0) {
+      recordCycle();
       return stats;
     }
 
@@ -123,13 +127,7 @@ export class ScanLoopRunner {
     }
 
     this.logScanResults(stats);
-    this.options.metrics.recordScanCycle({
-      durationMs: performance.now() - scanStart,
-      completed: stats.completed,
-      errors: stats.errors,
-      notReady: stats.notReady,
-      pending: pendingCount,
-    });
+    recordCycle();
     return stats;
   }
 

@@ -11,27 +11,23 @@ export interface OracleEventProcessorOptions {
   db: OracleDatabase;
   tryAutoComplete: (gameKey: PublicKeyLike | undefined, gameAddress: string, trigger: string) => Promise<void>;
   config: ReadonlyArray<EventHandlerConfig<keyof TimbaEventMap>>;
-  listenerState: {
-    getListeners: () => number[];
-    setListeners: (ids: number[]) => void;
-    isListening: () => boolean;
-    setListening: (value: boolean) => void;
-  };
   clearTokenProgramCache: () => void;
 }
 
 export class OracleEventProcessor {
+  private listenerIds: number[] = [];
+  private listening = false;
+
   constructor(private readonly options: OracleEventProcessorOptions) {}
 
   public async startListening(): Promise<void> {
-    if (this.options.listenerState.isListening()) {
+    if (this.listening) {
       return;
     }
 
     console.log("🎧 Starting event listeners...");
-    const listenerIds = await this.setupEventListeners();
-    this.options.listenerState.setListeners(listenerIds);
-    this.options.listenerState.setListening(true);
+    this.listenerIds = await this.setupEventListeners();
+    this.listening = true;
   }
 
   public async setupEventListeners(): Promise<number[]> {
@@ -61,19 +57,26 @@ export class OracleEventProcessor {
   }
 
   public async stopListening(): Promise<void> {
-    if (!this.options.listenerState.isListening()) {
+    if (!this.listening) {
       return;
     }
 
-    const listeners = this.options.listenerState.getListeners();
     const program = this.options.getProgram();
     await Promise.allSettled(
-      listeners.map((listenerId) => program.removeEventListener(listenerId))
+      this.listenerIds.map((listenerId) => program.removeEventListener(listenerId))
     );
 
-    this.options.listenerState.setListeners([]);
-    this.options.listenerState.setListening(false);
+    this.listenerIds = [];
+    this.listening = false;
     this.options.clearTokenProgramCache();
+  }
+
+  public isListening(): boolean {
+    return this.listening;
+  }
+
+  public getActiveListenerCount(): number {
+    return this.listenerIds.length;
   }
 
   public async handlePlayerEvent(

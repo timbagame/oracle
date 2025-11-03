@@ -1,7 +1,7 @@
 import * as path from "path";
 import { getEnvironmentMode, readEnv, shouldUseEphemeralKeypair } from "./env.ts";
 
-const DEFAULT_PORT = 3001;
+export const DEFAULT_ORACLE_PORT = 3001;
 const DEFAULT_DATABASE_FILE = "oracle.sqlite";
 const DEFAULT_KEYPAIR_FILE = "admin-keypair.json";
 
@@ -93,7 +93,7 @@ function loadConfig(): OracleRuntimeConfig {
   const adminKeypairPath = resolvePath(adminKeypairSource);
 
   const oraclePort = parseInteger(readEnv("ORACLE_PORT"), {
-    defaultValue: DEFAULT_PORT,
+    defaultValue: DEFAULT_ORACLE_PORT,
     min: 0,
     max: 65535,
     key: "ORACLE_PORT",
