@@ -81,10 +81,29 @@ export class GameCompletionManager {
       }
     }
 
-    const sharedContext = context ?? undefined;
+    const readinessState = await this.resolveContextAndReadiness(gameAddress, {
+      context,
+      readiness,
+      requireOnChain: !skipReadinessCheck,
+    });
+
+    const completionContext = readinessState.context ?? undefined;
+    const completionReadiness = readinessState.readiness;
+    const notReady = skipReadinessCheck ? false : readinessState.notReady;
+
+    if (notReady) {
+      const result: GameCompletionResult = { success: false, notReady: true };
+      onResult?.(result);
+      this.options.metrics.recordCompletion({
+        gameAddress,
+        outcome: "not-ready",
+      });
+      return result;
+    }
+
     const completion = await (hooks.completeGame
-      ? hooks.completeGame(gameAddress, readiness, sharedContext)
-      : this.completeGame(gameAddress, readiness, sharedContext));
+      ? hooks.completeGame(gameAddress, completionReadiness, completionContext)
+      : this.completeGame(gameAddress, completionReadiness, completionContext));
 
     onResult?.(completion);
 
@@ -119,55 +138,26 @@ export class GameCompletionManager {
     sharedContext?: GameOnChainContext,
   ): Promise<GameCompletionResult> {
     try {
-      const { context, readiness, notReady } = await this.resolveContextAndReadiness(
-        gameAddress,
-        {
-          context: sharedContext ?? null,
-          readiness: cachedReadiness,
-        },
-      );
+      const completionState = await this.resolveContextAndReadiness(gameAddress, {
+        context: sharedContext ?? null,
+        readiness: cachedReadiness,
+        requireOnChain: true,
+      });
 
-      if (!context) {
-        return this.recordFatalCompletionFailure(gameAddress, this.options.noSecretKeyMessage);
+      const validated = this.validateCompletionState(gameAddress, completionState);
+      if ("error" in validated) {
+        return validated.error;
       }
 
-      if (notReady || !readiness) {
-        return { success: false, notReady: true };
+      const { context: resolvedContext, readiness } = validated;
+
+      const winnerDetails = this.resolveWinnerDetails(gameAddress, readiness, resolvedContext);
+      if ("error" in winnerDetails) {
+        return winnerDetails.error;
       }
 
-      const { secretData, randomHashBuffer } = context;
-      const gameAccount = readiness.gameAccount;
-      if (!gameAccount) {
-        return this.recordFatalCompletionFailure(
-          gameAddress,
-          "On-chain game account unavailable",
-        );
-      }
-
-      const players = this.options.db.getGamePlayers(gameAddress);
-      const expectedEntries = Number(gameAccount.ticketsCount);
-      const playerValidation = this.ensurePlayersInSync(
-        gameAddress,
-        players,
-        expectedEntries,
-      );
-      if (playerValidation) {
-        return playerValidation;
-      }
-
-      const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
-      const winnerIndex = this.calculateWinnerIndex(
-        secretKeyBuffer,
-        Number(gameAccount.lastSlot),
-        players.length,
-      );
-      const winnerPlayerAddress = players[winnerIndex];
-
-      if (!winnerPlayerAddress) {
-        return this.recordFatalCompletionFailure(gameAddress, "Unable to determine winner");
-      }
-
-      const winnerAddress = new PublicKey(winnerPlayerAddress);
+      const { gameAccount, winnerAddress, winnerIndex, randomHashBuffer, secretKeyBuffer } =
+        winnerDetails;
 
       const txHash = await this.executeGameCompletion({
         gameAccount,
@@ -184,6 +174,117 @@ export class GameCompletionManager {
       const message = error instanceof Error ? error.message : String(error);
       return this.recordCompletionFailure(gameAddress, message);
     }
+  }
+
+  private validateCompletionState(
+    gameAddress: string,
+    state: {
+      context: GameOnChainContext | null;
+      readiness?: GameReadinessSnapshot;
+      notReady: boolean;
+    },
+  ):
+    | { context: GameOnChainContext; readiness: GameReadinessSnapshot }
+    | { error: GameCompletionResult } {
+    if (!state.context) {
+      return {
+        error: this.recordFatalCompletionFailure(
+          gameAddress,
+          this.options.noSecretKeyMessage,
+        ),
+      };
+    }
+
+    if (state.notReady || !state.readiness) {
+      return { error: { success: false, notReady: true } };
+    }
+
+    if (!state.readiness.gameAccount) {
+      return {
+        error: this.recordFatalCompletionFailure(
+          gameAddress,
+          "On-chain game account unavailable",
+        ),
+      };
+    }
+
+    return {
+      context: state.context,
+      readiness: state.readiness,
+    };
+  }
+
+  private resolveWinnerDetails(
+    gameAddress: string,
+    readiness: GameReadinessSnapshot,
+    context: GameOnChainContext,
+  ):
+    | {
+        gameAccount: TimbaGameAccount;
+        winnerAddress: PublicKey;
+        winnerIndex: number;
+        randomHashBuffer: Buffer;
+        secretKeyBuffer: Buffer;
+      }
+    | { error: GameCompletionResult } {
+    const { secretData, randomHashBuffer } = context;
+
+    if (!secretData) {
+      return {
+        error: this.recordFatalCompletionFailure(
+          gameAddress,
+          this.options.noSecretKeyMessage,
+        ),
+      };
+    }
+
+    const gameAccount = readiness.gameAccount;
+    if (!gameAccount) {
+      return {
+        error: this.recordFatalCompletionFailure(
+          gameAddress,
+          "On-chain game account unavailable",
+        ),
+      };
+    }
+
+    const players = this.options.db.getGamePlayers(gameAddress);
+    const expectedEntries = Number(gameAccount.ticketsCount);
+    const playerValidation = this.ensurePlayersInSync(
+      gameAddress,
+      players,
+      expectedEntries,
+    );
+    if (playerValidation) {
+      return { error: playerValidation };
+    }
+
+    const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
+    const winnerIndex = this.calculateWinnerIndex(
+      secretKeyBuffer,
+      Number(gameAccount.lastSlot),
+      players.length,
+    );
+    const winnerPlayerAddress = players[winnerIndex];
+
+    if (!winnerPlayerAddress) {
+      return {
+        error: this.recordFatalCompletionFailure(
+          gameAddress,
+          "Unable to determine winner",
+        ),
+      };
+    }
+
+    const winnerAddress = new PublicKey(winnerPlayerAddress);
+
+    return {
+      gameAccount,
+      winnerAddress,
+      winnerIndex,
+      randomHashBuffer,
+      secretKeyBuffer,
+    };
   }
 
   private recordCompletionFailure(

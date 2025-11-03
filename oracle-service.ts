@@ -56,49 +56,16 @@ export class OracleService {
     this.config = getConfig();
     this.db = db ?? OracleDatabase.getInstance();
     this.metrics = metrics ?? getOracleMetrics();
-    this.connection = this.initializeConnection();
+    this.connection = this.initConnection();
     this.adminKeypair = this.loadAdminKeypair();
-    this.program = this.initializeProgram();
+    this.program = this.initProgram();
     this.interGameDelayMs = this.config.scanThrottleMs;
     this.readinessCache = new Map();
     this.tokenProgramCache = new Map();
 
-    this.completion = new GameCompletionManager({
-      db: this.db,
-      metrics: this.metrics,
-      getConnection: () => this.connection,
-      getProgram: () => this.program,
-      adminKeypair: this.adminKeypair,
-      readinessCache: this.readinessCache,
-      tokenProgramCache: this.tokenProgramCache,
-      secretKeyLength: SECRET_KEY_LENGTH,
-      noSecretKeyMessage: NO_SECRET_KEY_MESSAGE,
-      confirmTransaction: (signature) => confirmTransaction(this.connection, signature),
-    });
-
-    this.eventProcessor = new OracleEventProcessor({
-      getProgram: () => this.program,
-      db: this.db,
-      tryAutoComplete: (gameKey, gameAddress, trigger) =>
-        this.tryAutoComplete(gameKey ?? this.ensureGameKey(gameAddress), gameAddress, trigger),
-      config: EVENT_HANDLER_CONFIG,
-      clearTokenProgramCache: () => this.completion.clearTokenProgramCache(),
-    });
-
-    this.scanner = new ScanLoopRunner({
-      db: this.db,
-      metrics: this.metrics,
-      completion: {
-        resolveContextAndReadiness: (address, options) =>
-          this.completion.resolveContextAndReadiness(address, options),
-        attemptGameCompletion: (options) => this.attemptGameCompletion(options),
-        consumeReadiness: (address) => this.completion.consumeReadiness(address),
-        getBlockchainTime: () => this.completion.getBlockchainTime(),
-      },
-      interGameDelayMs: this.interGameDelayMs,
-      maxCompletionAttempts: MAX_COMPLETION_ATTEMPTS,
-      cleanupOldRecords: (hours) => this.cleanupOldRecords(hours),
-    });
+    this.completion = this.initCompletion();
+    this.eventProcessor = this.initEventProcessor();
+    this.scanner = this.initScanner();
   }
 
   public static getInstance(): OracleService {
@@ -115,8 +82,51 @@ export class OracleService {
     return new OracleService(db, options.metrics);
   }
 
-  private initializeConnection(): anchor.web3.Connection {
+  private initConnection(): anchor.web3.Connection {
     return new anchor.web3.Connection(this.config.solanaNetwork, "confirmed");
+  }
+
+  private initCompletion(): GameCompletionManager {
+    return new GameCompletionManager({
+      db: this.db,
+      metrics: this.metrics,
+      getConnection: () => this.connection,
+      getProgram: () => this.program,
+      adminKeypair: this.adminKeypair,
+      readinessCache: this.readinessCache,
+      tokenProgramCache: this.tokenProgramCache,
+      secretKeyLength: SECRET_KEY_LENGTH,
+      noSecretKeyMessage: NO_SECRET_KEY_MESSAGE,
+      confirmTransaction: (signature) => confirmTransaction(this.connection, signature),
+    });
+  }
+
+  private initEventProcessor(): OracleEventProcessor {
+    return new OracleEventProcessor({
+      getProgram: () => this.program,
+      db: this.db,
+      tryAutoComplete: (gameKey, gameAddress, trigger) =>
+        this.tryAutoComplete(gameKey ?? this.ensureGameKey(gameAddress), gameAddress, trigger),
+      config: EVENT_HANDLER_CONFIG,
+      clearTokenProgramCache: () => this.completion.clearTokenProgramCache(),
+    });
+  }
+
+  private initScanner(): ScanLoopRunner {
+    return new ScanLoopRunner({
+      db: this.db,
+      metrics: this.metrics,
+      completion: {
+        resolveContextAndReadiness: (address, options) =>
+          this.completion.resolveContextAndReadiness(address, options),
+        attemptGameCompletion: (options) => this.attemptGameCompletion(options),
+        consumeReadiness: (address) => this.completion.consumeReadiness(address),
+        getBlockchainTime: () => this.completion.getBlockchainTime(),
+      },
+      interGameDelayMs: this.interGameDelayMs,
+      maxCompletionAttempts: MAX_COMPLETION_ATTEMPTS,
+      cleanupOldRecords: (hours) => this.cleanupOldRecords(hours),
+    });
   }
 
   private loadAdminKeypair(): anchor.web3.Keypair {
@@ -183,7 +193,7 @@ export class OracleService {
     logger.failure(`Failed to load admin keypair from ${path}:`, message);
   }
 
-  private initializeProgram(): anchor.Program<Timba> {
+  private initProgram(): anchor.Program<Timba> {
     const adminWallet = new anchor.Wallet(this.adminKeypair);
     const provider = new anchor.AnchorProvider(
       this.connection,

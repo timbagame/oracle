@@ -24,6 +24,25 @@ const SQL_STATEMENTS = Object.freeze({
     "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?",
 } satisfies Record<string, string>);
 
+const SQL_QUERIES = Object.freeze({
+  selectSecretKey:
+    "SELECT secret_key, random_hash FROM secret_keys WHERE game_address = ? AND used = FALSE",
+  selectGameType: "SELECT game_type FROM game_tracking WHERE game_address = ?",
+  selectPendingGames:
+    "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?",
+  selectPendingGamesWithAttempts:
+    "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND completion_attempts < ? ORDER BY last_checked ASC LIMIT ?",
+  selectSecretsStats:
+    "SELECT COUNT(*) as total, SUM(CASE WHEN used = TRUE THEN 1 ELSE 0 END) as used FROM secret_keys",
+  selectGamesStats: `SELECT
+        SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as pending,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled
+      FROM game_tracking`,
+  selectPlayersForGame:
+    "SELECT player_address FROM game_players WHERE game_address = ? ORDER BY ticket_index ASC",
+} satisfies Record<string, string>);
+
 function getDatabaseFile(): string {
   return getConfig().databaseFile;
 }
@@ -312,7 +331,7 @@ export class OracleDatabase {
 
   public getSecretKey(gameAddress: string): SecretKeyData | null {
     const result = this.queryOne<{ secret_key: string; random_hash: string }>(
-      "SELECT secret_key, random_hash FROM secret_keys WHERE game_address = ? AND used = FALSE",
+      SQL_QUERIES.selectSecretKey,
       "Failed to get secret key",
       null,
       gameAddress
@@ -348,7 +367,7 @@ export class OracleDatabase {
 
   public getGameType(gameAddress: string): string | null {
     const result = this.queryOne<{ game_type: string | null }>(
-      "SELECT game_type FROM game_tracking WHERE game_address = ?",
+      SQL_QUERIES.selectGameType,
       "Failed to get game type",
       null,
       gameAddress
@@ -416,7 +435,7 @@ export class OracleDatabase {
   public getPendingGames(maxAttempts?: number): PendingGame[] {
     if (maxAttempts !== undefined && Number.isFinite(maxAttempts)) {
       return this.queryAll<PendingGame>(
-        "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND completion_attempts < ? ORDER BY last_checked ASC LIMIT ?",
+        SQL_QUERIES.selectPendingGamesWithAttempts,
         "Failed to get pending games",
         DEFAULT_STATUS,
         maxAttempts,
@@ -425,7 +444,7 @@ export class OracleDatabase {
     }
 
     return this.queryAll<PendingGame>(
-      "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?",
+      SQL_QUERIES.selectPendingGames,
       "Failed to get pending games",
       DEFAULT_STATUS,
       PENDING_SCAN_LIMIT
@@ -454,7 +473,7 @@ export class OracleDatabase {
 
   private getSecretsStats(): { total: number; used: number } {
     return this.queryOne<{ total: number; used: number }>(
-      "SELECT COUNT(*) as total, SUM(CASE WHEN used = TRUE THEN 1 ELSE 0 END) as used FROM secret_keys",
+      SQL_QUERIES.selectSecretsStats,
       "Failed to get secrets stats",
       { total: 0, used: 0 }
     ) || { total: 0, used: 0 };
@@ -470,11 +489,7 @@ export class OracleDatabase {
       completed: number;
       cancelled: number;
     }>(
-      `SELECT
-        SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as pending,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-        SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled
-      FROM game_tracking`,
+      SQL_QUERIES.selectGamesStats,
       "Failed to get games stats",
       { pending: 0, completed: 0, cancelled: 0 },
       DEFAULT_STATUS
@@ -600,7 +615,7 @@ export class OracleDatabase {
 
   public getGamePlayers(gameAddress: string): string[] {
     const results = this.queryAll<{ player_address: string }>(
-      "SELECT player_address FROM game_players WHERE game_address = ? ORDER BY ticket_index ASC",
+      SQL_QUERIES.selectPlayersForGame,
       "Failed to get game players",
       gameAddress
     );
