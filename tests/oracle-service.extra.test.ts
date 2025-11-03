@@ -1034,11 +1034,29 @@ describe("OracleService internals", () => {
   it("tryAutoComplete skips completion when readiness checks fail", async () => {
     const service = OracleService.createWith(OracleDatabase.getInstance());
     const completion = service.completionManager;
-    const originalReady = completion.isGameReadyForCompletion;
     const originalComplete = (service as any).completeGame;
 
     let completions = 0;
-    completion.isGameReadyForCompletion = async () => false;
+    const readyGameAccount = createGameAccountStub();
+    const readyContext = {
+      gamePda: new PublicKey(Keypair.generate().publicKey.toBytes()),
+      secretData: {
+        secretKey: "aa".repeat(32),
+        randomHash: "bb".repeat(32),
+      },
+      randomHashBuffer: Buffer.alloc(32),
+    };
+    const resolveSpy = spyOn(completion, "resolveContextAndReadiness")
+      .mockResolvedValueOnce({
+        context: null,
+        readiness: undefined,
+        notReady: true,
+      })
+      .mockResolvedValueOnce({
+        context: readyContext,
+        readiness: { ready: true, gameAccount: readyGameAccount },
+        notReady: false,
+      });
     (service as any).completeGame = async () => {
       completions++;
       return { success: true };
@@ -1050,11 +1068,10 @@ describe("OracleService internals", () => {
       await (service as any).tryAutoComplete(gamePda, "guarded-game", "joined");
       expect(completions).toBe(0);
 
-      completion.isGameReadyForCompletion = async () => true;
       await (service as any).tryAutoComplete(gamePda, "guarded-game", "joined");
       expect(completions).toBe(1);
     } finally {
-      completion.isGameReadyForCompletion = originalReady;
+      resolveSpy.mockRestore();
       (service as any).completeGame = originalComplete;
     }
   });

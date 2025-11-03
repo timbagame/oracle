@@ -266,18 +266,10 @@ export class OracleService {
   private async attemptGameCompletion(
     options: AttemptGameCompletionOptions,
   ): Promise<GameCompletionResult | null> {
-    const completeOverride =
-      this.completeGame === OracleService.prototype.completeGame
-        ? undefined
-        : (gameAddress: string, readiness?: GameReadinessSnapshot, sharedContext?: GameOnChainContext) =>
-            (this.completeGame as (
-              address: string,
-              readiness?: GameReadinessSnapshot,
-              context?: GameOnChainContext,
-            ) => Promise<GameCompletionResult>)(gameAddress, readiness, sharedContext);
+    const complete = this.completeGame.bind(this);
 
     return this.completion.attemptGameCompletion(options, {
-      completeGame: completeOverride,
+      completeGame: complete,
     });
   }
 
