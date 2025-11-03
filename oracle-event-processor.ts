@@ -21,28 +21,15 @@ export class OracleEventProcessor {
 
   constructor(private readonly options: OracleEventProcessorOptions) {}
 
-  /**
-   * Generic wrapper for event validation and error handling
-   */
-  private withEventValidation<T>(
-    eventData: { gameAddress: string; playerAddress?: string; ticketIndex?: number },
+  private async runEventMutation(
     eventType: string,
-    validationOptions: { requireTicketIndex?: boolean; requirePlayerAddress?: boolean },
-    handler: () => T | Promise<T>,
+    handler: () => void | Promise<void>,
   ): Promise<void> {
-    return (async () => {
-      const validation = this.validateEventData(eventData, eventType, validationOptions);
-      if (!validation.valid) {
-        logger.warn(validation.message);
-        return;
-      }
-
-      try {
-        await handler();
-      } catch (error) {
-        logger.failure(`Error in ${eventType} event:`, error);
-      }
-    })();
+    try {
+      await handler();
+    } catch (error) {
+      logger.failure(`Error in ${eventType} event:`, error);
+    }
   }
 
   public async startListening(): Promise<void> {
@@ -106,56 +93,72 @@ export class OracleEventProcessor {
 
   public async handlePlayerEvent(
     action: "joined" | "unjoined",
-    event: TimbaPlayerEvent
+    event: TimbaPlayerEvent,
   ): Promise<void> {
     const eventData = this.extractEventData(event);
+    const eventType = `player ${action}`;
+    const validation = this.validateEventData(eventData, eventType, {
+      requireTicketIndex: true,
+      requirePlayerAddress: action === "joined",
+    });
 
-    await this.withEventValidation(
-      eventData,
-      `player ${action}`,
-      { requireTicketIndex: true, requirePlayerAddress: action === "joined" },
-      async () => {
-        const { gameAddress, playerAddress, ticketIndex } = eventData;
+    if (!validation.valid) {
+      logger.warn(validation.message);
+      return;
+    }
 
-        switch (action) {
-          case "joined":
-            this.options.db.addPlayerToGame(gameAddress, playerAddress!, ticketIndex!);
-            break;
-          case "unjoined":
-            this.options.db.removePlayerFromGame(gameAddress, ticketIndex!);
-            break;
-        }
+    const { gameAddress, playerAddress, ticketIndex } = eventData;
 
-        await this.options.tryAutoComplete(event.gameKey, gameAddress, action);
-      },
-    );
+    await this.runEventMutation(eventType, async () => {
+      if (action === "joined") {
+        this.options.db.addPlayerToGame(gameAddress, playerAddress!, ticketIndex!);
+      } else {
+        this.options.db.removePlayerFromGame(gameAddress, ticketIndex!);
+      }
+
+      await this.options.tryAutoComplete(event.gameKey, gameAddress, action);
+    });
   }
 
   public handleGameStatusChange(
     status: "completed" | "closed",
-    event: TimbaGameStatusEvent
+    event: TimbaGameStatusEvent,
   ): void {
     const eventData = this.extractEventData(event);
+    const eventType = `game ${status}`;
+    const validation = this.validateEventData(eventData, eventType, {});
 
-    this.withEventValidation(eventData, `game ${status}`, {}, () => {
-      const { gameAddress } = eventData;
+    if (!validation.valid) {
+      logger.warn(validation.message);
+      return;
+    }
 
+    const { gameAddress } = eventData;
+    void this.runEventMutation(eventType, async () => {
       if (status === "completed") {
         this.options.db.markGameCompleted(gameAddress);
-      } else {
-        this.options.db.markGameClosed(gameAddress);
-        this.options.db.clearStalePlayersForGame(gameAddress);
-        logger.info(`🚫 Game closed: ${gameAddress}`);
+        return;
       }
+
+      this.options.db.markGameClosed(gameAddress);
+      this.options.db.clearStalePlayersForGame(gameAddress);
+      logger.info(`🚫 Game closed: ${gameAddress}`);
     });
   }
 
   public handleGameInitialized(event: TimbaGameInitializedEvent): void {
     const eventData = this.extractEventData(event);
+    const eventType = "game initialized";
+    const validation = this.validateEventData(eventData, eventType, {});
 
-    this.withEventValidation(eventData, "game initialized", {}, () => {
-      const { gameAddress } = eventData;
+    if (!validation.valid) {
+      logger.warn(validation.message);
+      return;
+    }
 
+    const { gameAddress } = eventData;
+
+    void this.runEventMutation(eventType, () => {
       let gameType: string | undefined = undefined;
       if (event.gameType) {
         const gameTypeKeys = Object.keys(event.gameType);

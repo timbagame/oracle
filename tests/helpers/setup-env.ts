@@ -1,5 +1,6 @@
 import { createTempDatabaseFile, type TempDatabaseFile } from "./test-db.ts";
 import { resetConfigForTesting } from "../../config.ts";
+import { setOracleEnvironment } from "../../env.ts";
 
 type SingletonModule = { [key: string]: unknown } | Function;
 
@@ -42,7 +43,6 @@ export function setupTestEnvironment(options: SetupOptions = {}): SetupResult {
   const tempDb = createTempDatabaseFile(options.prefix ?? "test-db");
   const additionalEnv = { ...options.env };
   const registeredSingletons = new Set<SingletonModule>();
-  const originalEnv = new Map<string, string | undefined>();
   let cleanedUp = false;
 
   const nodeEnv = additionalEnv["NODE_ENV"] ?? "test";
@@ -52,21 +52,12 @@ export function setupTestEnvironment(options: SetupOptions = {}): SetupResult {
     additionalEnv["SOLANA_NETWORK"] ?? process.env["SOLANA_NETWORK"] ?? "http://localhost";
   delete additionalEnv["SOLANA_NETWORK"];
 
-  const envUpdates: Record<string, string | undefined> = {
-    NODE_ENV: nodeEnv,
-    SOLANA_NETWORK: solanaNetwork,
-    DATABASE_FILE: tempDb.path,
-    ...additionalEnv,
-  };
-
-  for (const [key, value] of Object.entries(envUpdates)) {
-    originalEnv.set(key, process.env[key]);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
+  const restoreOracleEnv = setOracleEnvironment({
+    nodeEnv,
+    solanaNetwork,
+    databaseFile: tempDb.path,
+    additional: additionalEnv,
+  });
 
   resetConfigForTesting();
 
@@ -94,15 +85,8 @@ export function setupTestEnvironment(options: SetupOptions = {}): SetupResult {
     resetSingletons();
     tempDb.cleanup();
 
+    restoreOracleEnv();
     resetConfigForTesting();
-
-    for (const [key, value] of originalEnv.entries()) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
   };
 
   return { tempDb, registerSingleton, resetSingletons, cleanup };

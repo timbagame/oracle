@@ -121,31 +121,66 @@ export class OracleService {
 
   private loadAdminKeypair(): anchor.web3.Keypair {
     const { adminKeypairPath, adminKeypairSource, useEphemeralKeypair } = this.config;
-    try {
-      const keypairData = JSON.parse(fs.readFileSync(adminKeypairPath, "utf-8"));
-      const keypair = anchor.web3.Keypair.fromSecretKey(new Uint8Array(keypairData));
-      logger.success(`Loaded admin keypair: ${keypair.publicKey.toBase58()}`);
+    const { keypair, error } = this.readAdminKeypairFromFile(adminKeypairPath);
+
+    if (keypair) {
+      this.logAdminKeypairLoaded(keypair);
       return keypair;
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      const isMissingFile =
-        typeof error === "object" &&
-        error !== null &&
-        (("code" in error && (error as { code?: string }).code === "ENOENT") ||
-          ("message" in error && typeof (error as { message?: unknown }).message === "string" &&
-            (error as { message: string }).message.includes("ENOENT")));
-
-      if (isMissingFile && useEphemeralKeypair) {
-        const keypair = anchor.web3.Keypair.generate();
-        logger.warning(
-          `Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${adminKeypairSource} was not found.`,
-        );
-        return keypair;
-      }
-
-      logger.failure(`Failed to load admin keypair from ${adminKeypairPath}:`, message);
-      throw new Error(`Failed to load admin keypair from ${adminKeypairSource}`);
     }
+
+    if (useEphemeralKeypair && this.isMissingFileError(error)) {
+      return this.createEphemeralAdminKeypair(adminKeypairSource);
+    }
+
+    this.logAdminKeypairFailure(adminKeypairPath, error);
+    throw new Error(`Failed to load admin keypair from ${adminKeypairSource}`);
+  }
+
+  private readAdminKeypairFromFile(
+    path: string,
+  ): { keypair?: anchor.web3.Keypair; error?: unknown } {
+    try {
+      const content = fs.readFileSync(path, "utf-8");
+      const parsed = JSON.parse(content);
+      if (!Array.isArray(parsed)) {
+        throw new Error("Admin keypair file must contain an array of numbers");
+      }
+      const keypair = anchor.web3.Keypair.fromSecretKey(new Uint8Array(parsed));
+      return { keypair };
+    } catch (error: unknown) {
+      return { error };
+    }
+  }
+
+  private isMissingFileError(error: unknown): boolean {
+    if (!error || typeof error !== "object") {
+      return false;
+    }
+
+    const code = "code" in error ? (error as { code?: string }).code : undefined;
+    if (code === "ENOENT") {
+      return true;
+    }
+
+    const message = "message" in error ? (error as { message?: unknown }).message : undefined;
+    return typeof message === "string" && message.includes("ENOENT");
+  }
+
+  private createEphemeralAdminKeypair(missingSource: string): anchor.web3.Keypair {
+    const keypair = anchor.web3.Keypair.generate();
+    logger.warning(
+      `Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${missingSource} was not found.`,
+    );
+    return keypair;
+  }
+
+  private logAdminKeypairLoaded(keypair: anchor.web3.Keypair): void {
+    logger.success(`Loaded admin keypair: ${keypair.publicKey.toBase58()}`);
+  }
+
+  private logAdminKeypairFailure(path: string, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.failure(`Failed to load admin keypair from ${path}:`, message);
   }
 
   private initializeProgram(): anchor.Program<Timba> {

@@ -301,36 +301,57 @@ export class GameCompletionManager {
   ): Promise<GameReadinessSnapshot | null> {
     const { providedReadiness, providedContext, requireOnChain, blockTime } = options;
 
-    let readinessSnapshot = providedReadiness ?? providedContext?.readiness;
-
-    if (readinessSnapshot && requireOnChain && !readinessSnapshot.gameAccount) {
-      readinessSnapshot = undefined;
+    const providedCandidate = this.getProvidedReadinessCandidate(
+      providedReadiness,
+      providedContext,
+      requireOnChain,
+    );
+    if (providedCandidate) {
+      return providedCandidate;
     }
 
-    if (!readinessSnapshot && !requireOnChain) {
-      readinessSnapshot = this.consumeReadiness(gameAddress);
+    const cachedCandidate = this.consumeCachedReadiness(gameAddress, requireOnChain);
+    if (cachedCandidate) {
+      return cachedCandidate;
     }
 
-    if (readinessSnapshot && !requireOnChain) {
-      return readinessSnapshot;
+    const evaluation = await this.evaluateAndCacheReadiness(
+      context.gamePda,
+      gameAddress,
+      blockTime,
+    );
+
+    if (!evaluation.gameAccount && requireOnChain) {
+      logger.warning(`Game ${gameAddress} no longer exists on-chain`);
+      return null;
     }
 
-    if (requireOnChain || !readinessSnapshot) {
-      const evaluation = await this.evaluateAndCacheReadiness(
-        context.gamePda,
-        gameAddress,
-        blockTime,
-      );
+    return evaluation;
+  }
 
-      if (!evaluation.gameAccount && requireOnChain) {
-        logger.warning(`Game ${gameAddress} no longer exists on-chain`);
-        return null;
-      }
-
-      return evaluation;
+  private getProvidedReadinessCandidate(
+    providedReadiness: GameReadinessSnapshot | undefined,
+    providedContext: GameOnChainContext | null | undefined,
+    requireOnChain: boolean,
+  ): GameReadinessSnapshot | undefined {
+    const candidate = providedReadiness ?? providedContext?.readiness;
+    if (!candidate) {
+      return undefined;
     }
+    if (requireOnChain && !candidate.gameAccount) {
+      return undefined;
+    }
+    return candidate;
+  }
 
-    return readinessSnapshot;
+  private consumeCachedReadiness(
+    gameAddress: string,
+    requireOnChain: boolean,
+  ): GameReadinessSnapshot | undefined {
+    if (requireOnChain) {
+      return undefined;
+    }
+    return this.consumeReadiness(gameAddress);
   }
 
   public consumeReadiness(gameAddress: string): GameReadinessSnapshot | undefined {

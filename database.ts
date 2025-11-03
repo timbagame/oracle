@@ -6,6 +6,24 @@ import { logger } from "./logger.ts";
 const DEFAULT_STATUS = "pending";
 const PENDING_SCAN_LIMIT = 50;
 
+const SQL_STATEMENTS = Object.freeze({
+  insertSecretKey:
+    "INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)",
+  markSecretKeyUsed: "UPDATE secret_keys SET used = TRUE WHERE game_address = ?",
+  upsertGameTracking:
+    "INSERT OR REPLACE INTO game_tracking (game_address, status, game_type, last_checked) VALUES (?, ?, ?, ?)",
+  updateGameStatus:
+    "UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?",
+  deleteGamePlayers: "DELETE FROM game_players WHERE game_address = ?",
+  incrementCompletionAttempts:
+    "UPDATE game_tracking SET completion_attempts = completion_attempts + 1, last_checked = ? WHERE game_address = ?",
+  touchPendingGame: "UPDATE game_tracking SET last_checked = ? WHERE game_address = ?",
+  upsertGamePlayer:
+    "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)",
+  deleteGamePlayerByTicket:
+    "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?",
+} satisfies Record<string, string>);
+
 function getDatabaseFile(): string {
   return getConfig().databaseFile;
 }
@@ -280,15 +298,15 @@ export class OracleDatabase {
   public saveSecretKey(
     gameAddress: string,
     secretKey: string,
-    randomHash: string
+    randomHash: string,
   ): void {
     this.runStatement(
-      "INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)",
+      SQL_STATEMENTS.insertSecretKey,
       `Failed to save secret key for game ${gameAddress}`,
       gameAddress,
       secretKey,
       randomHash,
-      Date.now()
+      Date.now(),
     );
   }
 
@@ -310,21 +328,21 @@ export class OracleDatabase {
 
   public markSecretKeyUsed(gameAddress: string): void {
     this.runStatement(
-      "UPDATE secret_keys SET used = TRUE WHERE game_address = ?",
+      SQL_STATEMENTS.markSecretKeyUsed,
       "Failed to mark secret key as used",
-      gameAddress
+      gameAddress,
     );
   }
 
   // Game tracking
   public trackGame(gameAddress: string, gameType?: string): void {
     this.runStatement(
-      "INSERT OR REPLACE INTO game_tracking (game_address, status, game_type, last_checked) VALUES (?, ?, ?, ?)",
+      SQL_STATEMENTS.upsertGameTracking,
       "Failed to track game",
       gameAddress,
       DEFAULT_STATUS,
       gameType || null,
-      Date.now()
+      Date.now(),
     );
   }
 
@@ -345,12 +363,12 @@ export class OracleDatabase {
   ): void {
     const now = Date.now();
     this.runStatement(
-      "UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?",
+      SQL_STATEMENTS.updateGameStatus,
       errorMessage,
       status,
       now,
       now,
-      gameAddress
+      gameAddress,
     );
   }
 
@@ -368,9 +386,9 @@ export class OracleDatabase {
         this.markSecretKeyUsed(gameAddress);
         this.markGameCompleted(gameAddress);
         this.runStatement(
-          "DELETE FROM game_players WHERE game_address = ?",
+          SQL_STATEMENTS.deleteGamePlayers,
           "Failed to delete player rows for completed game",
-          gameAddress
+          gameAddress,
         );
       },
       `Failed to finalize completed game ${gameAddress}`
@@ -379,19 +397,19 @@ export class OracleDatabase {
 
   public incrementCompletionAttempts(gameAddress: string): void {
     this.runStatement(
-      "UPDATE game_tracking SET completion_attempts = completion_attempts + 1, last_checked = ? WHERE game_address = ?",
+      SQL_STATEMENTS.incrementCompletionAttempts,
       "Failed to increment completion attempts",
       Date.now(),
-      gameAddress
+      gameAddress,
     );
   }
 
   public touchGameCheck(gameAddress: string): void {
     this.runStatement(
-      "UPDATE game_tracking SET last_checked = ? WHERE game_address = ?",
+      SQL_STATEMENTS.touchPendingGame,
       "Failed to update last_checked for pending game",
       Date.now(),
-      gameAddress
+      gameAddress,
     );
   }
 
@@ -550,12 +568,12 @@ export class OracleDatabase {
     ticketIndex: number
   ): void {
     this.runStatement(
-      "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)",
+      SQL_STATEMENTS.upsertGamePlayer,
       "Failed to add player to game",
       gameAddress,
       playerAddress,
       ticketIndex,
-      Date.now()
+      Date.now(),
     );
   }
 
@@ -564,18 +582,18 @@ export class OracleDatabase {
     ticketIndex: number
   ): void {
     this.runStatement(
-      "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?",
+      SQL_STATEMENTS.deleteGamePlayerByTicket,
       "Failed to remove player from game",
       gameAddress,
-      ticketIndex
+      ticketIndex,
     );
   }
 
   public clearStalePlayersForGame(gameAddress: string): void {
     this.runStatement(
-      "DELETE FROM game_players WHERE game_address = ?",
+      SQL_STATEMENTS.deleteGamePlayers,
       "Failed to clear stale players for game",
-      gameAddress
+      gameAddress,
     );
     logger.info(`🧹 Cleared stale player data for game ${gameAddress}`);
   }
