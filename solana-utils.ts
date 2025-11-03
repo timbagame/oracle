@@ -114,3 +114,23 @@ export function toBase58(value: PublicKeyLike): string | undefined {
 
   return undefined;
 }
+
+export function resolveNumericLike(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "number") return value;
+  if (typeof value === "bigint") return Number(value);
+
+  const withToNumber = value as { toNumber?: () => number };
+  if (typeof withToNumber.toNumber === "function") {
+    return withToNumber.toNumber();
+  }
+
+  const withValueOf = value as { valueOf?: () => number | bigint };
+  if (typeof withValueOf.valueOf === "function") {
+    const raw = withValueOf.valueOf();
+    if (typeof raw === "number") return raw;
+    if (typeof raw === "bigint") return Number(raw);
+  }
+
+  return undefined;
+}

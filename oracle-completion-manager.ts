@@ -350,25 +350,14 @@ export class GameCompletionManager {
       return context;
     }
 
-    try {
-      const resolved = this.resolveStoredGame(gameAddress, {
-        throwIfMissing: requireOnChain,
-      });
-      if (!resolved) {
-        this.logMissingSecret(gameAddress, requireOnChain);
-        return null;
-      }
-      return resolved;
-    } catch (error: unknown) {
-      if (error instanceof MissingSecretError) {
-        this.logMissingSecret(gameAddress, requireOnChain);
-        return null;
-      }
-      throw error;
-    }
-  }
+    const resolved = this.resolveStoredGame(gameAddress);
 
-  private async evaluateAndCacheReadiness(
+    if (!resolved && requireOnChain) {
+      this.logMissingSecret(gameAddress, requireOnChain);
+    }
+
+    return resolved;
+  }  private async evaluateAndCacheReadiness(
     gamePda: PublicKey,
     gameAddress: string,
     blockTime?: number,
@@ -502,20 +491,24 @@ export class GameCompletionManager {
     tokenMint: PublicKey,
   ): Promise<PublicKey> {
     const cacheKey = tokenMint.toBase58();
+
+    const directProgram = this.getCachedOrDirectTokenProgram(tokenProgram, cacheKey);
+    if (directProgram) {
+      return directProgram;
+    }
+
+    return await this.fetchTokenProgramOwner(tokenMint, cacheKey);
+  }
+
+  private getCachedOrDirectTokenProgram(
+    tokenProgram: PublicKeyLike,
+    cacheKey: string,
+  ): PublicKey | null {
     const cache = this.options.tokenProgramCache;
     const directProgram = coercePublicKey(tokenProgram);
 
     if (directProgram && !directProgram.equals(PublicKey.default)) {
       cache.set(cacheKey, directProgram);
-
-      if (directProgram.equals(TOKEN_PROGRAM_ID)) {
-        return TOKEN_PROGRAM_ID;
-      }
-
-      if (directProgram.equals(TOKEN_2022_PROGRAM_ID)) {
-        return TOKEN_2022_PROGRAM_ID;
-      }
-
       return directProgram;
     }
 
@@ -524,20 +517,28 @@ export class GameCompletionManager {
       return cached;
     }
 
+    return null;
+  }
+
+  private async fetchTokenProgramOwner(
+    tokenMint: PublicKey,
+    cacheKey: string,
+  ): Promise<PublicKey> {
     try {
       const connection = this.options.getConnection();
       const mintAccount = await connection.getAccountInfo(tokenMint);
       const owner = mintAccount?.owner;
 
       if (owner?.equals(TOKEN_2022_PROGRAM_ID)) {
-        cache.set(cacheKey, TOKEN_2022_PROGRAM_ID);
+        this.options.tokenProgramCache.set(cacheKey, TOKEN_2022_PROGRAM_ID);
         return TOKEN_2022_PROGRAM_ID;
       }
 
       if (owner?.equals(TOKEN_PROGRAM_ID)) {
-        cache.set(cacheKey, TOKEN_PROGRAM_ID);
+        this.options.tokenProgramCache.set(cacheKey, TOKEN_PROGRAM_ID);
         return TOKEN_PROGRAM_ID;
       }
+
       throw new Error(
         owner
           ? `Unsupported token program owner ${owner.toBase58()}`
@@ -606,17 +607,9 @@ export class GameCompletionManager {
 
   public resolveStoredGame(
     gameAddress: string,
-    options: { throwIfMissing?: boolean } = {},
-  ): {
-    secretData: { secretKey: string; randomHash: string };
-    randomHashBuffer: Buffer;
-    gamePda: PublicKey;
-  } | null {
+  ): GameOnChainContext | null {
     const secretData = this.options.db.getSecretKey(gameAddress);
     if (!secretData) {
-      if (options.throwIfMissing) {
-        throw new MissingSecretError(gameAddress);
-      }
       return null;
     }
 
@@ -630,12 +623,5 @@ export class GameCompletionManager {
     const programId = ensurePublicKey(this.options.getProgram().programId);
     const [pda] = PublicKey.findProgramAddressSync([GAME_SEED, randomHash], programId);
     return pda;
-  }
-}
-
-class MissingSecretError extends Error {
-  constructor(gameAddress: string) {
-    super(`No secret data found for game ${gameAddress}`);
-    this.name = "MissingSecretError";
   }
 }

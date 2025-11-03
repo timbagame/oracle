@@ -171,7 +171,8 @@ export class OracleDatabase {
 
   private createTables(): void {
     for (const definition of TABLE_DEFINITIONS) {
-      this.runSchemaStatement(definition.sql, definition.log, definition.error);
+      console.log(`🛠️ ${definition.log}`);
+      this.runStatement(definition.sql, definition.error);
     }
 
     this.ensureTicketSchema();
@@ -186,29 +187,22 @@ export class OracleDatabase {
 
     if (!hasTicketIndex) {
       for (const statement of LEGACY_TICKET_MIGRATIONS) {
-        this.runSchemaStatement(statement.sql, statement.log, statement.error);
+        console.log(`🛠️ ${statement.log}`);
+        this.runStatement(statement.sql, statement.error);
       }
     }
 
     for (const definition of PLAYER_INDEX_DEFINITIONS) {
-      this.runSchemaStatement(definition.sql, definition.log, definition.error);
+      console.log(`🛠️ ${definition.log}`);
+      this.runStatement(definition.sql, definition.error);
     }
   }
 
   private ensureTrackingIndexes(): void {
     for (const definition of TRACKING_INDEX_DEFINITIONS) {
-      this.runSchemaStatement(definition.sql, definition.log, definition.error);
+      console.log(`🛠️ ${definition.log}`);
+      this.runStatement(definition.sql, definition.error);
     }
-  }
-
-  private runSchemaStatement(
-    sql: string,
-    logMessage: string,
-    errorMessage: string,
-    ...params: Parameters<ReturnType<Database["prepare"]>["run"]>
-  ): ReturnType<ReturnType<Database["prepare"]>["run"]> {
-    console.log(`🛠️ ${logMessage}`);
-    return this.runStatement(sql, errorMessage, ...params);
   }
 
   private executeDbOperation<T>(

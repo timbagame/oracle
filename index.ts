@@ -32,39 +32,10 @@ let server: ReturnType<typeof Bun.serve> | undefined;
 let backgroundLoop: Promise<void> | undefined;
 let backgroundAbortController: AbortController | undefined;
 
-interface StopServerResult {
-  shouldExit: boolean;
-  exitCode?: number;
-}
-
-interface ExitDecisionInput {
-  stopResult?: StopServerResult;
-  exitCode?: number;
-}
-
-function resolveExitDecision({
-  stopResult,
-  exitCode,
-}: ExitDecisionInput): { shouldExit: boolean; exitCode?: number } {
-  const shouldExit =
-    stopResult?.shouldExit ?? (exitCode !== undefined && !IS_TEST_ENV);
-  const resolvedExitCode = stopResult?.exitCode ?? exitCode;
-
-  return { shouldExit, exitCode: resolvedExitCode };
-}
-
-function applyExitDecision(input: ExitDecisionInput): void {
-  const { shouldExit, exitCode } = resolveExitDecision(input);
-
-  if (shouldExit && exitCode !== undefined) {
-    process.exit(exitCode);
-  }
-}
-
 async function stopServer(
   oracle: OracleApi,
   exitCode?: number
-): Promise<StopServerResult> {
+): Promise<void> {
   if (backgroundAbortController) {
     backgroundAbortController.abort();
   }
@@ -106,10 +77,9 @@ async function stopServer(
 
   server?.stop();
 
-  return {
-    shouldExit: exitCode !== undefined && !IS_TEST_ENV,
-    exitCode,
-  };
+  if (exitCode !== undefined && !IS_TEST_ENV) {
+    process.exit(exitCode);
+  }
 }
 
 function logBackgroundLoopError(loopError: unknown): void {
@@ -491,14 +461,14 @@ if (!IS_TEST_ENV) {
     .catch(async (error) => {
       console.error("❌ Oracle initialization failed. Stopping server.", error);
       const exitCode = !IS_TEST_ENV ? 1 : undefined;
-      let stopResult: StopServerResult | undefined;
 
       try {
-        stopResult = await stopServer(oracleApi, exitCode);
+        await stopServer(oracleApi, exitCode);
       } catch (shutdownError) {
         console.error("❌ Failed to stop server after init error:", shutdownError);
-      } finally {
-        applyExitDecision({ stopResult, exitCode });
+        if (exitCode !== undefined && !IS_TEST_ENV) {
+          process.exit(exitCode);
+        }
       }
     });
 
@@ -523,19 +493,14 @@ export async function shutdown(
 ): Promise<void> {
   console.log(`\n🛑 Shutting down (${signal})...`);
   const exitCode = !IS_TEST_ENV ? 0 : undefined;
-  let stopResult: StopServerResult | undefined;
 
   try {
-    stopResult = await stopServer(oracle, exitCode);
+    await stopServer(oracle, exitCode);
     console.log("✅ Shutdown complete");
   } catch (error) {
     console.error("❌ Shutdown error:", error);
-  } finally {
-    applyExitDecision({ stopResult, exitCode });
+    if (exitCode !== undefined && !IS_TEST_ENV) {
+      process.exit(exitCode);
+    }
   }
 }
-
-export const __internal__ = Object.freeze({
-  resolveExitDecision,
-  applyExitDecision,
-});

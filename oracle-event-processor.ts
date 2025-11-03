@@ -1,10 +1,10 @@
 import type * as anchor from "@coral-xyz/anchor";
 import type { Timba } from "./idl/idlType.ts";
 import type { OracleDatabase } from "./database.ts";
-import type { TimbaEventMap, TimbaEvent, TimbaPlayerEvent, TimbaGameStatusEvent, TimbaGameInitializedEvent, NumericLike } from "./types/timba.ts";
+import type { TimbaEventMap, TimbaEvent, TimbaPlayerEvent, TimbaGameStatusEvent, TimbaGameInitializedEvent } from "./types/timba.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 import type { EventHandlerConfig } from "./oracle-service.types.ts";
-import { toBase58 } from "./solana-utils.ts";
+import { toBase58, resolveNumericLike } from "./solana-utils.ts";
 
 export interface OracleEventProcessorOptions {
   getProgram: () => anchor.Program<Timba>;
@@ -153,30 +153,10 @@ export class OracleEventProcessor {
     const gameKey = (event.gameKey ?? event.gameAddress ?? event.game) as PublicKeyLike | undefined;
     const playerKey = (event.player ?? event.playerAddress) as PublicKeyLike | undefined;
 
-    const resolveIndex = (value: NumericLike | undefined): number | undefined => {
-      if (value === undefined || value === null) return undefined;
-      if (typeof value === "number") return value;
-      if (typeof value === "bigint") return Number(value);
-
-      const withToNumber = value as { toNumber?: () => number };
-      if (typeof withToNumber.toNumber === "function") {
-        return withToNumber.toNumber();
-      }
-
-      const withValueOf = value as { valueOf?: () => number | bigint };
-      if (typeof withValueOf.valueOf === "function") {
-        const raw = withValueOf.valueOf();
-        if (typeof raw === "number") return raw;
-        if (typeof raw === "bigint") return Number(raw);
-      }
-
-      return undefined;
-    };
-
     return {
       gameAddress: gameKey ? toBase58(gameKey) ?? "" : "",
       playerAddress: playerKey ? toBase58(playerKey) : undefined,
-      ticketIndex: resolveIndex(event.ticketIndex ?? event.ticket_index),
+      ticketIndex: resolveNumericLike(event.ticketIndex ?? event.ticket_index),
     };
   }
 }
@@ -203,4 +183,3 @@ export const EVENT_HANDLER_CONFIG: ReadonlyArray<EventHandlerConfig<keyof TimbaE
     createHandler: (ctx) => (event) => ctx.handleGameStatusChange("closed", event),
   },
 ];
-
