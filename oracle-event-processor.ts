@@ -1,10 +1,11 @@
 import type * as anchor from "@coral-xyz/anchor";
 import type { Timba } from "./idl/idlType.ts";
 import type { OracleDatabase } from "./database.ts";
-import type { TimbaEventMap, TimbaEvent, TimbaPlayerEvent, TimbaGameStatusEvent, TimbaGameInitializedEvent, NumericLike } from "./types/timba.ts";
+import type { TimbaEventMap, TimbaEvent, TimbaPlayerEvent, TimbaGameStatusEvent, TimbaGameInitializedEvent } from "./types/timba.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 import type { EventHandlerConfig } from "./oracle-service.types.ts";
-import { toBase58 } from "./solana-utils.ts";
+import { toBase58, resolveNumericLike } from "./solana-utils.ts";
+import { logger } from "./logger.ts";
 
 export interface OracleEventProcessorOptions {
   getProgram: () => anchor.Program<Timba>;
@@ -20,12 +21,23 @@ export class OracleEventProcessor {
 
   constructor(private readonly options: OracleEventProcessorOptions) {}
 
+  private async runEventMutation(
+    eventType: string,
+    handler: () => void | Promise<void>,
+  ): Promise<void> {
+    try {
+      await handler();
+    } catch (error) {
+      logger.failure(`Error in ${eventType} event:`, error);
+    }
+  }
+
   public async startListening(): Promise<void> {
     if (this.listening) {
       return;
     }
 
-    console.log("🎧 Starting event listeners...");
+    logger.info("🎧 Starting event listeners...");
     this.listenerIds = await this.setupEventListeners();
     this.listening = true;
   }
@@ -81,102 +93,122 @@ export class OracleEventProcessor {
 
   public async handlePlayerEvent(
     action: "joined" | "unjoined",
-    event: TimbaPlayerEvent
+    event: TimbaPlayerEvent,
   ): Promise<void> {
-    const { gameAddress, playerAddress, ticketIndex } = this.extractEventData(event);
+    const eventData = this.extractEventData(event);
+    const eventType = `player ${action}`;
+    const validation = this.validateEventData(eventData, eventType, {
+      requireTicketIndex: true,
+      requirePlayerAddress: action === "joined",
+    });
 
-    try {
-      if (!gameAddress) {
-        console.warn(`⚠️  Missing game address in ${action} event`);
-        return;
-      }
+    if (!validation.valid) {
+      logger.warn(validation.message);
+      return;
+    }
 
-      if (ticketIndex === undefined) {
-        console.warn(`⚠️  Missing ticket index in ${action} event for ${gameAddress}`);
-        return;
-      }
+    const { gameAddress, playerAddress, ticketIndex } = eventData;
 
-      switch (action) {
-        case "joined":
-          if (!playerAddress) {
-            console.warn(`⚠️  Missing player address in join event for ${gameAddress}`);
-            return;
-          }
-          this.options.db.addPlayerToGame(gameAddress, playerAddress, ticketIndex);
-          break;
-        case "unjoined":
-          this.options.db.removePlayerFromGame(gameAddress, ticketIndex);
-          break;
+    await this.runEventMutation(eventType, async () => {
+      if (action === "joined") {
+        this.options.db.addPlayerToGame(gameAddress, playerAddress!, ticketIndex!);
+      } else {
+        this.options.db.removePlayerFromGame(gameAddress, ticketIndex!);
       }
 
       await this.options.tryAutoComplete(event.gameKey, gameAddress, action);
-    } catch (error) {
-      console.error(`❌ Error in player ${action} event:`, error);
-    }
+    });
   }
 
   public handleGameStatusChange(
     status: "completed" | "closed",
-    event: TimbaGameStatusEvent
+    event: TimbaGameStatusEvent,
   ): void {
-    const { gameAddress } = this.extractEventData(event);
+    const eventData = this.extractEventData(event);
+    const eventType = `game ${status}`;
+    const validation = this.validateEventData(eventData, eventType, {});
 
-    try {
+    if (!validation.valid) {
+      logger.warn(validation.message);
+      return;
+    }
+
+    const { gameAddress } = eventData;
+    void this.runEventMutation(eventType, async () => {
       if (status === "completed") {
         this.options.db.markGameCompleted(gameAddress);
-      } else {
-        this.options.db.markGameClosed(gameAddress);
-        this.options.db.clearStalePlayersForGame(gameAddress);
-        console.log(`🚫 Game closed: ${gameAddress}`);
+        return;
       }
-    } catch (error) {
-      console.error(`❌ Error in game ${status} event:`, error);
-    }
+
+      this.options.db.markGameClosed(gameAddress);
+      this.options.db.clearStalePlayersForGame(gameAddress);
+      logger.info(`🚫 Game closed: ${gameAddress}`);
+    });
   }
 
   public handleGameInitialized(event: TimbaGameInitializedEvent): void {
-    const { gameAddress } = this.extractEventData(event);
+    const eventData = this.extractEventData(event);
+    const eventType = "game initialized";
+    const validation = this.validateEventData(eventData, eventType, {});
 
-    let gameType: string | undefined = undefined;
-    if (event.gameType) {
-      const gameTypeKeys = Object.keys(event.gameType);
-      if (gameTypeKeys.length > 0 && gameTypeKeys[0]) {
-        gameType = gameTypeKeys[0].toLowerCase();
-      }
+    if (!validation.valid) {
+      logger.warn(validation.message);
+      return;
     }
 
-    console.log(`🎮 Game initialized: ${gameAddress}, Type: ${gameType || "unknown"}`);
-    this.options.db.trackGame(gameAddress, gameType);
+    const { gameAddress } = eventData;
+
+    void this.runEventMutation(eventType, () => {
+      let gameType: string | undefined = undefined;
+      if (event.gameType) {
+        const gameTypeKeys = Object.keys(event.gameType);
+        if (gameTypeKeys.length > 0 && gameTypeKeys[0]) {
+          gameType = gameTypeKeys[0].toLowerCase();
+        }
+      }
+
+      logger.info(`🎮 Game initialized: ${gameAddress}, Type: ${gameType || "unknown"}`);
+      this.options.db.trackGame(gameAddress, gameType);
+    });
+  }
+
+  private validateEventData(
+    eventData: { gameAddress: string; playerAddress?: string; ticketIndex?: number },
+    eventType: string,
+    options: { requireTicketIndex?: boolean; requirePlayerAddress?: boolean } = {}
+  ): { valid: boolean; message?: string } {
+    if (!eventData.gameAddress) {
+      return {
+        valid: false,
+        message: `⚠️  Missing game address in ${eventType} event`,
+      };
+    }
+
+    if (options.requireTicketIndex && eventData.ticketIndex === undefined) {
+      return {
+        valid: false,
+        message: `⚠️  Missing ticket index in ${eventType} event for ${eventData.gameAddress}`,
+      };
+    }
+
+    if (options.requirePlayerAddress && !eventData.playerAddress) {
+      return {
+        valid: false,
+        message: `⚠️  Missing player address in ${eventType} event for ${eventData.gameAddress}`,
+      };
+    }
+
+    return { valid: true };
   }
 
   public extractEventData(event: TimbaEvent): { gameAddress: string; playerAddress?: string; ticketIndex?: number } {
     const gameKey = (event.gameKey ?? event.gameAddress ?? event.game) as PublicKeyLike | undefined;
     const playerKey = (event.player ?? event.playerAddress) as PublicKeyLike | undefined;
 
-    const resolveIndex = (value: NumericLike | undefined): number | undefined => {
-      if (value === undefined || value === null) return undefined;
-      if (typeof value === "number") return value;
-      if (typeof value === "bigint") return Number(value);
-
-      const withToNumber = value as { toNumber?: () => number };
-      if (typeof withToNumber.toNumber === "function") {
-        return withToNumber.toNumber();
-      }
-
-      const withValueOf = value as { valueOf?: () => number | bigint };
-      if (typeof withValueOf.valueOf === "function") {
-        const raw = withValueOf.valueOf();
-        if (typeof raw === "number") return raw;
-        if (typeof raw === "bigint") return Number(raw);
-      }
-
-      return undefined;
-    };
-
     return {
       gameAddress: gameKey ? toBase58(gameKey) ?? "" : "",
       playerAddress: playerKey ? toBase58(playerKey) : undefined,
-      ticketIndex: resolveIndex(event.ticketIndex ?? event.ticket_index),
+      ticketIndex: resolveNumericLike(event.ticketIndex ?? event.ticket_index),
     };
   }
 }
@@ -203,4 +235,3 @@ export const EVENT_HANDLER_CONFIG: ReadonlyArray<EventHandlerConfig<keyof TimbaE
     createHandler: (ctx) => (event) => ctx.handleGameStatusChange("closed", event),
   },
 ];
-

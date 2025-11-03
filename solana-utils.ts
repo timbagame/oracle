@@ -19,6 +19,18 @@ type PublicKeyInput =
 
 export type PublicKeyLike = PublicKeyInput;
 
+function isAnchorPublicKey(value: unknown): value is anchor.web3.PublicKey {
+  return value instanceof anchor.web3.PublicKey;
+}
+
+function isArrayBufferView(value: unknown): value is ArrayBufferView {
+  return ArrayBuffer.isView(value) && !(value instanceof DataView);
+}
+
+function hasToBase58Method(value: object): value is { toBase58: () => string } {
+  return typeof (value as { toBase58?: unknown }).toBase58 === "function";
+}
+
 export function coercePublicKey(value: PublicKeyLike): PublicKey | null {
   if (!value) {
     return null;
@@ -28,7 +40,7 @@ export function coercePublicKey(value: PublicKeyLike): PublicKey | null {
     return value;
   }
 
-  if (value instanceof anchor.web3.PublicKey) {
+  if (isAnchorPublicKey(value)) {
     return new PublicKey(value.toBytes());
   }
 
@@ -40,22 +52,26 @@ export function coercePublicKey(value: PublicKeyLike): PublicKey | null {
     }
   }
 
-  if (value instanceof Uint8Array) {
-    return new PublicKey(value);
+  if (value instanceof Uint8Array || Array.isArray(value)) {
+    try {
+      return new PublicKey(value);
+    } catch {
+      return null;
+    }
   }
 
-  if (Array.isArray(value)) {
-    return new PublicKey(value);
-  }
-
-  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
-    return new PublicKey(new Uint8Array(value.buffer));
+  if (isArrayBufferView(value)) {
+    try {
+      return new PublicKey(new Uint8Array(value.buffer));
+    } catch {
+      return null;
+    }
   }
 
   if (typeof value === "object") {
     const candidate = value as PublicKeyRecord;
 
-    if (typeof candidate.toBase58 === "function") {
+    if (hasToBase58Method(candidate)) {
       try {
         return new PublicKey(candidate.toBase58());
       } catch {
@@ -113,4 +129,67 @@ export function toBase58(value: PublicKeyLike): string | undefined {
   }
 
   return undefined;
+}
+
+export function resolveNumericLike(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "number") return value;
+  if (typeof value === "bigint") return Number(value);
+
+  const withToNumber = value as { toNumber?: () => number };
+  if (typeof withToNumber.toNumber === "function") {
+    return withToNumber.toNumber();
+  }
+
+  const withValueOf = value as { valueOf?: () => number | bigint };
+  if (typeof withValueOf.valueOf === "function") {
+    const raw = withValueOf.valueOf();
+    if (typeof raw === "number") return raw;
+    if (typeof raw === "bigint") return Number(raw);
+  }
+
+  return undefined;
+}
+
+/**
+ * Confirms a transaction using modern or legacy Solana connection methods.
+ * Prefers the modern pattern (getLatestBlockhash + confirmTransaction) for newer Solana SDK versions.
+ * Falls back to the legacy confirmTransaction(signature) pattern for compatibility with older SDK versions.
+ */
+export async function confirmTransaction(
+  connection: anchor.web3.Connection,
+  signature: string
+): Promise<void> {
+  const conn = connection as anchor.web3.Connection & {
+    confirmTransaction?: (...args: any[]) => unknown;
+    getLatestBlockhash?: () => Promise<{ blockhash: string; lastValidBlockHeight: number }>;
+  };
+
+  // Modern confirmation (preferred)
+  if (
+    typeof conn.getLatestBlockhash === "function" &&
+    typeof conn.confirmTransaction === "function"
+  ) {
+    const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash();
+    const result = conn.confirmTransaction({
+      signature,
+      blockhash,
+      lastValidBlockHeight,
+    });
+    if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+      await result;
+    }
+    return;
+  }
+
+  // Legacy confirmation fallback
+  if (typeof conn.confirmTransaction === "function") {
+    const legacyResult = conn.confirmTransaction(signature as any);
+    if (legacyResult && typeof (legacyResult as PromiseLike<unknown>).then === "function") {
+      await legacyResult;
+    }
+    return;
+  }
+
+  throw new Error("Connection does not support transaction confirmation");
 }

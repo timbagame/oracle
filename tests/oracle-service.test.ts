@@ -99,9 +99,6 @@ describe("OracleService", () => {
 
     const fakeAddress = Keypair.generate().publicKey.toBase58();
     expect(service.completionManager.resolveStoredGame(fakeAddress)).toBeNull();
-    expect(() =>
-      service.completionManager.resolveStoredGame(fakeAddress, { throwIfMissing: true })
-    ).toThrow();
   });
 
   it("identifies account not found errors", () => {

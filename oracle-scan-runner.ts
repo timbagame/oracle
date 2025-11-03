@@ -12,6 +12,8 @@ import {
 import type { OracleDatabase } from "./database.ts";
 import type { OracleMetrics } from "./metrics.ts";
 import { DEFAULT_DELAY_MS, delay as delayHelper } from "./delay.ts";
+import { formatCompletionStats } from "./stats-formatter.ts";
+import { logger } from "./logger.ts";
 export interface ScanLoopRunnerOptions {
   db: OracleDatabase;
   metrics: OracleMetrics;
@@ -66,7 +68,7 @@ export class ScanLoopRunner {
       return stats;
     }
 
-    console.log(`🔍 Scanning ${pendingCount} pending games...`);
+  logger.info(`🔍 Scanning ${pendingCount} pending games...`);
 
     let cachedBlockTime: number | undefined;
 
@@ -113,7 +115,7 @@ export class ScanLoopRunner {
         }
       } catch (error) {
         stats.errors++;
-        console.error(`❌ Error completing game ${game.game_address}:`, error);
+  logger.error(`❌ Error completing game ${game.game_address}:`, error);
         this.options.metrics.recordCompletion({
           gameAddress: game.game_address,
           outcome: "error",
@@ -236,13 +238,9 @@ export class ScanLoopRunner {
   }
 
   public logScanResults(stats: CompletionStats): void {
-    if (stats.completed > 0 || stats.errors > 0 || stats.notReady > 0) {
-      const parts = [] as string[];
-      if (stats.completed > 0) parts.push(`${stats.completed} completed`);
-      if (stats.errors > 0) parts.push(`${stats.errors} errors`);
-      if (stats.notReady > 0) parts.push(`${stats.notReady} not ready`);
-
-      console.log(`📊 Scan: ${parts.join(', ')}`);
+    const formatted = formatCompletionStats(stats);
+    if (formatted) {
+      logger.info(`📊 Scan: ${formatted}`);
     }
   }
 }

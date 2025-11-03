@@ -10,6 +10,63 @@ export function readEnv(key: string): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+export function applyEnvUpdates(updates: Record<string, string | undefined>): () => void {
+  const originalValues = new Map<string, string | undefined>();
+
+  for (const [key, value] of Object.entries(updates)) {
+    originalValues.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  return () => {
+    for (const [key, value] of originalValues.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  };
+}
+
+export interface OracleEnvironmentOptions {
+  nodeEnv?: string;
+  solanaNetwork?: string;
+  databaseFile?: string;
+  fallbackSolanaNetwork?: string;
+  additional?: Record<string, string | undefined>;
+}
+
+export function setOracleEnvironment(options: OracleEnvironmentOptions = {}): () => void {
+  const {
+    nodeEnv,
+    solanaNetwork,
+    databaseFile,
+    fallbackSolanaNetwork = "http://localhost",
+    additional = {},
+  } = options;
+
+  const updates: Record<string, string | undefined> = { ...additional };
+
+  if (nodeEnv !== undefined) {
+    updates["NODE_ENV"] = nodeEnv;
+  }
+
+  const resolvedSolanaNetwork =
+    solanaNetwork ?? readEnv("SOLANA_NETWORK") ?? fallbackSolanaNetwork;
+  updates["SOLANA_NETWORK"] = resolvedSolanaNetwork;
+
+  if (databaseFile !== undefined) {
+    updates["DATABASE_FILE"] = databaseFile;
+  }
+
+  return applyEnvUpdates(updates);
+}
+
 export function isCiEnvironment(): boolean {
   return process.env["CI"] === "true";
 }

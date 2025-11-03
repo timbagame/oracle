@@ -1,9 +1,57 @@
 import { Database } from "bun:sqlite";
 import { getConfig } from "./config.ts";
+import { logger } from "./logger.ts";
 
 // Constants
 const DEFAULT_STATUS = "pending";
 const PENDING_SCAN_LIMIT = 50;
+
+const SQL_STATEMENTS = Object.freeze({
+  insertSecretKey:
+    "INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)",
+  markSecretKeyUsed: "UPDATE secret_keys SET used = TRUE WHERE game_address = ?",
+  upsertGameTracking:
+    "INSERT OR REPLACE INTO game_tracking (game_address, status, game_type, last_checked) VALUES (?, ?, ?, ?)",
+  updateGameStatus:
+    "UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?",
+  deleteGamePlayers: "DELETE FROM game_players WHERE game_address = ?",
+  incrementCompletionAttempts:
+    "UPDATE game_tracking SET completion_attempts = completion_attempts + 1, last_checked = ? WHERE game_address = ?",
+  touchPendingGame: "UPDATE game_tracking SET last_checked = ? WHERE game_address = ?",
+  upsertGamePlayer:
+    "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)",
+  deleteGamePlayerByTicket:
+    "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?",
+} satisfies Record<string, string>);
+
+const SQL_QUERIES = Object.freeze({
+  selectSecretKey:
+    "SELECT secret_key, random_hash FROM secret_keys WHERE game_address = ? AND used = FALSE",
+  selectGameType: "SELECT game_type FROM game_tracking WHERE game_address = ?",
+  selectPendingGames:
+    "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?",
+  selectPendingGamesWithAttempts:
+    "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND completion_attempts < ? ORDER BY last_checked ASC LIMIT ?",
+  selectSecretsStats:
+    "SELECT COUNT(*) as total, SUM(CASE WHEN used = TRUE THEN 1 ELSE 0 END) as used FROM secret_keys",
+  selectGamesStats: `SELECT
+        SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as pending,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled
+      FROM game_tracking`,
+  selectPlayersForGame:
+    "SELECT player_address FROM game_players WHERE game_address = ? ORDER BY ticket_index ASC",
+} satisfies Record<string, string>);
+
+const COMPLETED_GAME_PREDICATE = "status != ? AND completed_at IS NOT NULL AND completed_at < ?";
+const COMPLETED_GAME_SUBQUERY = `
+  SELECT game_address FROM game_tracking
+  WHERE ${COMPLETED_GAME_PREDICATE}
+`;
+const DELETE_COMPLETED_GAMES_SQL = `
+  DELETE FROM game_tracking
+  WHERE ${COMPLETED_GAME_PREDICATE}
+`;
 
 function getDatabaseFile(): string {
   return getConfig().databaseFile;
@@ -127,6 +175,12 @@ const TRACKING_INDEX_DEFINITIONS: ReadonlyArray<{
   },
 ];
 
+interface SchemaStep {
+  sql: string;
+  log: string;
+  error: string;
+}
+
 export const EMPTY_DATABASE_STATS: Readonly<DatabaseStats> = Object.freeze({
   totalSecrets: 0,
   usedSecrets: 0,
@@ -162,18 +216,22 @@ export class OracleDatabase {
   private initializeDatabase(): void {
     try {
       this.createTables();
-      console.log("✅ Oracle database initialized");
+      logger.success("Oracle database initialized");
     } catch (error) {
-      console.error("❌ Database initialization failed:", error);
+      logger.failure("Database initialization failed:", error);
       throw error;
     }
   }
 
-  private createTables(): void {
-    for (const definition of TABLE_DEFINITIONS) {
-      this.runSchemaStatement(definition.sql, definition.log, definition.error);
+  private executeSchemaSteps(steps: ReadonlyArray<SchemaStep>): void {
+    for (const step of steps) {
+      logger.info(`🛠️ ${step.log}`);
+      this.runStatement(step.sql, step.error);
     }
+  }
 
+  private createTables(): void {
+    this.executeSchemaSteps(TABLE_DEFINITIONS);
     this.ensureTicketSchema();
     this.ensureTrackingIndexes();
   }
@@ -185,30 +243,14 @@ export class OracleDatabase {
     const hasTicketIndex = tableInfo.some((column) => column.name === "ticket_index");
 
     if (!hasTicketIndex) {
-      for (const statement of LEGACY_TICKET_MIGRATIONS) {
-        this.runSchemaStatement(statement.sql, statement.log, statement.error);
-      }
+      this.executeSchemaSteps(LEGACY_TICKET_MIGRATIONS);
     }
 
-    for (const definition of PLAYER_INDEX_DEFINITIONS) {
-      this.runSchemaStatement(definition.sql, definition.log, definition.error);
-    }
+    this.executeSchemaSteps(PLAYER_INDEX_DEFINITIONS);
   }
 
   private ensureTrackingIndexes(): void {
-    for (const definition of TRACKING_INDEX_DEFINITIONS) {
-      this.runSchemaStatement(definition.sql, definition.log, definition.error);
-    }
-  }
-
-  private runSchemaStatement(
-    sql: string,
-    logMessage: string,
-    errorMessage: string,
-    ...params: Parameters<ReturnType<Database["prepare"]>["run"]>
-  ): ReturnType<ReturnType<Database["prepare"]>["run"]> {
-    console.log(`🛠️ ${logMessage}`);
-    return this.runStatement(sql, errorMessage, ...params);
+    this.executeSchemaSteps(TRACKING_INDEX_DEFINITIONS);
   }
 
   private executeDbOperation<T>(
@@ -219,7 +261,7 @@ export class OracleDatabase {
     try {
       return operation();
     } catch (error) {
-      console.error(`❌ ${errorMessage}:`, error);
+      logger.failure(`${errorMessage}:`, error);
       if (defaultValue !== undefined) {
         return defaultValue;
       }
@@ -250,78 +292,97 @@ export class OracleDatabase {
     errorMessage: string,
     ...params: Parameters<ReturnType<Database["prepare"]>["run"]>
   ): number {
-    const result = this.runStatement(sql, errorMessage, ...params);
-    return typeof result?.changes === "number" ? result.changes : 0;
+    return this.executeDbOperation(() => {
+      const stmt = this.db.prepare(sql);
+      const result = stmt.run(...params);
+      return typeof result?.changes === "number" ? result.changes : 0;
+    }, errorMessage);
+  }
+
+  private queryOne<T>(
+    sql: string,
+    errorMessage: string,
+    defaultValue: T | null,
+    ...params: Parameters<ReturnType<Database["prepare"]>["get"]>
+  ): T | null {
+    return this.executeDbOperation(() => {
+      const stmt = this.db.prepare(sql);
+      const result = stmt.get(...params) as T;
+      return result || defaultValue;
+    }, errorMessage, defaultValue);
+  }
+
+  private queryAll<T>(
+    sql: string,
+    errorMessage: string,
+    ...params: Parameters<ReturnType<Database["prepare"]>["all"]>
+  ): T[] {
+    return this.executeDbOperation(() => {
+      const stmt = this.db.prepare(sql);
+      return stmt.all(...params) as T[];
+    }, errorMessage, []);
   }
 
   // Secret key management
   public saveSecretKey(
     gameAddress: string,
     secretKey: string,
-    randomHash: string
+    randomHash: string,
   ): void {
     this.runStatement(
-      "INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)",
+      SQL_STATEMENTS.insertSecretKey,
       `Failed to save secret key for game ${gameAddress}`,
       gameAddress,
       secretKey,
       randomHash,
-      Date.now()
+      Date.now(),
     );
   }
 
   public getSecretKey(gameAddress: string): SecretKeyData | null {
-    return this.executeDbOperation(
-      () => {
-        const stmt = this.db.prepare(
-          "SELECT secret_key, random_hash FROM secret_keys WHERE game_address = ? AND used = FALSE"
-        );
-        const result = stmt.get(gameAddress) as
-          | { secret_key: string; random_hash: string }
-          | undefined;
-
-        return result
-          ? {
-              secretKey: result.secret_key,
-              randomHash: result.random_hash,
-            }
-          : null;
-      },
+    const result = this.queryOne<{ secret_key: string; random_hash: string }>(
+      SQL_QUERIES.selectSecretKey,
       "Failed to get secret key",
-      null
+      null,
+      gameAddress
     );
+
+    return result
+      ? {
+          secretKey: result.secret_key,
+          randomHash: result.random_hash,
+        }
+      : null;
   }
 
   public markSecretKeyUsed(gameAddress: string): void {
     this.runStatement(
-      "UPDATE secret_keys SET used = TRUE WHERE game_address = ?",
+      SQL_STATEMENTS.markSecretKeyUsed,
       "Failed to mark secret key as used",
-      gameAddress
+      gameAddress,
     );
   }
 
   // Game tracking
   public trackGame(gameAddress: string, gameType?: string): void {
     this.runStatement(
-      "INSERT OR REPLACE INTO game_tracking (game_address, status, game_type, last_checked) VALUES (?, ?, ?, ?)",
+      SQL_STATEMENTS.upsertGameTracking,
       "Failed to track game",
       gameAddress,
       DEFAULT_STATUS,
       gameType || null,
-      Date.now()
+      Date.now(),
     );
   }
 
   public getGameType(gameAddress: string): string | null {
-    return this.executeDbOperation(() => {
-      const stmt = this.db.prepare(
-        "SELECT game_type FROM game_tracking WHERE game_address = ?"
-      );
-      const result = stmt.get(gameAddress) as
-        | { game_type: string | null }
-        | undefined;
-      return result?.game_type || null;
-    }, "Failed to get game type");
+    const result = this.queryOne<{ game_type: string | null }>(
+      SQL_QUERIES.selectGameType,
+      "Failed to get game type",
+      null,
+      gameAddress
+    );
+    return result?.game_type || null;
   }
 
   private updateGameStatus(
@@ -331,12 +392,12 @@ export class OracleDatabase {
   ): void {
     const now = Date.now();
     this.runStatement(
-      "UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?",
+      SQL_STATEMENTS.updateGameStatus,
       errorMessage,
       status,
       now,
       now,
-      gameAddress
+      gameAddress,
     );
   }
 
@@ -354,9 +415,9 @@ export class OracleDatabase {
         this.markSecretKeyUsed(gameAddress);
         this.markGameCompleted(gameAddress);
         this.runStatement(
-          "DELETE FROM game_players WHERE game_address = ?",
+          SQL_STATEMENTS.deleteGamePlayers,
           "Failed to delete player rows for completed game",
-          gameAddress
+          gameAddress,
         );
       },
       `Failed to finalize completed game ${gameAddress}`
@@ -365,43 +426,38 @@ export class OracleDatabase {
 
   public incrementCompletionAttempts(gameAddress: string): void {
     this.runStatement(
-      "UPDATE game_tracking SET completion_attempts = completion_attempts + 1, last_checked = ? WHERE game_address = ?",
+      SQL_STATEMENTS.incrementCompletionAttempts,
       "Failed to increment completion attempts",
       Date.now(),
-      gameAddress
+      gameAddress,
     );
   }
 
   public touchGameCheck(gameAddress: string): void {
     this.runStatement(
-      "UPDATE game_tracking SET last_checked = ? WHERE game_address = ?",
+      SQL_STATEMENTS.touchPendingGame,
       "Failed to update last_checked for pending game",
       Date.now(),
-      gameAddress
+      gameAddress,
     );
   }
 
   public getPendingGames(maxAttempts?: number): PendingGame[] {
-    return this.executeDbOperation(
-      () => {
-        if (maxAttempts !== undefined && Number.isFinite(maxAttempts)) {
-          const stmt = this.db.prepare(
-            "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND completion_attempts < ? ORDER BY last_checked ASC LIMIT ?"
-          );
-          return stmt.all(
-            DEFAULT_STATUS,
-            maxAttempts,
-            PENDING_SCAN_LIMIT
-          ) as PendingGame[];
-        }
+    if (maxAttempts !== undefined && Number.isFinite(maxAttempts)) {
+      return this.queryAll<PendingGame>(
+        SQL_QUERIES.selectPendingGamesWithAttempts,
+        "Failed to get pending games",
+        DEFAULT_STATUS,
+        maxAttempts,
+        PENDING_SCAN_LIMIT
+      );
+    }
 
-        const stmt = this.db.prepare(
-          "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?"
-        );
-        return stmt.all(DEFAULT_STATUS, PENDING_SCAN_LIMIT) as PendingGame[];
-      },
+    return this.queryAll<PendingGame>(
+      SQL_QUERIES.selectPendingGames,
       "Failed to get pending games",
-      []
+      DEFAULT_STATUS,
+      PENDING_SCAN_LIMIT
     );
   }
 
@@ -420,16 +476,17 @@ export class OracleDatabase {
         cancelledGames: gamesStats.cancelled || 0,
       };
     } catch (error) {
-      console.error("❌ Failed to get stats:", error);
+      logger.failure("Failed to get stats:", error);
       return createEmptyStats();
     }
   }
 
   private getSecretsStats(): { total: number; used: number } {
-    const stmt = this.db.prepare(
-      "SELECT COUNT(*) as total, SUM(CASE WHEN used = TRUE THEN 1 ELSE 0 END) as used FROM secret_keys"
-    );
-    return stmt.get() as { total: number; used: number };
+    return this.queryOne<{ total: number; used: number }>(
+      SQL_QUERIES.selectSecretsStats,
+      "Failed to get secrets stats",
+      { total: 0, used: 0 }
+    ) || { total: 0, used: 0 };
   }
 
   private getGamesStats(): {
@@ -437,18 +494,16 @@ export class OracleDatabase {
     completed: number;
     cancelled: number;
   } {
-    const stmt = this.db.prepare(`
-      SELECT
-        SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as pending,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-        SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled
-      FROM game_tracking
-    `);
-    return stmt.get(DEFAULT_STATUS) as {
+    return this.queryOne<{
       pending: number;
       completed: number;
       cancelled: number;
-    };
+    }>(
+      SQL_QUERIES.selectGamesStats,
+      "Failed to get games stats",
+      { pending: 0, completed: 0, cancelled: 0 },
+      DEFAULT_STATUS
+    ) || { pending: 0, completed: 0, cancelled: 0 };
   }
 
   // Utility methods
@@ -478,10 +533,7 @@ export class OracleDatabase {
       const deletedPlayers = this.runDelete(
         `DELETE FROM game_players
          WHERE game_address IN (
-           SELECT game_address FROM game_tracking
-           WHERE status != ?
-             AND completed_at IS NOT NULL
-             AND completed_at < ?
+           ${COMPLETED_GAME_SUBQUERY}
          )`,
         "Failed to delete old player rows",
         DEFAULT_STATUS,
@@ -490,10 +542,7 @@ export class OracleDatabase {
 
       // Clean up old game tracking records (completed/cancelled games older than cutoff)
       const deletedGames = this.runDelete(
-        `DELETE FROM game_tracking
-         WHERE status != ?
-           AND completed_at IS NOT NULL
-           AND completed_at < ?`,
+        DELETE_COMPLETED_GAMES_SQL,
         "Failed to delete old game tracking rows",
         DEFAULT_STATUS,
         cutoffTime
@@ -505,13 +554,13 @@ export class OracleDatabase {
         deletedPlayers,
       };
 
-      console.log(
+      logger.info(
         `🧹 Cleanup completed - Secrets: ${deletedCounts.deletedSecrets}, Games: ${deletedCounts.deletedGames}, Players: ${deletedCounts.deletedPlayers}`
       );
 
       return deletedCounts;
     } catch (error) {
-      console.error("❌ Failed to cleanup old records:", error);
+      logger.failure("Failed to cleanup old records:", error);
       return { deletedSecrets: 0, deletedGames: 0, deletedPlayers: 0 };
     }
   }
@@ -521,7 +570,7 @@ export class OracleDatabase {
       this.db.close();
       this.closed = true;
     } catch (error) {
-      console.error("❌ Failed to close database:", error);
+      logger.failure("Failed to close database:", error);
     }
   }
 
@@ -538,12 +587,12 @@ export class OracleDatabase {
     ticketIndex: number
   ): void {
     this.runStatement(
-      "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)",
+      SQL_STATEMENTS.upsertGamePlayer,
       "Failed to add player to game",
       gameAddress,
       playerAddress,
       ticketIndex,
-      Date.now()
+      Date.now(),
     );
   }
 
@@ -552,33 +601,28 @@ export class OracleDatabase {
     ticketIndex: number
   ): void {
     this.runStatement(
-      "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?",
+      SQL_STATEMENTS.deleteGamePlayerByTicket,
       "Failed to remove player from game",
       gameAddress,
-      ticketIndex
+      ticketIndex,
     );
   }
 
   public clearStalePlayersForGame(gameAddress: string): void {
     this.runStatement(
-      "DELETE FROM game_players WHERE game_address = ?",
+      SQL_STATEMENTS.deleteGamePlayers,
       "Failed to clear stale players for game",
-      gameAddress
+      gameAddress,
     );
-    console.log(`🧹 Cleared stale player data for game ${gameAddress}`);
+    logger.info(`🧹 Cleared stale player data for game ${gameAddress}`);
   }
 
   public getGamePlayers(gameAddress: string): string[] {
-    return this.executeDbOperation(
-      () => {
-        const stmt = this.db.prepare(
-          "SELECT player_address FROM game_players WHERE game_address = ? ORDER BY ticket_index ASC"
-        );
-        const results = stmt.all(gameAddress) as { player_address: string }[];
-        return results.map((row) => row.player_address);
-      },
+    const results = this.queryAll<{ player_address: string }>(
+      SQL_QUERIES.selectPlayersForGame,
       "Failed to get game players",
-      []
+      gameAddress
     );
+    return results.map((row) => row.player_address);
   }
 }

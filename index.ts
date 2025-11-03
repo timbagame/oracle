@@ -1,9 +1,9 @@
-import "./logging";
 import { delay, DEFAULT_DELAY_MS } from "./delay.ts";
 import { OracleService } from "./oracle-service.ts";
 import { getEnvironmentMode, isTestEnvironment } from "./env.ts";
 import { getConfig, DEFAULT_ORACLE_PORT } from "./config.ts";
 import type { CompletionStats } from "./oracle-service.types.ts";
+import { logger } from "./logger.ts";
 
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
 const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = 5000;
@@ -32,88 +32,57 @@ let server: ReturnType<typeof Bun.serve> | undefined;
 let backgroundLoop: Promise<void> | undefined;
 let backgroundAbortController: AbortController | undefined;
 
-interface StopServerResult {
-  shouldExit: boolean;
-  exitCode?: number;
+async function abortBackgroundLoop(): Promise<void> {
+  backgroundAbortController?.abort();
+
+  if (!backgroundLoop) {
+    return;
+  }
+
+  const loopPromise = backgroundLoop;
+  backgroundLoop = undefined;
+
+  const timeoutResult = await Promise.race<"completed" | "timeout">([
+    loopPromise
+      .then(() => "completed" as const)
+      .catch((error) => {
+        logger.warning("Background loop terminated with error:", error);
+        return "completed" as const;
+      }),
+    delay(BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS).then(() => "timeout" as const),
+  ]);
+
+  if (timeoutResult === "timeout") {
+    logger.warning(
+      "Background loop did not exit within the shutdown timeout; proceeding with shutdown."
+    );
+    loopPromise.catch((error) => {
+      logger.warning("Background loop terminated with error:", error);
+    });
+  }
+
+  backgroundAbortController = undefined;
 }
 
-interface ExitDecisionInput {
-  stopResult?: StopServerResult;
-  exitCode?: number;
-}
-
-function resolveExitDecision({
-  stopResult,
-  exitCode,
-}: ExitDecisionInput): { shouldExit: boolean; exitCode?: number } {
-  const shouldExit =
-    stopResult?.shouldExit ?? (exitCode !== undefined && !IS_TEST_ENV);
-  const resolvedExitCode = stopResult?.exitCode ?? exitCode;
-
-  return { shouldExit, exitCode: resolvedExitCode };
-}
-
-function applyExitDecision(input: ExitDecisionInput): void {
-  const { shouldExit, exitCode } = resolveExitDecision(input);
-
-  if (shouldExit && exitCode !== undefined) {
-    process.exit(exitCode);
+async function stopEventListeners(oracle: OracleApi): Promise<void> {
+  try {
+    await oracle.stopEventListening();
+  } catch (error) {
+    logger.warning("Failed to stop event listeners:", error);
   }
 }
 
 async function stopServer(
   oracle: OracleApi,
   exitCode?: number
-): Promise<StopServerResult> {
-  if (backgroundAbortController) {
-    backgroundAbortController.abort();
-  }
-
-  if (backgroundLoop) {
-    const loopPromise = backgroundLoop;
-    backgroundLoop = undefined;
-
-    const timeoutResult = await Promise.race<"completed" | "timeout">([
-      loopPromise
-        .then(() => "completed" as const)
-        .catch((loopError) => {
-          logBackgroundLoopError(loopError);
-          return "completed" as const;
-        }),
-      delay(BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS).then(
-        () => "timeout" as const
-      ),
-    ]);
-
-    if (timeoutResult === "timeout") {
-      console.warn(
-        "⚠️  Background loop did not exit within the shutdown timeout; proceeding with shutdown."
-      );
-
-      loopPromise.catch((loopError) => {
-        logBackgroundLoopError(loopError);
-      });
-    }
-
-    backgroundAbortController = undefined;
-  }
-
-  try {
-    await oracle.stopEventListening();
-  } catch (listenerError) {
-    console.error("⚠️  Failed to stop event listeners:", listenerError);
-  }
-
+): Promise<void> {
+  await abortBackgroundLoop();
+  await stopEventListeners(oracle);
   server?.stop();
 
-  return {
-    shouldExit: exitCode !== undefined && !IS_TEST_ENV,
-    exitCode,
-  };
-}
-
-function logBackgroundLoopError(loopError: unknown): void {
-  console.error("⚠️  Background loop terminated with error:", loopError);
+  if (exitCode !== undefined && !IS_TEST_ENV) {
+    process.exit(exitCode);
+  }
 }
 
 // Response helpers
@@ -127,28 +96,42 @@ function createResponse(data: unknown, status: number = 200): Response {
   return new Response(body, { status, headers: CORS_HEADERS });
 }
 
+function createServiceResponse({
+  success,
+  status = 200,
+  payload = {},
+}: {
+  success: boolean;
+  status?: number;
+  payload?: Record<string, unknown>;
+}): Response {
+  return createResponse(buildServicePayload({ success, ...payload }), status);
+}
+
 function createHtmlResponse(html: string): Response {
   return new Response(html, { headers: { "Content-Type": "text/html" } });
 }
 
 function createErrorResponse(error: string, status: number = 500): Response {
-  return createResponse(
-    buildServicePayload({
-      success: false,
-      error,
-    }),
-    status
-  );
+  return createServiceResponse({
+    success: false,
+    status,
+    payload: { error },
+  });
 }
 
 function createInternalServerErrorResponse(): Response {
-  return createErrorResponse(INTERNAL_SERVER_ERROR_MESSAGE, 500);
+  return createServiceResponse({
+    success: false,
+    status: 500,
+    payload: { error: INTERNAL_SERVER_ERROR_MESSAGE },
+  });
 }
 
 function createSuccessResponse(
   payload: Record<string, unknown> = {}
 ): Response {
-  return createResponse(buildServicePayload({ success: true, ...payload }));
+  return createServiceResponse({ success: true, payload });
 }
 
 function buildServicePayload(extra: Record<string, unknown> = {}) {
@@ -232,7 +215,7 @@ export function buildHandlers(oracle: OracleApi) {
           gameAddress: secrets.gameAddress,
         });
       } catch (error: unknown) {
-        console.error("❌ Error generating hash:", error);
+        logger.failure("Error generating hash:", error);
         return createErrorResponse("Failed to generate hash", 500);
       }
     },
@@ -386,15 +369,15 @@ export function buildFetchRouter(handlers: ReturnType<typeof buildHandlers>) {
       const handler = handlers[route.handler];
 
       if (!handler) {
-        console.error(
-          `❌ Handler not implemented for route: ${method} ${path} (${route.handler})`
+        logger.failure(
+          `Handler not implemented for route: ${method} ${path} (${route.handler})`
         );
         return createInternalServerErrorResponse();
       }
 
       return await handler(request);
     } catch (error: unknown) {
-      console.error("❌ Server error:", error);
+      logger.failure("Server error:", error);
       return createInternalServerErrorResponse();
     }
   };
@@ -418,7 +401,7 @@ if (!IS_TEST_ENV) {
     fetch: fetchRouter,
   });
 
-  console.log(`🔮 Oracle API running on http://localhost:${PORT}`);
+  logger.info(`🔮 Oracle API running on http://localhost:${PORT}`);
 
   const startBackgroundTasks = () => {
     if (backgroundAbortController) {
@@ -442,8 +425,8 @@ if (!IS_TEST_ENV) {
           });
 
           if (!signal.aborted) {
-            console.warn(
-              "⚠️  Background scan loop exited unexpectedly; restarting..."
+            logger.warning(
+              "Background scan loop exited unexpectedly; restarting..."
             );
             retryDelayMs = DEFAULT_DELAY_MS;
           }
@@ -452,7 +435,7 @@ if (!IS_TEST_ENV) {
             break;
           }
 
-          console.error("❌ Background scan loop failed:", error);
+          logger.failure("Background scan loop failed:", error);
           retryDelayMs = DEFAULT_DELAY_MS;
         }
 
@@ -473,8 +456,8 @@ if (!IS_TEST_ENV) {
     backgroundLoop = runBackgroundLoop()
       .catch((error) => {
         if (!signal.aborted) {
-          console.error(
-            "❌ Unhandled error in background scan supervisor:",
+          logger.failure(
+            "Unhandled error in background scan supervisor:",
             error
           );
         }
@@ -489,16 +472,16 @@ if (!IS_TEST_ENV) {
       startBackgroundTasks();
     })
     .catch(async (error) => {
-      console.error("❌ Oracle initialization failed. Stopping server.", error);
+      logger.failure("Oracle initialization failed. Stopping server.", error);
       const exitCode = !IS_TEST_ENV ? 1 : undefined;
-      let stopResult: StopServerResult | undefined;
 
       try {
-        stopResult = await stopServer(oracleApi, exitCode);
+        await stopServer(oracleApi, exitCode);
       } catch (shutdownError) {
-        console.error("❌ Failed to stop server after init error:", shutdownError);
-      } finally {
-        applyExitDecision({ stopResult, exitCode });
+        logger.failure("Failed to stop server after init error:", shutdownError);
+        if (exitCode !== undefined && !IS_TEST_ENV) {
+          process.exit(exitCode);
+        }
       }
     });
 
@@ -510,7 +493,7 @@ if (!IS_TEST_ENV) {
 export async function initialize(oracle: OracleApi): Promise<void> {
   try {
     await oracle.startEventListening();
-    console.log("✅ Oracle services initialized");
+    logger.success("Oracle services initialized");
   } catch (error) {
     throw error;
   }
@@ -521,21 +504,16 @@ export async function shutdown(
   oracle: OracleApi,
   signal: string
 ): Promise<void> {
-  console.log(`\n🛑 Shutting down (${signal})...`);
+  logger.info(`\n🛑 Shutting down (${signal})...`);
   const exitCode = !IS_TEST_ENV ? 0 : undefined;
-  let stopResult: StopServerResult | undefined;
 
   try {
-    stopResult = await stopServer(oracle, exitCode);
-    console.log("✅ Shutdown complete");
+    await stopServer(oracle, exitCode);
+    logger.success("Shutdown complete");
   } catch (error) {
-    console.error("❌ Shutdown error:", error);
-  } finally {
-    applyExitDecision({ stopResult, exitCode });
+    logger.failure("Shutdown error:", error);
+    if (exitCode !== undefined && !IS_TEST_ENV) {
+      process.exit(exitCode);
+    }
   }
 }
-
-export const __internal__ = Object.freeze({
-  resolveExitDecision,
-  applyExitDecision,
-});

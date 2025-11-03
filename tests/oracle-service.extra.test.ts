@@ -81,7 +81,6 @@ async function runExecuteGameCompletionScenario({
 } = {}) {
   const service = OracleService.createWith(OracleDatabase.getInstance());
   const originalProgram = (service as any).program;
-  const originalConfirm = (service as any).confirmTransaction;
   const originalConnection = (service as any).connection;
   const adminKeypair = (service as any).adminKeypair;
   const winner = Keypair.generate().publicKey;
@@ -112,9 +111,15 @@ async function runExecuteGameCompletionScenario({
     ? accountInfoImpl
     : async () => ({ owner: inferredMintOwner });
 
-  (service as any).connection = {
+  const mockConnection = {
     getAccountInfo,
+    getLatestBlockhash: async () => ({ blockhash: "test-bh", lastValidBlockHeight: 999 }),
+    confirmTransaction: async (params: any) => {
+      calls.confirmed = typeof params === "string" ? params : params.signature;
+    },
   };
+
+  (service as any).connection = mockConnection;
 
   const programStub = createProgramStub({
     programId,
@@ -142,10 +147,6 @@ async function runExecuteGameCompletionScenario({
 
   (service as any).program = programStub;
 
-  (service as any).confirmTransaction = async (sig: string) => {
-    calls.confirmed = sig;
-  };
-
   let tx = "";
 
   try {
@@ -164,7 +165,6 @@ async function runExecuteGameCompletionScenario({
     });
   } finally {
     (service as any).program = originalProgram;
-    (service as any).confirmTransaction = originalConfirm;
     (service as any).connection = originalConnection;
   }
 
@@ -1034,11 +1034,29 @@ describe("OracleService internals", () => {
   it("tryAutoComplete skips completion when readiness checks fail", async () => {
     const service = OracleService.createWith(OracleDatabase.getInstance());
     const completion = service.completionManager;
-    const originalReady = completion.isGameReadyForCompletion;
     const originalComplete = (service as any).completeGame;
 
     let completions = 0;
-    completion.isGameReadyForCompletion = async () => false;
+    const readyGameAccount = createGameAccountStub();
+    const readyContext = {
+      gamePda: new PublicKey(Keypair.generate().publicKey.toBytes()),
+      secretData: {
+        secretKey: "aa".repeat(32),
+        randomHash: "bb".repeat(32),
+      },
+      randomHashBuffer: Buffer.alloc(32),
+    };
+    const resolveSpy = spyOn(completion, "resolveContextAndReadiness")
+      .mockResolvedValueOnce({
+        context: null,
+        readiness: undefined,
+        notReady: true,
+      })
+      .mockResolvedValueOnce({
+        context: readyContext,
+        readiness: { ready: true, gameAccount: readyGameAccount },
+        notReady: false,
+      });
     (service as any).completeGame = async () => {
       completions++;
       return { success: true };
@@ -1050,11 +1068,10 @@ describe("OracleService internals", () => {
       await (service as any).tryAutoComplete(gamePda, "guarded-game", "joined");
       expect(completions).toBe(0);
 
-      completion.isGameReadyForCompletion = async () => true;
       await (service as any).tryAutoComplete(gamePda, "guarded-game", "joined");
       expect(completions).toBe(1);
     } finally {
-      completion.isGameReadyForCompletion = originalReady;
+      resolveSpy.mockRestore();
       (service as any).completeGame = originalComplete;
     }
   });
@@ -1629,22 +1646,17 @@ describe("OracleService internals", () => {
   });
 
   it("confirmTransaction forwards latest blockhash params", async () => {
-    const service = OracleService.createWith(OracleDatabase.getInstance());
-    const originalConnection = (service as any).connection;
+    const { confirmTransaction } = await import("../solana-utils.ts");
     const calls: any[] = [];
 
-    (service as any).connection = {
+    const mockConnection = {
       getLatestBlockhash: async () => ({ blockhash: "bh", lastValidBlockHeight: 42 }),
       confirmTransaction: async (params: any) => {
         calls.push(params);
       },
-    };
+    } as any;
 
-    try {
-      await (service as any).confirmTransaction("sig-1");
-      expect(calls[0]).toEqual({ signature: "sig-1", blockhash: "bh", lastValidBlockHeight: 42 });
-    } finally {
-      (service as any).connection = originalConnection;
-    }
+    await confirmTransaction(mockConnection, "sig-1");
+    expect(calls[0]).toEqual({ signature: "sig-1", blockhash: "bh", lastValidBlockHeight: 42 });
   });
 });

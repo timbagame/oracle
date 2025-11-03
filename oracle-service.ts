@@ -8,6 +8,7 @@ import { getOracleMetrics, type OracleMetrics } from "./metrics.ts";
 import { OracleEventProcessor, EVENT_HANDLER_CONFIG } from "./oracle-event-processor.ts";
 import { GameCompletionManager } from "./oracle-completion-manager.ts";
 import { ScanLoopRunner } from "./oracle-scan-runner.ts";
+import { logger } from "./logger.ts";
 import {
   type AttemptGameCompletionOptions,
   type GameCompletionResult,
@@ -17,6 +18,7 @@ import {
   type GenerateGameSecretsOptions,
 } from "./oracle-service.types.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
+import { confirmTransaction } from "./solana-utils.ts";
 import type { Timba } from "./idl/idlType.ts";
 import idl from "./idl/idl.json" with { type: "json" };
 
@@ -54,49 +56,16 @@ export class OracleService {
     this.config = getConfig();
     this.db = db ?? OracleDatabase.getInstance();
     this.metrics = metrics ?? getOracleMetrics();
-    this.connection = this.initializeConnection();
+    this.connection = this.initConnection();
     this.adminKeypair = this.loadAdminKeypair();
-    this.program = this.initializeProgram();
+    this.program = this.initProgram();
     this.interGameDelayMs = this.config.scanThrottleMs;
     this.readinessCache = new Map();
     this.tokenProgramCache = new Map();
 
-    this.completion = new GameCompletionManager({
-      db: this.db,
-      metrics: this.metrics,
-      getConnection: () => this.connection,
-      getProgram: () => this.program,
-      adminKeypair: this.adminKeypair,
-      readinessCache: this.readinessCache,
-      tokenProgramCache: this.tokenProgramCache,
-      secretKeyLength: SECRET_KEY_LENGTH,
-      noSecretKeyMessage: NO_SECRET_KEY_MESSAGE,
-      confirmTransaction: (signature) => this.confirmTransaction(signature),
-    });
-
-    this.eventProcessor = new OracleEventProcessor({
-      getProgram: () => this.program,
-      db: this.db,
-      tryAutoComplete: (gameKey, gameAddress, trigger) =>
-        this.tryAutoComplete(gameKey ?? this.ensureGameKey(gameAddress), gameAddress, trigger),
-      config: EVENT_HANDLER_CONFIG,
-      clearTokenProgramCache: () => this.completion.clearTokenProgramCache(),
-    });
-
-    this.scanner = new ScanLoopRunner({
-      db: this.db,
-      metrics: this.metrics,
-      completion: {
-        resolveContextAndReadiness: (address, options) =>
-          this.completion.resolveContextAndReadiness(address, options),
-        attemptGameCompletion: (options) => this.attemptGameCompletion(options),
-        consumeReadiness: (address) => this.completion.consumeReadiness(address),
-        getBlockchainTime: () => this.completion.getBlockchainTime(),
-      },
-      interGameDelayMs: this.interGameDelayMs,
-      maxCompletionAttempts: MAX_COMPLETION_ATTEMPTS,
-      cleanupOldRecords: (hours) => this.cleanupOldRecords(hours),
-    });
+    this.completion = this.initCompletion();
+    this.eventProcessor = this.initEventProcessor();
+    this.scanner = this.initScanner();
   }
 
   public static getInstance(): OracleService {
@@ -113,40 +82,118 @@ export class OracleService {
     return new OracleService(db, options.metrics);
   }
 
-  private initializeConnection(): anchor.web3.Connection {
+  private initConnection(): anchor.web3.Connection {
     return new anchor.web3.Connection(this.config.solanaNetwork, "confirmed");
+  }
+
+  private initCompletion(): GameCompletionManager {
+    return new GameCompletionManager({
+      db: this.db,
+      metrics: this.metrics,
+      getConnection: () => this.connection,
+      getProgram: () => this.program,
+      adminKeypair: this.adminKeypair,
+      readinessCache: this.readinessCache,
+      tokenProgramCache: this.tokenProgramCache,
+      secretKeyLength: SECRET_KEY_LENGTH,
+      noSecretKeyMessage: NO_SECRET_KEY_MESSAGE,
+      confirmTransaction: (signature) => confirmTransaction(this.connection, signature),
+    });
+  }
+
+  private initEventProcessor(): OracleEventProcessor {
+    return new OracleEventProcessor({
+      getProgram: () => this.program,
+      db: this.db,
+      tryAutoComplete: (gameKey, gameAddress, trigger) =>
+        this.tryAutoComplete(gameKey ?? this.ensureGameKey(gameAddress), gameAddress, trigger),
+      config: EVENT_HANDLER_CONFIG,
+      clearTokenProgramCache: () => this.completion.clearTokenProgramCache(),
+    });
+  }
+
+  private initScanner(): ScanLoopRunner {
+    return new ScanLoopRunner({
+      db: this.db,
+      metrics: this.metrics,
+      completion: {
+        resolveContextAndReadiness: (address, options) =>
+          this.completion.resolveContextAndReadiness(address, options),
+        attemptGameCompletion: (options) => this.attemptGameCompletion(options),
+        consumeReadiness: (address) => this.completion.consumeReadiness(address),
+        getBlockchainTime: () => this.completion.getBlockchainTime(),
+      },
+      interGameDelayMs: this.interGameDelayMs,
+      maxCompletionAttempts: MAX_COMPLETION_ATTEMPTS,
+      cleanupOldRecords: (hours) => this.cleanupOldRecords(hours),
+    });
   }
 
   private loadAdminKeypair(): anchor.web3.Keypair {
     const { adminKeypairPath, adminKeypairSource, useEphemeralKeypair } = this.config;
-    try {
-      const keypairData = JSON.parse(fs.readFileSync(adminKeypairPath, "utf-8"));
-      const keypair = anchor.web3.Keypair.fromSecretKey(new Uint8Array(keypairData));
-      console.log(`✅ Loaded admin keypair: ${keypair.publicKey.toBase58()}`);
+    const { keypair, error } = this.readAdminKeypairFromFile(adminKeypairPath);
+
+    if (keypair) {
+      this.logAdminKeypairLoaded(keypair);
       return keypair;
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      const isMissingFile =
-        typeof error === "object" &&
-        error !== null &&
-        (("code" in error && (error as { code?: string }).code === "ENOENT") ||
-          ("message" in error && typeof (error as { message?: unknown }).message === "string" &&
-            (error as { message: string }).message.includes("ENOENT")));
+    }
 
-      if (isMissingFile && useEphemeralKeypair) {
-        const keypair = anchor.web3.Keypair.generate();
-        console.warn(
-          `⚠️  Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${adminKeypairSource} was not found.`,
-        );
-        return keypair;
+    if (useEphemeralKeypair && this.isMissingFileError(error)) {
+      return this.createEphemeralAdminKeypair(adminKeypairSource);
+    }
+
+    this.logAdminKeypairFailure(adminKeypairPath, error);
+    throw new Error(`Failed to load admin keypair from ${adminKeypairSource}`);
+  }
+
+  private readAdminKeypairFromFile(
+    path: string,
+  ): { keypair?: anchor.web3.Keypair; error?: unknown } {
+    try {
+      const content = fs.readFileSync(path, "utf-8");
+      const parsed = JSON.parse(content);
+      if (!Array.isArray(parsed)) {
+        throw new Error("Admin keypair file must contain an array of numbers");
       }
-
-      console.error(`❌ Failed to load admin keypair from ${adminKeypairPath}:`, message);
-      throw new Error(`Failed to load admin keypair from ${adminKeypairSource}`);
+      const keypair = anchor.web3.Keypair.fromSecretKey(new Uint8Array(parsed));
+      return { keypair };
+    } catch (error: unknown) {
+      return { error };
     }
   }
 
-  private initializeProgram(): anchor.Program<Timba> {
+  private isMissingFileError(error: unknown): boolean {
+    if (!error || typeof error !== "object") {
+      return false;
+    }
+
+    const code = "code" in error ? (error as { code?: string }).code : undefined;
+    if (code === "ENOENT") {
+      return true;
+    }
+
+    const message = "message" in error ? (error as { message?: unknown }).message : undefined;
+    return typeof message === "string" && message.includes("ENOENT");
+  }
+
+  private createEphemeralAdminKeypair(missingSource: string): anchor.web3.Keypair {
+    const keypair = anchor.web3.Keypair.generate();
+    logger.warning(
+      `Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${missingSource} was not found.`,
+    );
+    return keypair;
+  }
+
+  private logAdminKeypairLoaded(keypair: anchor.web3.Keypair): void {
+    logger.success(`Loaded admin keypair: ${keypair.publicKey.toBase58()}`);
+  }
+
+  private logAdminKeypairFailure(path: string, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.failure(`Failed to load admin keypair from ${path}:`, message);
+  }
+
+  private initProgram(): anchor.Program<Timba> {
     const adminWallet = new anchor.Wallet(this.adminKeypair);
     const provider = new anchor.AnchorProvider(
       this.connection,
@@ -163,7 +210,7 @@ export class OracleService {
     try {
       await this.eventProcessor.startListening();
     } catch (error) {
-      console.error(EVENT_LISTENER_FAILURE_MESSAGE, error);
+      logger.failure(EVENT_LISTENER_FAILURE_MESSAGE, error);
       throw error;
     }
   }
@@ -219,49 +266,11 @@ export class OracleService {
   private async attemptGameCompletion(
     options: AttemptGameCompletionOptions,
   ): Promise<GameCompletionResult | null> {
-    const completeOverride =
-      this.completeGame === OracleService.prototype.completeGame
-        ? undefined
-        : (gameAddress: string, readiness?: GameReadinessSnapshot, sharedContext?: GameOnChainContext) =>
-            (this.completeGame as (
-              address: string,
-              readiness?: GameReadinessSnapshot,
-              context?: GameOnChainContext,
-            ) => Promise<GameCompletionResult>)(gameAddress, readiness, sharedContext);
+    const complete = this.completeGame.bind(this);
 
     return this.completion.attemptGameCompletion(options, {
-      completeGame: completeOverride,
+      completeGame: complete,
     });
-  }
-
-  public async confirmTransaction(signature: string): Promise<void> {
-    const connection = this.connection as anchor.web3.Connection & {
-      confirmTransaction?: (...args: any[]) => unknown;
-      getLatestBlockhash?: () => Promise<{ blockhash: string; lastValidBlockHeight: number }>;
-    };
-
-    if (typeof connection.getLatestBlockhash === "function" && typeof connection.confirmTransaction === "function") {
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-      const result = connection.confirmTransaction({
-        signature,
-        blockhash,
-        lastValidBlockHeight,
-      });
-      if (result && typeof (result as PromiseLike<unknown>).then === "function") {
-        await result;
-      }
-      return;
-    }
-
-    if (typeof connection.confirmTransaction === "function") {
-      const legacyResult = connection.confirmTransaction(signature as any);
-      if (legacyResult && typeof (legacyResult as PromiseLike<unknown>).then === "function") {
-        await legacyResult;
-      }
-      return;
-    }
-
-    throw new Error("Connection does not support transaction confirmation");
   }
 
   public cleanupOldRecords(hoursOld: number = 48) {
