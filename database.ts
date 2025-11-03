@@ -248,6 +248,29 @@ export class OracleDatabase {
     return typeof result?.changes === "number" ? result.changes : 0;
   }
 
+  private queryOne<T>(
+    sql: string,
+    errorMessage: string,
+    defaultValue: T | null,
+    ...params: Parameters<ReturnType<Database["prepare"]>["get"]>
+  ): T | null {
+    return this.executeDbOperation(() => {
+      const stmt = this.db.prepare(sql);
+      return (stmt.get(...params) as T) || defaultValue;
+    }, errorMessage, defaultValue);
+  }
+
+  private queryAll<T>(
+    sql: string,
+    errorMessage: string,
+    ...params: Parameters<ReturnType<Database["prepare"]>["all"]>
+  ): T[] {
+    return this.executeDbOperation(() => {
+      const stmt = this.db.prepare(sql);
+      return stmt.all(...params) as T[];
+    }, errorMessage, []);
+  }
+
   // Secret key management
   public saveSecretKey(
     gameAddress: string,
@@ -265,25 +288,19 @@ export class OracleDatabase {
   }
 
   public getSecretKey(gameAddress: string): SecretKeyData | null {
-    return this.executeDbOperation(
-      () => {
-        const stmt = this.db.prepare(
-          "SELECT secret_key, random_hash FROM secret_keys WHERE game_address = ? AND used = FALSE"
-        );
-        const result = stmt.get(gameAddress) as
-          | { secret_key: string; random_hash: string }
-          | undefined;
-
-        return result
-          ? {
-              secretKey: result.secret_key,
-              randomHash: result.random_hash,
-            }
-          : null;
-      },
+    const result = this.queryOne<{ secret_key: string; random_hash: string }>(
+      "SELECT secret_key, random_hash FROM secret_keys WHERE game_address = ? AND used = FALSE",
       "Failed to get secret key",
-      null
+      null,
+      gameAddress
     );
+
+    return result
+      ? {
+          secretKey: result.secret_key,
+          randomHash: result.random_hash,
+        }
+      : null;
   }
 
   public markSecretKeyUsed(gameAddress: string): void {
@@ -307,15 +324,13 @@ export class OracleDatabase {
   }
 
   public getGameType(gameAddress: string): string | null {
-    return this.executeDbOperation(() => {
-      const stmt = this.db.prepare(
-        "SELECT game_type FROM game_tracking WHERE game_address = ?"
-      );
-      const result = stmt.get(gameAddress) as
-        | { game_type: string | null }
-        | undefined;
-      return result?.game_type || null;
-    }, "Failed to get game type");
+    const result = this.queryOne<{ game_type: string | null }>(
+      "SELECT game_type FROM game_tracking WHERE game_address = ?",
+      "Failed to get game type",
+      null,
+      gameAddress
+    );
+    return result?.game_type || null;
   }
 
   private updateGameStatus(
@@ -376,26 +391,21 @@ export class OracleDatabase {
   }
 
   public getPendingGames(maxAttempts?: number): PendingGame[] {
-    return this.executeDbOperation(
-      () => {
-        if (maxAttempts !== undefined && Number.isFinite(maxAttempts)) {
-          const stmt = this.db.prepare(
-            "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND completion_attempts < ? ORDER BY last_checked ASC LIMIT ?"
-          );
-          return stmt.all(
-            DEFAULT_STATUS,
-            maxAttempts,
-            PENDING_SCAN_LIMIT
-          ) as PendingGame[];
-        }
+    if (maxAttempts !== undefined && Number.isFinite(maxAttempts)) {
+      return this.queryAll<PendingGame>(
+        "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND completion_attempts < ? ORDER BY last_checked ASC LIMIT ?",
+        "Failed to get pending games",
+        DEFAULT_STATUS,
+        maxAttempts,
+        PENDING_SCAN_LIMIT
+      );
+    }
 
-        const stmt = this.db.prepare(
-          "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?"
-        );
-        return stmt.all(DEFAULT_STATUS, PENDING_SCAN_LIMIT) as PendingGame[];
-      },
+    return this.queryAll<PendingGame>(
+      "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?",
       "Failed to get pending games",
-      []
+      DEFAULT_STATUS,
+      PENDING_SCAN_LIMIT
     );
   }
 
@@ -420,10 +430,11 @@ export class OracleDatabase {
   }
 
   private getSecretsStats(): { total: number; used: number } {
-    const stmt = this.db.prepare(
-      "SELECT COUNT(*) as total, SUM(CASE WHEN used = TRUE THEN 1 ELSE 0 END) as used FROM secret_keys"
-    );
-    return stmt.get() as { total: number; used: number };
+    return this.queryOne<{ total: number; used: number }>(
+      "SELECT COUNT(*) as total, SUM(CASE WHEN used = TRUE THEN 1 ELSE 0 END) as used FROM secret_keys",
+      "Failed to get secrets stats",
+      { total: 0, used: 0 }
+    ) || { total: 0, used: 0 };
   }
 
   private getGamesStats(): {
@@ -431,18 +442,20 @@ export class OracleDatabase {
     completed: number;
     cancelled: number;
   } {
-    const stmt = this.db.prepare(`
-      SELECT
-        SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as pending,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-        SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled
-      FROM game_tracking
-    `);
-    return stmt.get(DEFAULT_STATUS) as {
+    return this.queryOne<{
       pending: number;
       completed: number;
       cancelled: number;
-    };
+    }>(
+      `SELECT
+        SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as pending,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled
+      FROM game_tracking`,
+      "Failed to get games stats",
+      { pending: 0, completed: 0, cancelled: 0 },
+      DEFAULT_STATUS
+    ) || { pending: 0, completed: 0, cancelled: 0 };
   }
 
   // Utility methods
@@ -563,16 +576,11 @@ export class OracleDatabase {
   }
 
   public getGamePlayers(gameAddress: string): string[] {
-    return this.executeDbOperation(
-      () => {
-        const stmt = this.db.prepare(
-          "SELECT player_address FROM game_players WHERE game_address = ? ORDER BY ticket_index ASC"
-        );
-        const results = stmt.all(gameAddress) as { player_address: string }[];
-        return results.map((row) => row.player_address);
-      },
+    const results = this.queryAll<{ player_address: string }>(
+      "SELECT player_address FROM game_players WHERE game_address = ? ORDER BY ticket_index ASC",
       "Failed to get game players",
-      []
+      gameAddress
     );
+    return results.map((row) => row.player_address);
   }
 }

@@ -83,29 +83,23 @@ export class OracleEventProcessor {
     action: "joined" | "unjoined",
     event: TimbaPlayerEvent
   ): Promise<void> {
-    const { gameAddress, playerAddress, ticketIndex } = this.extractEventData(event);
+    const eventData = this.extractEventData(event);
+
+    const validation = this.validatePlayerEventData(action, eventData);
+    if (!validation.valid) {
+      console.warn(validation.message);
+      return;
+    }
 
     try {
-      if (!gameAddress) {
-        console.warn(`⚠️  Missing game address in ${action} event`);
-        return;
-      }
-
-      if (ticketIndex === undefined) {
-        console.warn(`⚠️  Missing ticket index in ${action} event for ${gameAddress}`);
-        return;
-      }
+      const { gameAddress, playerAddress, ticketIndex } = eventData;
 
       switch (action) {
         case "joined":
-          if (!playerAddress) {
-            console.warn(`⚠️  Missing player address in join event for ${gameAddress}`);
-            return;
-          }
-          this.options.db.addPlayerToGame(gameAddress, playerAddress, ticketIndex);
+          this.options.db.addPlayerToGame(gameAddress, playerAddress!, ticketIndex!);
           break;
         case "unjoined":
-          this.options.db.removePlayerFromGame(gameAddress, ticketIndex);
+          this.options.db.removePlayerFromGame(gameAddress, ticketIndex!);
           break;
       }
 
@@ -119,9 +113,17 @@ export class OracleEventProcessor {
     status: "completed" | "closed",
     event: TimbaGameStatusEvent
   ): void {
-    const { gameAddress } = this.extractEventData(event);
+    const eventData = this.extractEventData(event);
+
+    const validation = this.validateGameAddressData(eventData, `game ${status}`);
+    if (!validation.valid) {
+      console.warn(validation.message);
+      return;
+    }
 
     try {
+      const { gameAddress } = eventData;
+
       if (status === "completed") {
         this.options.db.markGameCompleted(gameAddress);
       } else {
@@ -135,7 +137,15 @@ export class OracleEventProcessor {
   }
 
   public handleGameInitialized(event: TimbaGameInitializedEvent): void {
-    const { gameAddress } = this.extractEventData(event);
+    const eventData = this.extractEventData(event);
+
+    const validation = this.validateGameAddressData(eventData, "game initialized");
+    if (!validation.valid) {
+      console.warn(validation.message);
+      return;
+    }
+
+    const { gameAddress } = eventData;
 
     let gameType: string | undefined = undefined;
     if (event.gameType) {
@@ -147,6 +157,45 @@ export class OracleEventProcessor {
 
     console.log(`🎮 Game initialized: ${gameAddress}, Type: ${gameType || "unknown"}`);
     this.options.db.trackGame(gameAddress, gameType);
+  }
+
+  private validateGameAddressData(
+    eventData: { gameAddress: string; playerAddress?: string; ticketIndex?: number },
+    eventType: string
+  ): { valid: boolean; message?: string } {
+    if (!eventData.gameAddress) {
+      return {
+        valid: false,
+        message: `⚠️  Missing game address in ${eventType} event`,
+      };
+    }
+    return { valid: true };
+  }
+
+  private validatePlayerEventData(
+    action: "joined" | "unjoined",
+    eventData: { gameAddress: string; playerAddress?: string; ticketIndex?: number }
+  ): { valid: boolean; message?: string } {
+    const baseValidation = this.validateGameAddressData(eventData, `player ${action}`);
+    if (!baseValidation.valid) {
+      return baseValidation;
+    }
+
+    if (eventData.ticketIndex === undefined) {
+      return {
+        valid: false,
+        message: `⚠️  Missing ticket index in ${action} event for ${eventData.gameAddress}`,
+      };
+    }
+
+    if (action === "joined" && !eventData.playerAddress) {
+      return {
+        valid: false,
+        message: `⚠️  Missing player address in join event for ${eventData.gameAddress}`,
+      };
+    }
+
+    return { valid: true };
   }
 
   public extractEventData(event: TimbaEvent): { gameAddress: string; playerAddress?: string; ticketIndex?: number } {

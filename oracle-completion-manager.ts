@@ -267,37 +267,16 @@ export class GameCompletionManager {
       return { context: null, readiness: undefined, notReady: false };
     }
 
-    let readinessSnapshot = providedReadiness ?? providedContext?.readiness;
+    const readinessSnapshot = await this.resolveReadinessSnapshot(
+      gameAddress,
+      resolvedContext,
+      providedReadiness,
+      providedContext?.readiness,
+      requireOnChain,
+      blockTime,
+    );
 
-    if (readinessSnapshot && requireOnChain && !readinessSnapshot.gameAccount) {
-      readinessSnapshot = undefined;
-    }
-
-    if (!readinessSnapshot && !requireOnChain) {
-      readinessSnapshot = this.consumeReadiness(gameAddress);
-    }
-
-    let missingOnChain = false;
-
-    if (requireOnChain || !readinessSnapshot) {
-      const evaluation = await this.evaluateAndCacheReadiness(
-        resolvedContext.gamePda,
-        gameAddress,
-        blockTime,
-      );
-
-      if (!evaluation.gameAccount) {
-        missingOnChain = true;
-        readinessSnapshot = undefined;
-      } else if (!requireOnChain && !evaluation.ready) {
-        return { context: resolvedContext, readiness: undefined, notReady: true };
-      } else {
-        readinessSnapshot = evaluation;
-      }
-    }
-
-    if (missingOnChain && requireOnChain) {
-      console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
+    if (!readinessSnapshot) {
       return { context: null, readiness: undefined, notReady: false };
     }
 
@@ -316,6 +295,46 @@ export class GameCompletionManager {
       readiness: readinessSnapshot,
       notReady,
     };
+  }
+
+  private async resolveReadinessSnapshot(
+    gameAddress: string,
+    resolvedContext: GameOnChainContext,
+    providedReadiness: GameReadinessSnapshot | undefined,
+    contextReadiness: GameReadinessSnapshot | undefined,
+    requireOnChain: boolean,
+    blockTime: number | undefined,
+  ): Promise<GameReadinessSnapshot | null | undefined> {
+    let readinessSnapshot = providedReadiness ?? contextReadiness;
+
+    if (readinessSnapshot && requireOnChain && !readinessSnapshot.gameAccount) {
+      readinessSnapshot = undefined;
+    }
+
+    if (!readinessSnapshot && !requireOnChain) {
+      readinessSnapshot = this.consumeReadiness(gameAddress);
+    }
+
+    if (!requireOnChain && readinessSnapshot) {
+      return readinessSnapshot;
+    }
+
+    if (requireOnChain || !readinessSnapshot) {
+      const evaluation = await this.evaluateAndCacheReadiness(
+        resolvedContext.gamePda,
+        gameAddress,
+        blockTime,
+      );
+
+      if (!evaluation.gameAccount && requireOnChain) {
+        console.log(`⚠️  Game ${gameAddress} no longer exists on-chain`);
+        return null;
+      }
+
+      return evaluation;
+    }
+
+    return readinessSnapshot;
   }
 
   public consumeReadiness(gameAddress: string): GameReadinessSnapshot | undefined {
@@ -504,17 +523,23 @@ export class GameCompletionManager {
     tokenProgram: PublicKeyLike,
     cacheKey: string,
   ): PublicKey | null {
-    const cache = this.options.tokenProgramCache;
-    const directProgram = coercePublicKey(tokenProgram);
-
-    if (directProgram && !directProgram.equals(PublicKey.default)) {
-      cache.set(cacheKey, directProgram);
+    const directProgram = this.getDirectTokenProgram(tokenProgram, cacheKey);
+    if (directProgram) {
       return directProgram;
     }
 
-    const cached = cache.get(cacheKey);
-    if (cached) {
-      return cached;
+    return this.options.tokenProgramCache.get(cacheKey) || null;
+  }
+
+  private getDirectTokenProgram(
+    tokenProgram: PublicKeyLike,
+    cacheKey: string,
+  ): PublicKey | null {
+    const directProgram = coercePublicKey(tokenProgram);
+
+    if (directProgram && !directProgram.equals(PublicKey.default)) {
+      this.options.tokenProgramCache.set(cacheKey, directProgram);
+      return directProgram;
     }
 
     return null;
@@ -529,27 +554,12 @@ export class GameCompletionManager {
       const mintAccount = await connection.getAccountInfo(tokenMint);
       const owner = mintAccount?.owner;
 
-      if (owner?.equals(TOKEN_2022_PROGRAM_ID)) {
-        this.options.tokenProgramCache.set(cacheKey, TOKEN_2022_PROGRAM_ID);
-        return TOKEN_2022_PROGRAM_ID;
-      }
-
-      if (owner?.equals(TOKEN_PROGRAM_ID)) {
-        this.options.tokenProgramCache.set(cacheKey, TOKEN_PROGRAM_ID);
-        return TOKEN_PROGRAM_ID;
-      }
-
-      throw new Error(
-        owner
-          ? `Unsupported token program owner ${owner.toBase58()}`
-          : `Mint ${tokenMint.toBase58()} is missing an owner`,
-      );
+      const resolved = this.matchTokenProgramOwner(owner, tokenMint);
+      this.options.tokenProgramCache.set(cacheKey, resolved);
+      return resolved;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(
-        `⚠️  Unable to resolve token program for mint ${tokenMint.toBase58()}:`,
-        message,
-      );
+      this.logTokenProgramError(tokenMint, message);
       throw new Error(
         `Unable to resolve token program for mint ${tokenMint.toBase58()}: ${message}`,
         {
@@ -557,6 +567,32 @@ export class GameCompletionManager {
         },
       );
     }
+  }
+
+  private matchTokenProgramOwner(
+    owner: PublicKey | undefined,
+    tokenMint: PublicKey,
+  ): PublicKey {
+    if (owner?.equals(TOKEN_2022_PROGRAM_ID)) {
+      return TOKEN_2022_PROGRAM_ID;
+    }
+
+    if (owner?.equals(TOKEN_PROGRAM_ID)) {
+      return TOKEN_PROGRAM_ID;
+    }
+
+    throw new Error(
+      owner
+        ? `Unsupported token program owner ${owner.toBase58()}`
+        : `Mint ${tokenMint.toBase58()} is missing an owner`,
+    );
+  }
+
+  private logTokenProgramError(tokenMint: PublicKey, message: string): void {
+    console.warn(
+      `⚠️  Unable to resolve token program for mint ${tokenMint.toBase58()}:`,
+      message,
+    );
   }
 
   public calculateWinnerIndex(
