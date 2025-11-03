@@ -85,6 +85,69 @@ describe("index router", () => {
     }
   });
 
+  test("POST /generate-hash rejects invalid JSON payloads", async () => {
+    const calls: string[] = [];
+    const rejectingContext = await createIndexRouterTestContext("index-router-invalid-json", {
+      generateGameSecrets: (options) => {
+        if (options?.gameType) {
+          calls.push(options.gameType);
+        }
+        return { randomHash: "abc", gameAddress: "game123" };
+      },
+    });
+
+    try {
+      const { response, json } = await executeJsonRequest(
+        rejectingContext.router,
+        "/generate-hash",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{ invalid",
+        },
+      );
+
+      expect(response.status).toBe(400);
+      expect((json as any).success).toBe(false);
+      expect((json as any).error).toContain("Invalid JSON payload");
+      expect(calls).toHaveLength(0);
+    } finally {
+      rejectingContext.testEnv.cleanup();
+    }
+  });
+
+  test("POST /generate-hash accepts max-length game type", async () => {
+    const calls: string[] = [];
+    const acceptingContext = await createIndexRouterTestContext("index-router-max-length", {
+      generateGameSecrets: (options) => {
+        if (options?.gameType) {
+          calls.push(options.gameType);
+        }
+        return { randomHash: "abc", gameAddress: "game123" };
+      },
+    });
+
+    const maxType = "z".repeat(128);
+
+    try {
+      const { response, json } = await executeJsonRequest(
+        acceptingContext.router,
+        "/generate-hash",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameType: maxType }),
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect((json as any).success).toBe(true);
+      expect(calls).toEqual([maxType]);
+    } finally {
+      acceptingContext.testEnv.cleanup();
+    }
+  });
+
   test("GET /stats returns stats", async () => {
     const { response, json } = await executeJsonRequest(context.router, "/stats", {
       method: "GET",

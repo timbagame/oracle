@@ -163,32 +163,38 @@ export interface OracleApi {
   cleanupOldRecords: OracleService["cleanupOldRecords"];
 }
 
+interface JsonBodyResult {
+  body: Record<string, unknown> | null;
+  parseError?: string;
+}
+
 async function readJsonBody(
   request: Request | undefined
-): Promise<Record<string, unknown> | null> {
+): Promise<JsonBodyResult> {
   if (!request || request.bodyUsed) {
-    return null;
+    return { body: null };
   }
 
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType && !contentType.toLowerCase().includes("application/json")) {
-    return null;
+    return { body: null };
   }
 
   try {
     const rawBody = await request.text();
     if (!rawBody) {
-      return null;
+      return { body: null };
     }
     const parsed = JSON.parse(rawBody);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
+      return { body: parsed as Record<string, unknown> };
     }
   } catch (error) {
     console.warn("⚠️  Failed to parse /generate-hash payload:", error);
+    return { body: null, parseError: "Invalid JSON payload" };
   }
 
-  return null;
+  return { body: null };
 }
 
 export function buildHandlers(oracle: OracleApi) {
@@ -201,7 +207,12 @@ export function buildHandlers(oracle: OracleApi) {
       try {
         let gameType: string | undefined;
         if (request) {
-          const body = await readJsonBody(request);
+          const { body, parseError } = await readJsonBody(request);
+
+          if (parseError) {
+            return createErrorResponse(parseError, 400);
+          }
+
           const provided = body ? body[GAME_TYPE_FIELD] : undefined;
           if (typeof provided === "string") {
             const trimmed = provided.trim();

@@ -229,6 +229,24 @@ describe("OracleService event handling", () => {
     ]);
   });
 
+  it("truncates oversized derived game types", () => {
+    const { db, callLog } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub);
+
+    const gameKey = Keypair.generate().publicKey;
+    const longKey = "A".repeat(512);
+
+    service.events.handleGameInitialized({
+      gameKey,
+      gameType: { [longKey]: {} },
+    });
+
+    const tracked = callLog.track[0];
+    expect(tracked?.game).toBe(gameKey.toBase58());
+    expect(tracked?.type).toBe("a".repeat(128));
+  });
+
   it("extracts event data from various representations", () => {
     const { db } = createDbStub();
     const programStub = createProgramStub();

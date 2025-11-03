@@ -45,7 +45,10 @@ export interface ScanLoopRunnerOptions {
 export class ScanLoopRunner {
   constructor(private readonly options: ScanLoopRunnerOptions) {}
 
-  public async scanAndCompleteActiveGames(): Promise<CompletionStats> {
+  public async scanAndCompleteActiveGames(
+    runOptions: { signal?: AbortSignal } = {},
+  ): Promise<CompletionStats> {
+    const { signal } = runOptions;
     const stats: CompletionStats = createEmptyCompletionStats();
     const pendingGames = this.options.db.getPendingGames(
       this.options.maxCompletionAttempts,
@@ -63,7 +66,7 @@ export class ScanLoopRunner {
       });
     };
 
-    if (pendingCount === 0) {
+    if (pendingCount === 0 || signal?.aborted) {
       recordCycle();
       return stats;
     }
@@ -73,9 +76,16 @@ export class ScanLoopRunner {
     let cachedBlockTime: number | undefined;
 
     for (let index = 0; index < pendingGames.length; index++) {
+      if (signal?.aborted) {
+        break;
+      }
       const game = pendingGames[index]!;
       try {
         cachedBlockTime ??= await this.options.completion.getBlockchainTime();
+
+        if (signal?.aborted) {
+          break;
+        }
 
         const { context: onChainContext, readiness } =
           await this.options.completion.resolveContextAndReadiness(
@@ -85,6 +95,10 @@ export class ScanLoopRunner {
               blockTime: cachedBlockTime,
             },
           );
+
+        if (signal?.aborted) {
+          break;
+        }
         if (!onChainContext) {
           this.options.db.markGameCompleted(game.game_address);
           continue;
@@ -97,6 +111,9 @@ export class ScanLoopRunner {
           skipReadinessCheck: true,
         });
 
+        if (signal?.aborted) {
+          break;
+        }
         if (result) {
           this.updateScanStats(stats, result);
           if (result.notReady) {
@@ -111,7 +128,7 @@ export class ScanLoopRunner {
         if (
           this.shouldThrottleBetweenGames(result ?? null, index, pendingGames.length)
         ) {
-          await delayHelper(this.options.interGameDelayMs);
+          await delayHelper(this.options.interGameDelayMs, { signal });
         }
       } catch (error) {
         stats.errors++;
@@ -122,8 +139,12 @@ export class ScanLoopRunner {
           error: error instanceof Error ? error.message : String(error),
         });
         cachedBlockTime = undefined;
+        if (signal?.aborted) {
+          break;
+        }
+
         if (this.options.interGameDelayMs > 0) {
-          await delayHelper(this.options.interGameDelayMs);
+          await delayHelper(this.options.interGameDelayMs, { signal });
         }
       }
     }
@@ -162,7 +183,7 @@ export class ScanLoopRunner {
       cycle += 1;
       onCycleStart?.(cycle);
 
-      const stats = await this.scanAndCompleteActiveGames();
+  const stats = await this.scanAndCompleteActiveGames({ signal });
       lastStats = stats;
 
       totals.completed += stats.completed;

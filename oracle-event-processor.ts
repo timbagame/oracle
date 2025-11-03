@@ -7,6 +7,8 @@ import type { EventHandlerConfig } from "./oracle-service.types.ts";
 import { toBase58, resolveNumericLike, coercePublicKey } from "./solana-utils.ts";
 import { logger } from "./logger.ts";
 
+const GAME_TYPE_MAX_LENGTH = 128;
+
 export interface OracleEventProcessorOptions {
   getProgram: () => anchor.Program<Timba>;
   db: OracleDatabase;
@@ -197,7 +199,15 @@ export class OracleEventProcessor {
       if (event.gameType) {
         const gameTypeKeys = Object.keys(event.gameType);
         if (gameTypeKeys.length > 0 && gameTypeKeys[0]) {
-          gameType = gameTypeKeys[0].toLowerCase();
+          const normalized = gameTypeKeys[0].toLowerCase();
+          if (normalized.length > GAME_TYPE_MAX_LENGTH) {
+            logger.warn(
+              `⚠️  Truncating game type for ${gameAddress}; received ${normalized.length} characters`,
+            );
+            gameType = normalized.slice(0, GAME_TYPE_MAX_LENGTH);
+          } else {
+            gameType = normalized;
+          }
         }
       }
 
