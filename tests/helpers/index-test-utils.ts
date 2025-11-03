@@ -2,6 +2,8 @@ import type { FakeOracleOptions } from "./fake-oracle.ts";
 import { createBasicOracle } from "./fake-oracle.ts";
 import { createTestEnv } from "./create-test-env.ts";
 
+const DEFAULT_TEST_BASE_URL = "http://localhost:3001";
+
 type IndexModule = typeof import("../../index.ts");
 type Router = ReturnType<IndexModule["buildFetchRouter"]>;
 type Handlers = ReturnType<IndexModule["buildHandlers"]>;
@@ -53,7 +55,7 @@ export async function createIndexLifecycleContext(
 export function buildRequest(
   path: string,
   init?: RequestInit,
-  baseUrl = "http://localhost:3001",
+  baseUrl = DEFAULT_TEST_BASE_URL,
 ): Request {
   return new Request(`${baseUrl}${path}`, init);
 }

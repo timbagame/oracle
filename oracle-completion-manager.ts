@@ -247,6 +247,15 @@ export class GameCompletionManager {
       return { error: missingSecret };
     }
 
+    if (!secretData) {
+      return {
+        error: this.recordFatalCompletionFailure(
+          gameAddress,
+          "Secret data is missing; cannot determine winner",
+        ),
+      };
+    }
+
     const gameAccount = readiness.gameAccount;
     const missingGameAccount = this.guardFatalCompletionRequirement(
       gameAddress,
@@ -270,7 +279,7 @@ export class GameCompletionManager {
       return { error: playerValidation };
     }
 
-    const secretKeyBuffer = Buffer.from(secretData!.secretKey, "hex");
+    const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
     const winnerIndex = this.calculateWinnerIndex(
       secretKeyBuffer,
       Number(resolvedGameAccount.lastSlot),
