@@ -150,14 +150,11 @@ async function runExecuteGameCompletionScenario({
   let tx = "";
 
   try {
-    const gameAccount: Record<string, unknown> = {
-      creator: creator.toBase58(),
-      tokenMint: tokenMint.toBase58(),
-    };
-
-    if (tokenProgram !== undefined) {
-      gameAccount["tokenProgram"] = tokenProgram;
-    }
+    const gameAccount = createGameAccountStub({
+      creator,
+      tokenMint,
+      ...(tokenProgram !== undefined ? { tokenProgram } : {}),
+    });
 
     tx = await service.completionManager.executeGameCompletion({
       gameAccount,
