@@ -19,6 +19,18 @@ type PublicKeyInput =
 
 export type PublicKeyLike = PublicKeyInput;
 
+function isAnchorPublicKey(value: unknown): value is anchor.web3.PublicKey {
+  return value instanceof anchor.web3.PublicKey;
+}
+
+function isArrayBufferView(value: unknown): value is ArrayBufferView {
+  return ArrayBuffer.isView(value) && !(value instanceof DataView);
+}
+
+function hasToBase58Method(value: object): value is { toBase58: () => string } {
+  return typeof (value as { toBase58?: unknown }).toBase58 === "function";
+}
+
 export function coercePublicKey(value: PublicKeyLike): PublicKey | null {
   if (!value) {
     return null;
@@ -28,7 +40,7 @@ export function coercePublicKey(value: PublicKeyLike): PublicKey | null {
     return value;
   }
 
-  if (value instanceof anchor.web3.PublicKey) {
+  if (isAnchorPublicKey(value)) {
     return new PublicKey(value.toBytes());
   }
 
@@ -40,22 +52,26 @@ export function coercePublicKey(value: PublicKeyLike): PublicKey | null {
     }
   }
 
-  if (value instanceof Uint8Array) {
-    return new PublicKey(value);
+  if (value instanceof Uint8Array || Array.isArray(value)) {
+    try {
+      return new PublicKey(value);
+    } catch {
+      return null;
+    }
   }
 
-  if (Array.isArray(value)) {
-    return new PublicKey(value);
-  }
-
-  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
-    return new PublicKey(new Uint8Array(value.buffer));
+  if (isArrayBufferView(value)) {
+    try {
+      return new PublicKey(new Uint8Array(value.buffer));
+    } catch {
+      return null;
+    }
   }
 
   if (typeof value === "object") {
     const candidate = value as PublicKeyRecord;
 
-    if (typeof candidate.toBase58 === "function") {
+    if (hasToBase58Method(candidate)) {
       try {
         return new PublicKey(candidate.toBase58());
       } catch {

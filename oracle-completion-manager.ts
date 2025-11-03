@@ -251,7 +251,6 @@ export class GameCompletionManager {
       blockTime,
     } = options;
 
-    // Step 1: Resolve context
     const resolvedContext = await this.resolveGameContext(
       gameAddress,
       providedContext,
@@ -262,57 +261,76 @@ export class GameCompletionManager {
       return { context: null, readiness: undefined, notReady: false };
     }
 
-    // Step 2: Get readiness from available sources
-    let readinessSnapshot = providedReadiness ?? providedContext?.readiness;
-
-    // If requireOnChain but readiness lacks gameAccount, invalidate it
-    if (readinessSnapshot && requireOnChain && !readinessSnapshot.gameAccount) {
-      readinessSnapshot = undefined;
-    }
-
-    // Step 3: Try cache if no readiness and not requiring on-chain
-    if (!readinessSnapshot && !requireOnChain) {
-      readinessSnapshot = this.consumeReadiness(gameAddress);
-    }
-
-    // Step 4: If we have readiness and not requiring on-chain, use it
-    if (readinessSnapshot && !requireOnChain) {
-      const contextWithReadiness = resolvedContext.readiness !== readinessSnapshot
-        ? { ...resolvedContext, readiness: readinessSnapshot }
-        : resolvedContext;
-
-      const notReady = !readinessSnapshot.ready || !readinessSnapshot.gameAccount;
-      return { context: contextWithReadiness, readiness: readinessSnapshot, notReady };
-    }
-
-    // Step 5: Fetch from blockchain if required or no readiness available
-    if (requireOnChain || !readinessSnapshot) {
-      const evaluation = await this.evaluateAndCacheReadiness(
-        resolvedContext.gamePda,
-        gameAddress,
+    const readinessSnapshot = await this.resolveReadinessSnapshot(
+      gameAddress,
+      resolvedContext,
+      {
+        providedReadiness,
+        providedContext,
+        requireOnChain,
         blockTime,
-      );
+      },
+    );
 
-      if (!evaluation.gameAccount && requireOnChain) {
-        logger.warning(`Game ${gameAddress} no longer exists on-chain`);
-        return { context: null, readiness: undefined, notReady: false };
-      }
-
-      readinessSnapshot = evaluation;
+    if (!readinessSnapshot) {
+      return { context: null, readiness: undefined, notReady: false };
     }
 
-    // Step 6: Build final result
     const contextWithReadiness = resolvedContext.readiness !== readinessSnapshot
       ? { ...resolvedContext, readiness: readinessSnapshot }
       : resolvedContext;
 
-    const notReady = !readinessSnapshot || !readinessSnapshot.ready || !readinessSnapshot.gameAccount;
+    const notReady = !readinessSnapshot.ready || !readinessSnapshot.gameAccount;
 
     return {
       context: contextWithReadiness,
       readiness: readinessSnapshot,
       notReady,
     };
+  }
+
+  private async resolveReadinessSnapshot(
+    gameAddress: string,
+    context: GameOnChainContext,
+    options: {
+      providedReadiness?: GameReadinessSnapshot;
+      providedContext?: GameOnChainContext | null;
+      requireOnChain: boolean;
+      blockTime?: number;
+    },
+  ): Promise<GameReadinessSnapshot | null> {
+    const { providedReadiness, providedContext, requireOnChain, blockTime } = options;
+
+    let readinessSnapshot = providedReadiness ?? providedContext?.readiness;
+
+    if (readinessSnapshot && requireOnChain && !readinessSnapshot.gameAccount) {
+      readinessSnapshot = undefined;
+    }
+
+    if (!readinessSnapshot && !requireOnChain) {
+      readinessSnapshot = this.consumeReadiness(gameAddress);
+    }
+
+    if (readinessSnapshot && !requireOnChain) {
+      return readinessSnapshot;
+    }
+
+    if (requireOnChain || !readinessSnapshot) {
+      const evaluation = await this.evaluateAndCacheReadiness(
+        context.gamePda,
+        gameAddress,
+        blockTime,
+      );
+
+      if (!evaluation.gameAccount && requireOnChain) {
+        logger.warning(`Game ${gameAddress} no longer exists on-chain`);
+        return null;
+      }
+
+      return evaluation;
+    }
+
+    return readinessSnapshot;
   }
 
   public consumeReadiness(gameAddress: string): GameReadinessSnapshot | undefined {
