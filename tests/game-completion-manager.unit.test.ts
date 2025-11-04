@@ -310,6 +310,79 @@ describe("GameCompletionManager.attemptGameCompletion outcome handling", () => {
       errorSpy.mockRestore();
     }
   });
+
+  it("prevents concurrent completions for the same game", async () => {
+    const { manager } = createManager();
+    const gameAddress = "lock-game";
+
+    const context: GameOnChainContext = {
+      gamePda: Keypair.generate().publicKey,
+      randomHashBuffer: Buffer.alloc(32),
+      secretData: {
+        secretKey: "11".repeat(32),
+        randomHash: "22".repeat(32),
+      },
+    };
+    const readiness: GameReadinessSnapshot = {
+      ready: true,
+      gameAccount: {} as any,
+    };
+
+    const resolveSpy = spyOn(manager as any, "resolveContextAndReadiness").mockResolvedValue({
+      context,
+      readiness,
+      notReady: false,
+    });
+
+    let release: (() => void) | undefined;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    let completionCalls = 0;
+
+    const firstPromise = manager.attemptGameCompletion(
+      {
+        gameAddress,
+        context,
+        readiness,
+        skipReadinessCheck: true,
+      },
+      {
+        completeGame: async () => {
+          completionCalls += 1;
+          await barrier;
+          return { success: true, txHash: "tx-1" };
+        },
+      },
+    );
+
+    await Promise.resolve();
+
+    const secondResult = await manager.attemptGameCompletion(
+      {
+        gameAddress,
+        context,
+        readiness,
+        skipReadinessCheck: true,
+      },
+      {
+        completeGame: async () => {
+          completionCalls += 1;
+          return { success: true, txHash: "tx-2" };
+        },
+      },
+    );
+
+    expect(secondResult).toBeNull();
+
+    release?.();
+    const firstResult = await firstPromise;
+    expect(firstResult).toEqual({ success: true, txHash: "tx-1" });
+    expect(completionCalls).toBe(1);
+
+    resolveSpy.mockRestore();
+  });
 });
 
 describe("GameCompletionManager player registry recovery", () => {

@@ -119,6 +119,8 @@ export class ScanLoopRunner {
           if (result.notReady) {
             this.options.db.touchGameCheck(game.game_address);
           }
+        } else {
+          this.options.db.touchGameCheck(game.game_address);
         }
 
         if (readiness && !readiness.ready) {

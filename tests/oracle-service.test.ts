@@ -288,6 +288,61 @@ describe("OracleService", () => {
     }
   });
 
+  it("backs off when completion attempt returns null", async () => {
+    const service = OracleService.getInstance();
+    const db = OracleDatabase.getInstance();
+    resetPendingGames(db, { service });
+
+    const gameAddress = "in-flight";
+    seedTrackedGame(db, {
+      address: gameAddress,
+      secret: "secret",
+      randomHash: "hash",
+    });
+
+    const sqlite = (db as any).db as {
+      prepare: (
+        sql: string,
+      ) => { run: (...args: unknown[]) => void; get: (...args: unknown[]) => any };
+    };
+    sqlite
+      .prepare("UPDATE game_tracking SET last_checked = ? WHERE game_address = ?")
+      .run(1, gameAddress);
+
+    const getLastChecked = () => {
+      const row = sqlite
+        .prepare("SELECT last_checked FROM game_tracking WHERE game_address = ?")
+        .get(gameAddress) as { last_checked: number } | undefined;
+      return row?.last_checked ?? 0;
+    };
+
+    const lastCheckedBefore = getLastChecked();
+
+    const context = makeFakeContext();
+    const resolveSpy = spyOn(
+      service.completionManager,
+      "resolveContextAndReadiness",
+    ).mockResolvedValue({
+      context,
+      readiness: context.readiness,
+      notReady: false,
+    });
+    const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockResolvedValue(
+      null,
+    );
+
+    try {
+      const stats = await service.scanRunner.scanAndCompleteActiveGames();
+      const lastCheckedAfter = getLastChecked();
+
+      expect(stats).toEqual({ completed: 0, errors: 0, notReady: 0 });
+      expect(lastCheckedAfter).toBeGreaterThan(lastCheckedBefore);
+    } finally {
+      resolveSpy.mockRestore();
+      attemptSpy.mockRestore();
+    }
+  });
+
   it("skips games that exceed max completion attempts", async () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();
