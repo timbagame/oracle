@@ -147,6 +147,30 @@ describe("PlayerRegistrySync", () => {
     expect(players).toBeNull();
   });
 
+  it("tolerates invalid player public keys without aborting the sync", async () => {
+    const gamePda = Keypair.generate().publicKey;
+
+    const events: EventData[] = [
+      {
+        name: "playerJoined",
+        data: {
+          gameKey: gamePda,
+          player: "not-a-base58-key!",
+          ticketIndex: 0,
+        },
+      },
+    ];
+
+    const sync = createSync([events]);
+
+    const players = await sync.fetchPlayersFromChain({
+      gamePda,
+      expectedTickets: 1,
+    });
+
+    expect(players).toBeNull();
+  });
+
   it("honors maxSignatures limits when paging signatures", async () => {
     const gamePda = Keypair.generate().publicKey;
     const player = Keypair.generate().publicKey;

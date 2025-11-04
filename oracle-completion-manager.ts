@@ -731,9 +731,9 @@ export class GameCompletionManager {
       return { ready: false, gameAccount: null };
     }
 
-    const evaluatedAt = blockTime ?? (await this.getBlockchainTime());
-    const expiresAt = Number(gameAccount.createdAt) + Number(gameAccount.timeout);
-    const isExpired = evaluatedAt > expiresAt;
+  const evaluatedAt = blockTime ?? (await this.getBlockchainTime());
+  const expiresAt = Number(gameAccount.createdAt) + Number(gameAccount.timeout);
+  const isExpired = evaluatedAt >= expiresAt;
     const ticketsCount = Number(gameAccount.ticketsCount);
     const isFull = ticketsCount >= Number(gameAccount.maxTickets);
     const hasMinTickets = ticketsCount >= Number(gameAccount.minTickets);

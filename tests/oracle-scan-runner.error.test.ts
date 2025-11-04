@@ -50,4 +50,49 @@ describe("ScanLoopRunner error recovery", () => {
     expect(stats).toEqual({ completed: 0, errors: 1, notReady: 0 });
     expect(touched).toEqual(["error-game"]);
   });
+
+  it("reschedules games when completion is already in-flight elsewhere", async () => {
+    const touched: string[] = [];
+
+    const db = {
+      getPendingGames: () => [
+        { game_address: "inflight-game", completion_attempts: 0 },
+      ],
+      markGameCompleted: () => {},
+      touchGameCheck: (address: string) => {
+        touched.push(address);
+      },
+    } as unknown as OracleDatabase;
+
+    const metrics: OracleMetrics = {
+      recordCompletion: () => {},
+      recordScanCycle: () => {},
+      recordCleanupSweep: () => {},
+    };
+
+    const completion: ScanLoopRunnerOptions["completion"] = {
+      resolveContextAndReadiness: async () => ({
+        context: {} as any,
+        readiness: { ready: true } as any,
+        notReady: false,
+      }),
+      attemptGameCompletion: async () => null,
+      consumeReadiness: () => undefined,
+      getBlockchainTime: async () => Date.now(),
+    };
+
+    const runner = new ScanLoopRunner({
+      db,
+      metrics,
+      completion,
+      interGameDelayMs: 0,
+      maxCompletionAttempts: 5,
+      cleanupOldRecords: () => {},
+    });
+
+    const stats = await runner.scanAndCompleteActiveGames();
+
+    expect(stats).toEqual({ completed: 0, errors: 0, notReady: 0 });
+    expect(touched).toEqual(["inflight-game"]);
+  });
 });

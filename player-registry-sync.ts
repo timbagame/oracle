@@ -76,10 +76,16 @@ export class PlayerRegistrySync {
           continue;
         }
 
-        const eventGameKey = ensurePublicKey(
-          (data["gameKey"] ?? data["game_key"] ?? data["game"] ?? null) as PublicKeyLike,
-        );
-        if (!eventGameKey || !eventGameKey.equals(gamePda)) {
+        let eventGameKey: PublicKey;
+        try {
+          eventGameKey = ensurePublicKey(
+            (data["gameKey"] ?? data["game_key"] ?? data["game"] ?? null) as PublicKeyLike,
+          );
+        } catch (error) {
+          logger.warning(`Skipping player event with invalid game key: ${String(error)}`);
+          continue;
+        }
+        if (!eventGameKey.equals(gamePda)) {
           continue;
         }
 
@@ -97,10 +103,13 @@ export class PlayerRegistrySync {
           continue;
         }
 
-        const playerKey = ensurePublicKey(
-          (data["player"] ?? data["playerAddress"] ?? data["player_address"] ?? null) as PublicKeyLike,
-        );
-        if (!playerKey) {
+        let playerKey: PublicKey;
+        try {
+          playerKey = ensurePublicKey(
+            (data["player"] ?? data["playerAddress"] ?? data["player_address"] ?? null) as PublicKeyLike,
+          );
+        } catch (error) {
+          logger.warning(`Skipping player event with invalid player key: ${String(error)}`);
           continue;
         }
 

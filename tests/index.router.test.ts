@@ -215,6 +215,34 @@ describe("index router", () => {
     }
   });
 
+  test("POST /games/requeue rejects whitespace-only addresses", async () => {
+    const calls: string[] = [];
+    const rejectingContext = await createIndexRouterTestContext("index-router-requeue-whitespace", {
+      requeueGame: (address) => {
+        calls.push(address);
+        return { success: true };
+      },
+    });
+
+    try {
+      const { response, json } = await executeJsonRequest(
+        rejectingContext.router,
+        "/games/requeue",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameAddress: "   " }),
+        },
+      );
+
+      expect(response.status).toBe(400);
+      expect((json as any).error).toContain("gameAddress");
+      expect(calls).toHaveLength(0);
+    } finally {
+      rejectingContext.testEnv.cleanup();
+    }
+  });
+
   test("POST /games/requeue maps failure reasons to correct responses", async () => {
     const scenarios: Array<{
       reason: RequeueGameFailureReason;

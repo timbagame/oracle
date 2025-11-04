@@ -96,6 +96,29 @@ function createManager(overrides: {
   };
 }
 
+describe("GameCompletionManager.evaluateGameReadiness", () => {
+  it("treats block time equal to the timeout boundary as expired when minimum tickets are met", async () => {
+    const { manager } = createManager();
+    const gamePda = Keypair.generate().publicKey;
+    const gameAddress = gamePda.toBase58();
+    const fetchSpy = spyOn(manager as any, "fetchGameAccount").mockResolvedValue({
+      createdAt: BigInt(1_000),
+      timeout: BigInt(60),
+      ticketsCount: BigInt(3),
+      maxTickets: BigInt(5),
+      minTickets: BigInt(2),
+    } satisfies Partial<TimbaGameAccount>);
+
+    try {
+      const readiness = await manager.evaluateGameReadiness(gamePda, gameAddress, 1_060);
+      expect(readiness.ready).toBe(true);
+      expect(readiness.evaluatedAt).toBe(1_060);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
 describe("GameCompletionManager.calculateWinnerIndex", () => {
   let manager: ReturnType<typeof createManager>["manager"];
 
