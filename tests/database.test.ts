@@ -136,6 +136,53 @@ describe("OracleDatabase", () => {
     });
   });
 
+  it("resets completion attempts for eligible games", () => {
+    const db = OracleDatabase.getInstance();
+    const sqlite = (db as any).db as {
+      prepare: (
+        sql: string,
+      ) => { get: (...args: unknown[]) => { status: string; completion_attempts: number } | undefined };
+    };
+
+    const pending = "requeue-pending";
+    db.trackGame(pending);
+    db.incrementCompletionAttempts(pending);
+    db.incrementCompletionAttempts(pending);
+
+    expect(db.resetCompletionAttempts(pending)).toEqual({ success: true });
+    let snapshot = sqlite
+      .prepare("SELECT status, completion_attempts FROM game_tracking WHERE game_address = ?")
+      .get(pending);
+    expect(snapshot?.status).toBe("pending");
+    expect(snapshot?.completion_attempts).toBe(0);
+
+    const desynced = "requeue-desynced";
+    db.trackGame(desynced);
+    db.incrementCompletionAttempts(desynced);
+    db.markGameDesynced(desynced);
+
+    expect(db.resetCompletionAttempts(desynced)).toEqual({ success: true });
+    snapshot = sqlite
+      .prepare("SELECT status, completion_attempts FROM game_tracking WHERE game_address = ?")
+      .get(desynced);
+    expect(snapshot?.status).toBe("pending");
+    expect(snapshot?.completion_attempts).toBe(0);
+
+    const finalized = "requeue-finalized";
+    db.trackGame(finalized);
+    db.markGameCompleted(finalized);
+
+    expect(db.resetCompletionAttempts(finalized)).toEqual({
+      success: false,
+      reason: "finalized",
+    });
+
+    expect(db.resetCompletionAttempts("missing-game")).toEqual({
+      success: false,
+      reason: "not-found",
+    });
+  });
+
   it("keeps freshly completed games when cleanup window is zero", () => {
     const db = OracleDatabase.getInstance();
     const gameAddress = "fresh-complete";

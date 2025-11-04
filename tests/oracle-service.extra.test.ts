@@ -1094,6 +1094,50 @@ describe("OracleService internals", () => {
     }
   });
 
+  it("requeueGame resets attempts for eligible games", () => {
+    const service = OracleService.getInstance();
+    const db = OracleDatabase.getInstance();
+    resetPendingGames(db, { service });
+
+    const gameAddr = "requeue-service";
+    seedTrackedGame(db, {
+      address: gameAddr,
+      secret: "aa".repeat(32),
+      randomHash: "bb".repeat(32),
+    });
+
+    db.incrementCompletionAttempts(gameAddr);
+    db.incrementCompletionAttempts(gameAddr);
+    db.markGameDesynced(gameAddr);
+
+    const result = service.requeueGame(gameAddr);
+    expect(result).toEqual({ success: true });
+
+    const sqlite = (db as any).db as {
+      prepare: (
+        sql: string,
+      ) => { get: (...args: unknown[]) => { status: string; completion_attempts: number } | undefined };
+    };
+    const snapshot = sqlite
+      .prepare("SELECT status, completion_attempts FROM game_tracking WHERE game_address = ?")
+      .get(gameAddr);
+
+    expect(snapshot?.status).toBe("pending");
+    expect(snapshot?.completion_attempts).toBe(0);
+  });
+
+  it("requeueGame rejects when secret is missing", () => {
+    const service = OracleService.getInstance();
+    const db = OracleDatabase.getInstance();
+    resetPendingGames(db, { service });
+
+    const gameAddr = "requeue-missing-secret";
+    db.trackGame(gameAddr);
+
+    const result = service.requeueGame(gameAddr);
+    expect(result).toEqual({ success: false, reason: "missing-secret" });
+  });
+
   it("scanAndCompleteActiveGames clears tracked games lacking secrets", async () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();

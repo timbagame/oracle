@@ -14,6 +14,7 @@ export interface FakeOracleOptions {
   startEventListening?: OracleApi["startEventListening"];
   stopEventListening?: OracleApi["stopEventListening"];
   cleanupOldRecords?: OracleApi["cleanupOldRecords"];
+  requeueGame?: OracleApi["requeueGame"];
 }
 
 const DEFAULT_CLEANUP_STATS: CleanupStats = {
@@ -40,6 +41,7 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
     startEventListening,
     stopEventListening,
     cleanupOldRecords,
+    requeueGame,
   } = options;
 
   return {
@@ -54,5 +56,6 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
     startEventListening: startEventListening ?? (async () => {}),
     stopEventListening: stopEventListening ?? (async () => {}),
     cleanupOldRecords: cleanupOldRecords ?? (() => ({ ...DEFAULT_CLEANUP_STATS })),
+    requeueGame: requeueGame ?? (() => ({ success: true })),
   };
 }

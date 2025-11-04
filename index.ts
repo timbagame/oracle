@@ -1,5 +1,9 @@
 import { delay, DEFAULT_DELAY_MS } from "./delay.ts";
-import { OracleService } from "./oracle-service.ts";
+import {
+  OracleService,
+  type RequeueGameFailureReason,
+  type RequeueGameResult,
+} from "./oracle-service.ts";
 import { getEnvironmentMode, isTestEnvironment } from "./env.ts";
 import { getConfig, DEFAULT_ORACLE_PORT } from "./config.ts";
 import type { CompletionStats } from "./oracle-service.types.ts";
@@ -161,6 +165,7 @@ export interface OracleApi {
   startEventListening: () => ReturnType<OracleService["startEventListening"]>;
   stopEventListening: () => ReturnType<OracleService["stopEventListening"]>;
   cleanupOldRecords: OracleService["cleanupOldRecords"];
+  requeueGame: (gameAddress: string) => RequeueGameResult;
 }
 
 interface JsonBodyResult {
@@ -243,7 +248,61 @@ export function buildHandlers(oracle: OracleApi) {
       const stats = oracle.getStats();
       return createSuccessResponse({ stats });
     },
+
+    async handleRequeueGame(request?: Request): Promise<Response> {
+      try {
+        if (!request) {
+          return createErrorResponse("Request body required", 400);
+        }
+
+        const { body, parseError } = await readJsonBody(request);
+        if (parseError) {
+          return createErrorResponse(parseError, 400);
+        }
+
+        const providedValue = body ? body["gameAddress"] : undefined;
+        const providedAddress =
+          typeof providedValue === "string" ? providedValue.trim() : "";
+
+        if (!providedAddress) {
+          return createErrorResponse("gameAddress is required", 400);
+        }
+
+        const result = oracle.requeueGame(providedAddress);
+        if (!result.success) {
+          const outcome = mapRequeueFailureToResponse(providedAddress, result.reason);
+          return createErrorResponse(outcome.message, outcome.status);
+        }
+
+        return createSuccessResponse({ gameAddress: providedAddress, status: "queued" });
+      } catch (error: unknown) {
+        logger.failure("Error requeuing game:", error);
+        return createInternalServerErrorResponse();
+      }
+    },
   };
+}
+
+function mapRequeueFailureToResponse(
+  gameAddress: string,
+  reason: RequeueGameFailureReason,
+): { status: number; message: string } {
+  switch (reason) {
+    case "invalid-address":
+      return { status: 400, message: "gameAddress is required" };
+    case "not-found":
+      return { status: 404, message: `Game ${gameAddress} is not tracked` };
+    case "finalized":
+      return { status: 409, message: `Game ${gameAddress} is already finalized` };
+    case "missing-secret":
+      return { status: 409, message: `Game ${gameAddress} is missing its secret key` };
+    case "unchanged":
+    default:
+      return {
+        status: 409,
+        message: `Game ${gameAddress} is already queued for completion`,
+      };
+  }
 }
 
 type HandlerName = keyof ReturnType<typeof buildHandlers>;
@@ -275,6 +334,13 @@ export const ROUTE_METADATA: ReadonlyArray<RouteDocumentation> = [
     method: "GET",
     handler: "handleStats",
     summary: "Detailed statistics and metrics about the oracle service",
+  },
+  {
+    path: "/games/requeue",
+    method: "POST",
+    handler: "handleRequeueGame",
+    summary: "Reset completion attempts so a pending game can be scanned again",
+    requestExample: '{ "gameAddress": "Ht8Kup..." }',
   },
 ];
 
@@ -425,6 +491,7 @@ if (!IS_TEST_ENV) {
     startEventListening: () => realOracle.startEventListening(),
     stopEventListening: () => realOracle.stopEventListening(),
     cleanupOldRecords: (hoursOld) => realOracle.cleanupOldRecords(hoursOld),
+    requeueGame: (gameAddress) => realOracle.requeueGame(gameAddress),
   };
   const handlers = buildHandlers(oracleApi);
   const fetchRouter = buildFetchRouter(handlers);

@@ -19,6 +19,8 @@ const SQL_STATEMENTS = Object.freeze({
   incrementCompletionAttempts:
     "UPDATE game_tracking SET completion_attempts = completion_attempts + 1, last_checked = ? WHERE game_address = ?",
   touchPendingGame: "UPDATE game_tracking SET last_checked = ? WHERE game_address = ?",
+  resetCompletionAttempts:
+    "UPDATE game_tracking SET status = ?, completion_attempts = 0, last_checked = ? WHERE game_address = ?",
   upsertGamePlayer:
     "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)",
   deleteGamePlayerByTicket:
@@ -84,6 +86,10 @@ interface DatabaseStats {
   completedGames: number;
   cancelledGames: number;
 }
+
+export type ResetCompletionAttemptsResult =
+  | { success: true }
+  | { success: false; reason: "not-found" | "finalized" | "unchanged" };
 
 const TABLE_DEFINITIONS: ReadonlyArray<{
   sql: string;
@@ -430,6 +436,16 @@ export class OracleDatabase {
     return result?.game_type || null;
   }
 
+  public getGameStatus(gameAddress: string): string | null {
+    const result = this.queryOne<{ status: string }>(
+      SQL_QUERIES.selectGameStatus,
+      "Failed to get game status",
+      null,
+      gameAddress,
+    );
+    return result?.status ?? null;
+  }
+
   private updateGameStatus(
     gameAddress: string,
     status: "completed" | "cancelled",
@@ -487,6 +503,38 @@ export class OracleDatabase {
       Date.now(),
       gameAddress,
     );
+  }
+
+  public resetCompletionAttempts(gameAddress: string): ResetCompletionAttemptsResult {
+    const statusRecord = this.queryOne<{ status: string }>(
+      SQL_QUERIES.selectGameStatus,
+      "Failed to lookup existing game status",
+      null,
+      gameAddress,
+    );
+
+    if (!statusRecord) {
+      return { success: false, reason: "not-found" };
+    }
+
+    if (statusRecord.status !== DEFAULT_STATUS && statusRecord.status !== "desynced") {
+      return { success: false, reason: "finalized" };
+    }
+
+    const result = this.runStatement(
+      SQL_STATEMENTS.resetCompletionAttempts,
+      "Failed to reset completion attempts",
+      DEFAULT_STATUS,
+      Date.now() - 1,
+      gameAddress,
+    );
+
+    const updated = typeof result?.changes === "number" && result.changes > 0;
+    if (!updated) {
+      return { success: false, reason: "unchanged" };
+    }
+
+    return { success: true };
   }
 
   public touchGameCheck(gameAddress: string): void {

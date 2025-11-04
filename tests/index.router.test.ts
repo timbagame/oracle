@@ -157,6 +157,63 @@ describe("index router", () => {
     expect((json as any).stats).toBeDefined();
   });
 
+  test("POST /games/requeue queues the game", async () => {
+    const requeueCalls: string[] = [];
+    const requeueContext = await createIndexRouterTestContext("index-router-requeue", {
+      requeueGame: (gameAddress) => {
+        requeueCalls.push(gameAddress);
+        return { success: true };
+      },
+    });
+
+    try {
+      const { response, json } = await executeJsonRequest(
+        requeueContext.router,
+        "/games/requeue",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameAddress: "game123" }),
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect((json as any).success).toBe(true);
+      expect((json as any).status).toBe("queued");
+      expect(requeueCalls).toEqual(["game123"]);
+    } finally {
+      requeueContext.testEnv.cleanup();
+    }
+  });
+
+  test("POST /games/requeue validates payload and propagates failures", async () => {
+    const failingContext = await createIndexRouterTestContext("index-router-requeue-fail", {
+      requeueGame: () => ({ success: false, reason: "not-found" }),
+    });
+
+    try {
+      const missingBody = await executeJsonRequest(failingContext.router, "/games/requeue", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(missingBody.response.status).toBe(400);
+      expect((missingBody.json as any).error).toContain("gameAddress");
+
+      const failure = await executeJsonRequest(failingContext.router, "/games/requeue", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ gameAddress: "unknown" }),
+      });
+
+      expect(failure.response.status).toBe(404);
+      expect((failure.json as any).success).toBe(false);
+      expect((failure.json as any).error).toContain("not tracked");
+    } finally {
+      failingContext.testEnv.cleanup();
+    }
+  });
+
   test("GET / returns HTML", async () => {
     const { response, text } = await executeTextRequest(context.router, "/", {
       method: "GET",
@@ -250,6 +307,7 @@ describe("index router", () => {
         },
         handleGenerateHash: async (_request: Request) => new Response("ok"),
         handleStats: async (_request: Request) => new Response("ok"),
+        handleRequeueGame: async (_request: Request) => new Response("ok"),
       });
 
       const { response, json } = await executeJsonRequest(router, "/health", {
@@ -276,6 +334,7 @@ describe("index router", () => {
         IndexRouterTestContext["handlers"]
       >;
       delete (incompleteHandlers as any).handleStats;
+      incompleteHandlers.handleRequeueGame = async () => new Response("ok");
       const router = context.module.buildFetchRouter(incompleteHandlers as any);
 
       const { response, json } = await executeJsonRequest(router, "/stats", {

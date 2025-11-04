@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import { randomBytes, createHash } from "crypto";
 import * as fs from "fs";
-import { OracleDatabase } from "./database.ts";
+import { OracleDatabase, type ResetCompletionAttemptsResult } from "./database.ts";
 import { getConfig, type OracleRuntimeConfig } from "./config.ts";
 import { getOracleMetrics, type OracleMetrics } from "./metrics.ts";
 import { OracleEventProcessor, EVENT_HANDLER_CONFIG } from "./oracle-event-processor.ts";
@@ -35,6 +35,17 @@ const SECRET_KEY_LENGTH = 32;
 const MAX_COMPLETION_ATTEMPTS = 5;
 export const EVENT_LISTENER_FAILURE_MESSAGE = "❌ Failed to start event listeners:";
 const NO_SECRET_KEY_MESSAGE = "No secret key found";
+
+export type RequeueGameFailureReason =
+  | "invalid-address"
+  | "missing-secret"
+  | "not-found"
+  | "finalized"
+  | "unchanged";
+
+export type RequeueGameResult =
+  | { success: true }
+  | { success: false; reason: RequeueGameFailureReason };
 
 export class OracleService {
   private static instance: OracleService;
@@ -340,6 +351,35 @@ export class OracleService {
     return this.completion.completeGame(gameAddress, cachedReadiness, sharedContext);
   }
 
+  public requeueGame(gameAddress: string): RequeueGameResult {
+    const normalized = gameAddress.trim();
+    if (!normalized) {
+      return { success: false, reason: "invalid-address" };
+    }
+
+    const status = this.db.getGameStatus(normalized);
+    if (!status) {
+      return { success: false, reason: "not-found" };
+    }
+
+    if (status !== "pending" && status !== "desynced") {
+      return { success: false, reason: "finalized" };
+    }
+
+    const secret = this.db.getSecretKey(normalized);
+    if (!secret) {
+      return { success: false, reason: "missing-secret" };
+    }
+
+    const resetResult = this.db.resetCompletionAttempts(normalized);
+    if (!resetResult.success) {
+      return { success: false, reason: this.mapResetFailure(resetResult) };
+    }
+
+    this.readinessCache.delete(normalized);
+    return { success: true };
+  }
+
   private async tryAutoComplete(
     gameKey: PublicKeyLike,
     gameAddress: string,
@@ -366,6 +406,18 @@ export class OracleService {
     return this.completion.attemptGameCompletion(options, {
       completeGame: complete,
     });
+  }
+
+  private mapResetFailure(result: ResetCompletionAttemptsResult & { success: false }): RequeueGameFailureReason {
+    switch (result.reason) {
+      case "not-found":
+        return "not-found";
+      case "finalized":
+        return "finalized";
+      case "unchanged":
+      default:
+        return "unchanged";
+    }
   }
 
   public cleanupOldRecords(hoursOld: number = 48) {
