@@ -148,8 +148,9 @@ export class OracleService {
       return keypair;
     }
 
-    if (useEphemeralKeypair && this.isMissingFileError(error)) {
-      return this.createEphemeralAdminKeypair(adminKeypairSource);
+    if (useEphemeralKeypair && error) {
+      const reason = this.describeAdminKeypairError(adminKeypairSource, error);
+      return this.createEphemeralAdminKeypair(adminKeypairSource, reason);
     }
 
     this.logAdminKeypairFailure(adminKeypairPath, error);
@@ -186,10 +187,38 @@ export class OracleService {
     return typeof message === "string" && message.includes("ENOENT");
   }
 
-  private createEphemeralAdminKeypair(missingSource: string): anchor.web3.Keypair {
+  private isPermissionError(error: unknown): boolean {
+    if (!error || typeof error !== "object") {
+      return false;
+    }
+
+    const code = "code" in error ? (error as { code?: string }).code : undefined;
+    if (code === "EACCES" || code === "EPERM") {
+      return true;
+    }
+
+    const message = "message" in error ? (error as { message?: unknown }).message : undefined;
+    return typeof message === "string" && /permission denied/i.test(message);
+  }
+
+  private describeAdminKeypairError(source: string, error: unknown): string {
+    if (this.isMissingFileError(error)) {
+      return `${source} was not found.`;
+    }
+
+    if (this.isPermissionError(error)) {
+      const message = error instanceof Error ? error.message : String(error);
+      return `${source} could not be read: ${message}`;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    return `${source} could not be loaded: ${message}`;
+  }
+
+  private createEphemeralAdminKeypair(source: string, reason?: string): anchor.web3.Keypair {
     const keypair = anchor.web3.Keypair.generate();
     logger.warning(
-      `Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${missingSource} was not found.`,
+      `Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${reason ?? `${source} was not found.`}`,
     );
     return keypair;
   }

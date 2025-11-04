@@ -10,6 +10,9 @@ export interface PlayerRegistrySyncOptions {
   program: anchor.Program<Timba>;
   batchSize?: number;
   maxBatches?: number;
+  eventParserFactory?: (programId: PublicKey, coder: anchor.Coder) => {
+    parseLogs: (logs: string[]) => Iterable<unknown>;
+  };
 }
 
 export interface FetchRegistryParams {
@@ -21,10 +24,16 @@ export interface FetchRegistryParams {
 export class PlayerRegistrySync {
   private readonly batchSize: number;
   private readonly maxBatches: number;
+  private readonly createEventParser: (
+    programId: PublicKey,
+    coder: anchor.Coder,
+  ) => { parseLogs: (logs: string[]) => Iterable<unknown> };
 
   constructor(private readonly options: PlayerRegistrySyncOptions) {
     this.batchSize = Math.max(10, options.batchSize ?? 500);
     this.maxBatches = Math.max(1, options.maxBatches ?? 6);
+    this.createEventParser = options.eventParserFactory
+      ?? ((programId, coder) => new anchor.EventParser(programId, coder));
   }
 
   public async fetchPlayersFromChain(params: FetchRegistryParams): Promise<string[] | null> {
@@ -38,7 +47,7 @@ export class PlayerRegistrySync {
     const program = this.options.program;
     const coder = (program as unknown as { coder?: anchor.Coder }).coder ??
       new anchor.BorshCoder(program.idl);
-    const parser = new anchor.EventParser(program.programId, coder);
+    const parser = this.createEventParser(program.programId, coder);
 
     const ticketAssignments = new Map<number, string>();
 
@@ -104,7 +113,8 @@ export class PlayerRegistrySync {
     }
 
     const ordered = [...ticketAssignments.entries()].sort((a, b) => a[0] - b[0]);
-    const contiguous = ordered.every(([index], position) => index === position);
+    const firstIndex = ordered[0]?.[0] ?? 0;
+    const contiguous = ordered.every(([index], position) => index === firstIndex + position);
 
     if (!contiguous) {
       logger.warning(

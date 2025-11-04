@@ -48,6 +48,7 @@ export class GameCompletionManager {
   private readonly attemptedRegistryRecovery = new Set<string>();
   private readonly registryPrefetchCooldownMs = 60_000;
   private readonly registryPrefetchSchedule = new Map<string, number>();
+  private readonly inFlightCompletions = new Set<string>();
 
   constructor(private readonly options: GameCompletionManagerOptions) {}
 
@@ -68,6 +69,13 @@ export class GameCompletionManager {
       ) => Promise<GameCompletionResult>;
     } = {},
   ): Promise<GameCompletionResult | null> {
+    const lockKey = options.gameAddress;
+    if (this.inFlightCompletions.has(lockKey)) {
+      return null;
+    }
+
+    this.inFlightCompletions.add(lockKey);
+
     const {
       gameAddress,
       gameKey,
@@ -79,36 +87,40 @@ export class GameCompletionManager {
       failureLog,
     } = options;
 
-    const resolvedPda =
-      context?.gamePda ?? (gameKey ? coercePublicKey(gameKey) : null);
+    try {
+      const resolvedPda =
+        context?.gamePda ?? (gameKey ? coercePublicKey(gameKey) : this.safeCoercePublicKey(gameAddress));
 
-    if (!resolvedPda) {
-      return null;
+      if (!resolvedPda) {
+        return null;
+      }
+
+      const readinessState = await this.resolveContextAndReadiness(gameAddress, {
+        context,
+        readiness,
+        requireOnChain: !skipReadinessCheck,
+      });
+
+      const completionContext = readinessState.context ?? undefined;
+      const completionReadiness = readinessState.readiness;
+      const notReady = skipReadinessCheck ? false : readinessState.notReady;
+
+      if (notReady) {
+        return this.recordNotReady(gameAddress, { onResult });
+      }
+
+      const completion = await (hooks.completeGame
+        ? hooks.completeGame(gameAddress, completionReadiness, completionContext)
+        : this.completeGame(gameAddress, completionReadiness, completionContext));
+
+      return this.finalizeCompletionOutcome(
+        gameAddress,
+        completion,
+        { onResult, successLog, failureLog },
+      );
+    } finally {
+      this.inFlightCompletions.delete(lockKey);
     }
-
-    const readinessState = await this.resolveContextAndReadiness(gameAddress, {
-      context,
-      readiness,
-      requireOnChain: !skipReadinessCheck,
-    });
-
-    const completionContext = readinessState.context ?? undefined;
-    const completionReadiness = readinessState.readiness;
-    const notReady = skipReadinessCheck ? false : readinessState.notReady;
-
-    if (notReady) {
-      return this.recordNotReady(gameAddress, { onResult });
-    }
-
-    const completion = await (hooks.completeGame
-      ? hooks.completeGame(gameAddress, completionReadiness, completionContext)
-      : this.completeGame(gameAddress, completionReadiness, completionContext));
-
-    return this.finalizeCompletionOutcome(
-      gameAddress,
-      completion,
-      { onResult, successLog, failureLog },
-    );
   }
 
   private recordNotReady(
@@ -151,6 +163,14 @@ export class GameCompletionManager {
     }
 
     return result;
+  }
+
+  private safeCoercePublicKey(value: PublicKeyLike | null | undefined): PublicKey | null {
+    try {
+      return value ? coercePublicKey(value) : null;
+    } catch {
+      return null;
+    }
   }
 
   public async completeGame(

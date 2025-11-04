@@ -4,6 +4,7 @@ import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import * as anchor from "@coral-xyz/anchor";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import * as crypto from "crypto";
+import * as fs from "fs";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -197,6 +198,109 @@ async function runExecuteGameCompletionScenario({
 }
 
 describe("OracleService internals", () => {
+  it("falls back to an ephemeral admin keypair when the keypair file cannot be read", () => {
+    const permissionError = new Error("permission denied");
+    (permissionError as NodeJS.ErrnoException).code = "EACCES";
+
+    const readSpy = spyOn(fs, "readFileSync").mockImplementation(() => {
+      throw permissionError;
+    });
+    const warningSpy = spyOn(logger, "warning").mockImplementation(() => {});
+
+    let service: import("../oracle-service.ts").OracleService | undefined;
+
+    try {
+      service = OracleService.createWith(OracleDatabase.getInstance());
+      expect(service).toBeDefined();
+      expect(readSpy).toHaveBeenCalled();
+
+      const warningMessages = warningSpy.mock.calls.map((args) =>
+        args.map((value) => String(value)).join(" "),
+      );
+      expect(warningMessages.some((message) => message.includes("permission denied"))).toBe(true);
+    } finally {
+      readSpy.mockRestore();
+      warningSpy.mockRestore();
+      service?.cleanupOldRecords(-1);
+    }
+  });
+
+  it("allows only one completion attempt per game concurrently", async () => {
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+
+    resetPendingGames(db, { service });
+
+    const gameAddress = "concurrency-game";
+    seedTrackedGame(db, {
+      service,
+      address: gameAddress,
+      secret: "aa".repeat(32),
+      randomHash: "bb".repeat(32),
+      players: [
+        { address: Keypair.generate().publicKey.toBase58(), ticketIndex: 0 },
+        { address: Keypair.generate().publicKey.toBase58(), ticketIndex: 1 },
+      ],
+    });
+
+    const readiness: GameReadinessSnapshot = {
+      ready: true,
+      gameAccount: createGameAccountStub({
+        ticketsCount: 2,
+        maxTickets: 2,
+        minTickets: 1,
+        lastSlot: 42,
+      }) as TimbaGameAccount,
+    };
+
+    const context = {
+      gamePda: Keypair.generate().publicKey,
+      secretData: { secretKey: "aa".repeat(32), randomHash: "bb".repeat(32) },
+      randomHashBuffer: Buffer.alloc(32, 1),
+      readiness,
+    };
+
+    const resolveSpy = spyOn(service.completionManager, "resolveContextAndReadiness").mockImplementation(
+      async () => ({
+        context,
+        readiness,
+        notReady: false,
+      }),
+    );
+
+    const completeSpy = spyOn(service.completionManager as any, "completeGame").mockImplementation(
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return { success: true, txHash: "tx-concurrency" };
+      },
+    );
+
+    const attemptsSpy = spyOn(db, "incrementCompletionAttempts");
+
+    try {
+      const [first, second] = await Promise.all([
+        service.completionManager.attemptGameCompletion({
+          gameAddress,
+          gameKey: context.gamePda,
+        }),
+        service.completionManager.attemptGameCompletion({
+          gameAddress,
+          gameKey: context.gamePda,
+        }),
+      ]);
+
+      expect(first).toMatchObject({ success: true });
+      expect(second).toBeNull();
+      expect(completeSpy).toHaveBeenCalledTimes(1);
+      expect(attemptsSpy).not.toHaveBeenCalled();
+    } finally {
+      resolveSpy.mockRestore();
+      completeSpy.mockRestore();
+      attemptsSpy.mockRestore();
+      service.cleanupOldRecords(-1);
+    }
+  });
+
   it("caches blockchain time within a scan sweep", async () => {
     const db = OracleDatabase.getInstance();
     const service = OracleService.createWith(db);

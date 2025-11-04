@@ -278,16 +278,29 @@ export const ROUTE_METADATA: ReadonlyArray<RouteDocumentation> = [
   },
 ];
 
-function generateDocumentationHtml(routes: ReadonlyArray<RouteDocumentation>): string {
+export function generateDocumentationHtml(routes: ReadonlyArray<RouteDocumentation>): string {
+  const escapeHtml = (value: string): string =>
+    value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+
   const endpointSections = routes
     .map((route) => {
+      const path = escapeHtml(route.path);
+      const summary = escapeHtml(route.summary);
+      const method = escapeHtml(route.method);
+      const methodClassCandidate = route.method.toLowerCase().replace(/[^a-z0-9-]/g, "");
+      const methodClass = methodClassCandidate.length > 0 ? methodClassCandidate : "custom";
       const requestExample = route.requestExample
-        ? `<br><strong>Body:</strong> <code>${route.requestExample}</code>`
+        ? `<br><strong>Body:</strong> <code>${escapeHtml(route.requestExample)}</code>`
         : "";
       return `
       <div class="endpoint">
-        <span class="method ${route.method.toLowerCase()}">${route.method}</span> <code>${route.path}</code>
-        <div class="description">${route.summary}${requestExample}</div>
+        <span class="method ${methodClass}">${method}</span> <code>${path}</code>
+        <div class="description">${summary}${requestExample}</div>
       </div>`;
     })
     .join("\n");

@@ -164,13 +164,42 @@ describe("index router", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("text/html");
     expect(text).toContain("Oracle API Documentation");
+    const escapeHtml = (value: string): string =>
+      value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
     for (const route of context.routeMetadata) {
       expect(text).toContain(route.path);
       expect(text).toContain(route.summary);
       if (route.requestExample) {
-        expect(text).toContain(route.requestExample);
+        expect(text).toContain(escapeHtml(route.requestExample));
       }
     }
+  });
+
+  test("documentation escapes route metadata", () => {
+    const maliciousSummary = "Hello <script>alert('xss')</script>";
+    const maliciousExample = '<img src=x onerror="hack" />';
+
+    const html = context.module.generateDocumentationHtml([
+      {
+        path: "/<b>danger</b>",
+        method: 'POST" onclick="alert(1)' as unknown as typeof context.routeMetadata[number]["method"],
+        handler: "handleHealth",
+        summary: maliciousSummary,
+        requestExample: maliciousExample,
+      },
+    ]);
+
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).toContain("&lt;b&gt;danger&lt;/b&gt;");
+    expect(html).toContain("&lt;img src=x onerror=&quot;hack&quot; /&gt;");
+    expect(html).toContain("POST&quot; onclick=&quot;alert(1)");
+    expect(html).toContain("method postonclickalert1");
   });
 
   test("unknown route returns 404", async () => {
