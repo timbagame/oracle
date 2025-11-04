@@ -23,12 +23,16 @@ const SQL_STATEMENTS = Object.freeze({
     "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)",
   deleteGamePlayerByTicket:
     "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?",
+  updateGameMetadata:
+    "UPDATE game_tracking SET game_type = ?, last_checked = ? WHERE game_address = ?",
 } satisfies Record<string, string>);
 
 const SQL_QUERIES = Object.freeze({
   selectSecretKey:
     "SELECT secret_key, random_hash FROM secret_keys WHERE game_address = ? AND used = FALSE",
   selectGameType: "SELECT game_type FROM game_tracking WHERE game_address = ?",
+  selectGameStatus:
+    "SELECT status, game_type FROM game_tracking WHERE game_address = ?",
   selectPendingGames:
     "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?",
   selectPendingGamesWithAttempts:
@@ -373,7 +377,35 @@ export class OracleDatabase {
   }
 
   // Game tracking
-  public trackGame(gameAddress: string, gameType?: string): void {
+  public trackGame(
+    gameAddress: string,
+    gameType?: string,
+    options: { preserveFinalized?: boolean } = {},
+  ): void {
+    const preserveFinalized = options.preserveFinalized === true;
+
+    if (preserveFinalized) {
+      const existing = this.queryOne<{ status: string; game_type: string | null }>(
+        SQL_QUERIES.selectGameStatus,
+        "Failed to lookup existing game status",
+        null,
+        gameAddress,
+      );
+
+      if (existing && existing.status !== DEFAULT_STATUS) {
+        if (gameType && existing.game_type !== gameType) {
+          this.runStatement(
+            SQL_STATEMENTS.updateGameMetadata,
+            "Failed to update finalized game metadata",
+            gameType,
+            Date.now(),
+            gameAddress,
+          );
+        }
+        return;
+      }
+    }
+
     this.runStatement(
       SQL_STATEMENTS.upsertGameTracking,
       "Failed to track game",

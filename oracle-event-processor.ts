@@ -212,7 +212,7 @@ export class OracleEventProcessor {
       }
 
       logger.info(`🎮 Game initialized: ${gameAddress}, Type: ${gameType || "unknown"}`);
-      this.options.db.trackGame(gameAddress, gameType);
+      this.options.db.trackGame(gameAddress, gameType, { preserveFinalized: true });
     });
   }
 
@@ -239,11 +239,23 @@ export class OracleEventProcessor {
       };
     }
 
-    if (options.requireTicketIndex && eventData.ticketIndex === undefined) {
-      return {
-        valid: false,
-        message: `⚠️  Missing ticket index in ${eventType} event for ${eventData.gameAddress}`,
-      };
+    if (options.requireTicketIndex) {
+      if (eventData.ticketIndex === undefined) {
+        return {
+          valid: false,
+          message: `⚠️  Missing ticket index in ${eventType} event for ${eventData.gameAddress}`,
+        };
+      }
+
+      if (
+        !Number.isSafeInteger(eventData.ticketIndex) ||
+        eventData.ticketIndex < 0
+      ) {
+        return {
+          valid: false,
+          message: `⚠️  Invalid ticket index ${eventData.ticketIndex} in ${eventType} event for ${eventData.gameAddress}`,
+        };
+      }
     }
 
     if (options.requirePlayerAddress && !eventData.playerAddress) {

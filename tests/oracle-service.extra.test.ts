@@ -11,6 +11,8 @@ import {
 } from "@solana/spl-token";
 import { deriveGameAccounts, createEmptyCompletionStats } from "../oracle-service.ts";
 import { OracleMetricsRecorder } from "../metrics.ts";
+import { ScanLoopRunner } from "../oracle-scan-runner.ts";
+import { logger } from "../logger.ts";
 import { resetConfigForTesting } from "../config.ts";
 import type { TimbaGameAccount } from "../types/timba.ts";
 import type { GameReadinessSnapshot } from "../oracle-service.types.ts";
@@ -360,6 +362,51 @@ describe("OracleService internals", () => {
     } finally {
       (service as any).connection = originalConnection;
       service.completionManager.clearTokenProgramCache();
+    }
+  });
+
+  it("runScanLoop logs cleanup failures without aborting", async () => {
+    const cleanupError = new Error("cleanup failed");
+    const runner = new ScanLoopRunner({
+      db: {
+        getPendingGames: () => [],
+        markGameCompleted: () => {},
+      } as unknown as import("../database.ts").OracleDatabase,
+      metrics: new OracleMetricsRecorder(),
+      completion: {
+        resolveContextAndReadiness: async () => ({
+          context: null,
+          readiness: undefined,
+          notReady: false,
+        }),
+        attemptGameCompletion: async () => ({ success: true }),
+        consumeReadiness: () => undefined,
+        getBlockchainTime: async () => 0,
+      },
+      interGameDelayMs: 0,
+      maxCompletionAttempts: 5,
+      cleanupOldRecords: () => {
+        throw cleanupError;
+      },
+    });
+
+    const failureSpy = spyOn(logger, "failure").mockImplementation(() => {});
+
+    try {
+      const summary = await runner.runScanLoop({
+        cleanupAfterCycleHours: 48,
+        shouldContinue: () => false,
+      });
+
+      expect(summary.cycles).toBe(1);
+      expect(summary.totalErrors).toBe(0);
+      expect(summary.totalCompleted).toBe(0);
+      expect(failureSpy).toHaveBeenCalledWith(
+        "Cleanup after scan cycle failed:",
+        cleanupError,
+      );
+    } finally {
+      failureSpy.mockRestore();
     }
   });
 

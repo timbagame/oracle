@@ -172,6 +172,52 @@ describe("OracleService event handling", () => {
     expect(callLog.removePlayer).toEqual([]);
   });
 
+  it("rejects player events with negative ticket indexes", async () => {
+    const { db, callLog } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub);
+
+    const autoCompleteCalls: string[] = [];
+    (service as any).tryAutoComplete = async (_gameKey: PublicKey, gameAddress: string) => {
+      autoCompleteCalls.push(gameAddress);
+    };
+
+    const gameKey = Keypair.generate().publicKey;
+    const playerKey = Keypair.generate().publicKey;
+
+    await service.events.handlePlayerEvent("joined", {
+      gameKey,
+      player: playerKey,
+      ticketIndex: -5,
+    });
+
+    expect(callLog.addPlayer).toEqual([]);
+    expect(autoCompleteCalls).toHaveLength(0);
+  });
+
+  it("rejects player events with oversized ticket indexes", async () => {
+    const { db, callLog } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub);
+
+    const autoCompleteCalls: string[] = [];
+    (service as any).tryAutoComplete = async (_gameKey: PublicKey, gameAddress: string) => {
+      autoCompleteCalls.push(gameAddress);
+    };
+
+    const gameKey = Keypair.generate().publicKey;
+    const playerKey = Keypair.generate().publicKey;
+
+    await service.events.handlePlayerEvent("joined", {
+      gameKey,
+      player: playerKey,
+      ticketIndex: (BigInt(Number.MAX_SAFE_INTEGER) + 10n),
+    });
+
+    expect(callLog.addPlayer).toEqual([]);
+    expect(autoCompleteCalls).toHaveLength(0);
+  });
+
   it("ignores player events with invalid game addresses", async () => {
     const { db, callLog } = createDbStub();
     const programStub = createProgramStub();
@@ -344,6 +390,41 @@ describe("OracleService event handling", () => {
     expect(gone.context).toBeNull();
     expect(programStub.fetchCalls).toHaveLength(2);
   });
+
+  it("preserves finalized games when initialization events replay", async () => {
+    const env = await setupOracleServiceEnv("oracle-service-events-finalized");
+    const { OracleService, OracleDatabase, cleanup: envCleanup } = env;
+
+    try {
+      const db = OracleDatabase.getInstance();
+      const service = OracleService.createWith(db);
+
+      const gameKey = Keypair.generate().publicKey;
+      const gameAddress = gameKey.toBase58();
+
+      db.trackGame(gameAddress);
+      db.markGameCompleted(gameAddress);
+
+      await service.events.handleGameInitialized({ gameKey });
+
+      const pending = db.getPendingGames().map((entry) => entry.game_address);
+      expect(pending).not.toContain(gameAddress);
+
+      const sqlite = (db as any).db as {
+        prepare: (
+          sql: string,
+        ) => { get: (...args: unknown[]) => { status?: string } | undefined };
+      };
+
+      const statusRow = sqlite
+        .prepare("SELECT status FROM game_tracking WHERE game_address = ?")
+        .get(gameAddress) as { status?: string } | undefined;
+
+      expect(statusRow?.status).toBe("completed");
+    } finally {
+      envCleanup();
+    }
+  });
 });
 
 function createService(db: OracleDatabaseStub, programStub: ProgramStub): OracleServiceType {
@@ -403,7 +484,7 @@ function createDbStub(): { db: OracleDatabaseStub; callLog: CallLog } {
     clearStalePlayersForGame(game) {
       callLog.clearPlayers.push(game);
     },
-    trackGame(game, type) {
+    trackGame(game, type, _options) {
       callLog.track.push({ game, type: type ?? undefined });
     },
     markGameCompleted(game) {
@@ -447,7 +528,7 @@ type OracleDatabaseStub = Partial<OracleDatabase> & {
   addPlayerToGame(game: string, player: string, index: number): void;
   removePlayerFromGame(game: string, index: number): void;
   clearStalePlayersForGame(game: string): void;
-  trackGame(game: string, type?: string | null): void;
+  trackGame(game: string, type?: string | null, options?: { preserveFinalized?: boolean }): void;
   markGameCompleted(game: string): void;
   finalizeCompletedGame(game: string): void;
   markGameClosed(game: string): void;

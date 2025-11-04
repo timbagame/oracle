@@ -191,7 +191,11 @@ export class ScanLoopRunner {
       totals.notReady += stats.notReady;
 
       if (cleanupAfterCycleHours !== undefined) {
-        this.options.cleanupOldRecords(cleanupAfterCycleHours);
+        try {
+          this.options.cleanupOldRecords(cleanupAfterCycleHours);
+        } catch (error) {
+          logger.failure("Cleanup after scan cycle failed:", error);
+        }
       }
 
       onCycleComplete?.(cycle, stats);
