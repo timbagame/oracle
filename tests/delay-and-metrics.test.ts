@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { performance } from "perf_hooks";
 import { delay } from "../delay.ts";
 import { OracleMetricsRecorder } from "../metrics.ts";
@@ -37,6 +37,22 @@ describe("delay helper", () => {
 
     await pending;
     expect(listeners.size).toBe(0);
+  });
+
+  it("returns immediately for already-aborted signals without scheduling a timer", async () => {
+    const setTimeoutSpy = spyOn(globalThis, "setTimeout");
+    const abortSignal = { aborted: true } as AbortSignal;
+
+    try {
+      const start = performance.now();
+      await delay(100, { signal: abortSignal });
+      const elapsed = performance.now() - start;
+
+      expect(elapsed).toBeLessThan(1);
+      expect(setTimeoutSpy).not.toHaveBeenCalled();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 });
 

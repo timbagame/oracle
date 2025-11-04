@@ -90,6 +90,24 @@ describe("OracleService event handling", () => {
     await service.stopEventListening();
   });
 
+  it("prevents OracleEventProcessor from registering duplicate listeners when started concurrently", async () => {
+    const { db } = createDbStub();
+    const programStub = createProgramStub({ asyncRegistration: true });
+    const service = createService(db, programStub);
+    const processor = service.events;
+
+    await Promise.all([processor.startListening(), processor.startListening()]);
+
+    expect(programStub.addCalls).toHaveLength(
+      OracleServiceClass.EVENT_HANDLER_CONFIG.length,
+    );
+    expect(processor.getActiveListenerCount()).toBe(
+      OracleServiceClass.EVENT_HANDLER_CONFIG.length,
+    );
+
+    await processor.stopListening();
+  });
+
   it("processes player join and unjoin events", async () => {
     const { db, callLog } = createDbStub();
     const programStub = createProgramStub();

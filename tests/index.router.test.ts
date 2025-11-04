@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import type { RequeueGameFailureReason } from "../oracle-service.ts";
 import { createBasicStats } from "./helpers/fake-oracle.ts";
 import {
   buildRequest,
@@ -211,6 +212,45 @@ describe("index router", () => {
       expect((failure.json as any).error).toContain("not tracked");
     } finally {
       failingContext.testEnv.cleanup();
+    }
+  });
+
+  test("POST /games/requeue maps failure reasons to correct responses", async () => {
+    const scenarios: Array<{
+      reason: RequeueGameFailureReason;
+      status: number;
+      messageFragment: string;
+    }> = [
+      { reason: "missing-secret", status: 409, messageFragment: "missing its secret key" },
+      { reason: "finalized", status: 409, messageFragment: "already finalized" },
+      { reason: "unchanged", status: 409, messageFragment: "already queued" },
+    ];
+
+    for (const scenario of scenarios) {
+      const failingContext = await createIndexRouterTestContext(
+        `index-router-requeue-${scenario.reason}`,
+        {
+          requeueGame: () => ({ success: false, reason: scenario.reason }),
+        },
+      );
+
+      try {
+        const { response, json } = await executeJsonRequest(
+          failingContext.router,
+          "/games/requeue",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ gameAddress: "game-123" }),
+          },
+        );
+
+        expect(response.status).toBe(scenario.status);
+        expect((json as any).success).toBe(false);
+        expect((json as any).error).toContain(scenario.messageFragment);
+      } finally {
+        failingContext.testEnv.cleanup();
+      }
     }
   });
 

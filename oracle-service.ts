@@ -164,8 +164,12 @@ export class OracleService {
       return this.createEphemeralAdminKeypair(adminKeypairSource, reason);
     }
 
+    const details = error
+      ? this.describeAdminKeypairError(adminKeypairSource, error)
+      : `Failed to load admin keypair from ${adminKeypairSource}`;
+
     this.logAdminKeypairFailure(adminKeypairPath, error);
-    throw new Error(`Failed to load admin keypair from ${adminKeypairSource}`);
+    throw new Error(details);
   }
 
   private readAdminKeypairFromFile(
@@ -177,7 +181,18 @@ export class OracleService {
       if (!Array.isArray(parsed)) {
         throw new Error("Admin keypair file must contain an array of numbers");
       }
-      const keypair = anchor.web3.Keypair.fromSecretKey(new Uint8Array(parsed));
+
+      const numbers = parsed.map((value) => {
+        if (typeof value !== "number" || !Number.isInteger(value)) {
+          throw new Error("Admin keypair file must contain integer byte values");
+        }
+        if (value < 0 || value > 255) {
+          throw new Error("Admin keypair file contains byte values outside the 0-255 range");
+        }
+        return value;
+      });
+
+      const keypair = anchor.web3.Keypair.fromSecretKey(new Uint8Array(numbers));
       return { keypair };
     } catch (error: unknown) {
       return { error };

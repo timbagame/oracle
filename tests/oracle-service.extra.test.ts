@@ -1,10 +1,13 @@
 import { beforeAll, afterAll, describe, it, expect, spyOn } from "bun:test";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
+import { createTestEnv } from "./helpers/create-test-env.ts";
 import * as anchor from "@coral-xyz/anchor";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import * as crypto from "crypto";
 import * as fs from "fs";
+import * as path from "path";
+import { tmpdir } from "os";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -222,6 +225,35 @@ describe("OracleService internals", () => {
       readSpy.mockRestore();
       warningSpy.mockRestore();
       service?.cleanupOldRecords(-1);
+    }
+  });
+
+  it("rejects admin keypairs containing values outside the byte range", async () => {
+    const tempDir = fs.mkdtempSync(path.join(tmpdir(), "oracle-invalid-keypair-"));
+    const keypairPath = path.join(tempDir, "bad-keypair.json");
+    const invalidSecret = Array.from({ length: 64 }, (_value, index) => (index === 0 ? 999 : 0));
+    fs.writeFileSync(keypairPath, JSON.stringify(invalidSecret), "utf-8");
+
+    const env = await createTestEnv({
+      prefix: "oracle-invalid-keypair",
+      env: {
+        NODE_ENV: "development",
+        USE_FAKE_KEYPAIR: "false",
+        ORACLE_KEYPAIR_PATH: keypairPath,
+      },
+      singletons: {
+        OracleService: async () => (await import("../oracle-service.ts")).OracleService,
+      },
+    });
+
+    try {
+      const { OracleService } = env.singletons;
+      expect(() => OracleService.getInstance()).toThrow(
+        /byte values outside the 0-255 range/,
+      );
+    } finally {
+      env.cleanup();
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
