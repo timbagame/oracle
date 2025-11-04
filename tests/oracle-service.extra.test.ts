@@ -1158,6 +1158,49 @@ describe("OracleService internals", () => {
     expect(snapshot?.completion_attempts).toBe(0);
   });
 
+  it("requeueGame succeeds for fresh pending games with zero attempts", () => {
+    const service = OracleService.getInstance();
+    const db = OracleDatabase.getInstance();
+    resetPendingGames(db, { service });
+
+    const gameAddr = "requeue-fresh";
+    seedTrackedGame(db, {
+      address: gameAddr,
+      secret: "aa".repeat(32),
+      randomHash: "bb".repeat(32),
+    });
+
+    const sqlite = (db as any).db as {
+      prepare: (
+        sql: string,
+      ) => {
+        get: (
+          ...args: unknown[]
+        ) => { status: string; completion_attempts: number; last_checked: number } | undefined;
+      };
+    };
+
+    const before = sqlite
+      .prepare("SELECT status, completion_attempts, last_checked FROM game_tracking WHERE game_address = ?")
+      .get(gameAddr);
+
+    expect(before?.status).toBe("pending");
+    expect(before?.completion_attempts).toBe(0);
+    expect(typeof before?.last_checked).toBe("number");
+
+    const result = service.requeueGame(gameAddr);
+    expect(result).toEqual({ success: true });
+
+    const after = sqlite
+      .prepare("SELECT status, completion_attempts, last_checked FROM game_tracking WHERE game_address = ?")
+      .get(gameAddr);
+
+    expect(after?.status).toBe("pending");
+    expect(after?.completion_attempts).toBe(0);
+    expect(after?.last_checked).not.toBe(before?.last_checked);
+    expect((after?.last_checked ?? 0) < (before?.last_checked ?? 0)).toBe(true);
+  });
+
   it("requeueGame rejects when secret is missing", () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();

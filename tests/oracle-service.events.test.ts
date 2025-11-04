@@ -196,6 +196,46 @@ describe("OracleService event handling", () => {
     ]);
   });
 
+  it("deduplicates registry sync scheduling while an earlier run is pending", async () => {
+    const { db } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub);
+
+    const syncCalls: Array<{ gameAddress: string; expectedTickets?: number; trigger: string }> = [];
+    const deferred = createDeferred<boolean>();
+
+    (service as any).syncPlayerRegistry = async (options: any) => {
+      syncCalls.push(options);
+      return deferred.promise;
+    };
+
+    const gameKey = Keypair.generate().publicKey;
+    const playerKey = Keypair.generate().publicKey;
+
+    const first = service.events.handlePlayerEvent("joined", {
+      gameKey,
+      player: playerKey,
+      ticketIndex: 2,
+      ticketsCount: 3,
+    });
+
+    const second = service.events.handlePlayerEvent("joined", {
+      gameKey,
+      player: playerKey,
+      ticketIndex: 2,
+      ticketsCount: 3,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(syncCalls).toHaveLength(1);
+
+    deferred.resolve(true);
+    await Promise.all([first, second]);
+
+    expect(syncCalls).toHaveLength(1);
+  });
+
   it("ignores player events with missing data", async () => {
     const { db, callLog } = createDbStub();
     const programStub = createProgramStub();
@@ -613,6 +653,14 @@ function createDbStub(): { db: OracleDatabaseStub; callLog: CallLog } {
   };
 
   return { db, callLog };
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 type OracleDatabaseStub = Partial<OracleDatabase> & {

@@ -140,6 +140,7 @@ export class ScanLoopRunner {
           outcome: "error",
           error: error instanceof Error ? error.message : String(error),
         });
+        this.options.db.touchGameCheck(game.game_address); // push failing games back so we do not spin on stale timestamps
         cachedBlockTime = undefined;
         if (signal?.aborted) {
           break;

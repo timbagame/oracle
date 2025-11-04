@@ -122,6 +122,31 @@ describe("PlayerRegistrySync", () => {
     expect(players).toBeNull();
   });
 
+  it("ignores negative ticket indexes in parsed events", async () => {
+    const gamePda = Keypair.generate().publicKey;
+    const player = Keypair.generate().publicKey;
+
+    const events: EventData[] = [
+      {
+        name: "playerJoined",
+        data: {
+          gameKey: gamePda,
+          player,
+          ticketIndex: -1,
+        },
+      },
+    ];
+
+    const sync = createSync([events]);
+
+    const players = await sync.fetchPlayersFromChain({
+      gamePda,
+      expectedTickets: 1,
+    });
+
+    expect(players).toBeNull();
+  });
+
   it("honors maxSignatures limits when paging signatures", async () => {
     const gamePda = Keypair.generate().publicKey;
     const player = Keypair.generate().publicKey;
