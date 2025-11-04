@@ -46,6 +46,8 @@ type CompletionCallbacks = {
 
 export class GameCompletionManager {
   private readonly attemptedRegistryRecovery = new Set<string>();
+  private readonly registryPrefetchCooldownMs = 60_000;
+  private readonly registryPrefetchSchedule = new Map<string, number>();
 
   constructor(private readonly options: GameCompletionManagerOptions) {}
 
@@ -462,6 +464,59 @@ export class GameCompletionManager {
     this.options.readinessCache.delete(gameAddress);
   }
 
+  private async prefetchPlayerRegistry(
+    gameAddress: string,
+    context: GameOnChainContext,
+    readiness: GameReadinessSnapshot,
+  ): Promise<void> {
+    const recoverFn = this.options.recoverPlayerRegistry;
+    const gameAccount = readiness.gameAccount;
+
+    if (!recoverFn || !gameAccount) {
+      return;
+    }
+
+    const expectedTickets = Number(gameAccount.ticketsCount);
+    if (!Number.isFinite(expectedTickets) || expectedTickets <= 0) {
+      return;
+    }
+
+    const players = this.options.db.getGamePlayers(gameAddress);
+    if (players.length >= expectedTickets) {
+      return;
+    }
+
+    const now = Date.now();
+    const nextAllowed = this.registryPrefetchSchedule.get(gameAddress) ?? 0;
+    if (now < nextAllowed) {
+      return;
+    }
+
+    this.registryPrefetchSchedule.set(gameAddress, now + this.registryPrefetchCooldownMs);
+
+    try {
+      const recovered = await recoverFn({
+        gameAddress,
+        context,
+        readiness,
+        expectedTickets,
+        reason: "readiness-check",
+      });
+
+      if (recovered && recovered.length === expectedTickets) {
+        this.options.db.replaceGamePlayers(gameAddress, recovered);
+        logger.info(
+          `♻️  Prefetched ${recovered.length} players for ${gameAddress} during readiness evaluation`,
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warning(
+        `Unable to prefetch player registry for ${gameAddress}: ${message}`,
+      );
+    }
+  }
+
   public async resolveContextAndReadiness(
     gameAddress: string,
     options: {
@@ -555,6 +610,10 @@ export class GameCompletionManager {
     if (!evaluation.gameAccount && requireOnChain) {
       logger.warning(`Game ${gameAddress} no longer exists on-chain`);
       return null;
+    }
+
+    if (evaluation.gameAccount) {
+      await this.prefetchPlayerRegistry(gameAddress, context, evaluation);
     }
 
     return evaluation;
