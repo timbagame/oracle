@@ -25,6 +25,8 @@ const SQL_STATEMENTS = Object.freeze({
     "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?",
   updateGameMetadata:
     "UPDATE game_tracking SET game_type = ?, last_checked = ? WHERE game_address = ?",
+  markGameDesynced:
+    "UPDATE game_tracking SET status = ?, completed_at = NULL, last_checked = ? WHERE game_address = ?",
 } satisfies Record<string, string>);
 
 const SQL_QUERIES = Object.freeze({
@@ -46,6 +48,8 @@ const SQL_QUERIES = Object.freeze({
       FROM game_tracking`,
   selectPlayersForGame:
     "SELECT player_address FROM game_players WHERE game_address = ? ORDER BY ticket_index ASC",
+  selectPlayerTicketStats:
+    "SELECT COUNT(*) as count, MAX(ticket_index) as max_index FROM game_players WHERE game_address = ?",
 } satisfies Record<string, string>);
 
 const COMPLETED_GAME_PREDICATE = "status != ? AND completed_at IS NOT NULL AND completed_at < ?";
@@ -450,6 +454,17 @@ export class OracleDatabase {
     this.updateGameStatus(gameAddress, "cancelled", "Failed to mark game as closed");
   }
 
+  public markGameDesynced(gameAddress: string): void {
+    const now = Date.now();
+    this.runStatement(
+      SQL_STATEMENTS.markGameDesynced,
+      "Failed to mark game as desynced",
+      "desynced",
+      now,
+      gameAddress,
+    );
+  }
+
   public finalizeCompletedGame(gameAddress: string): void {
     this.runInTransaction(
       () => {
@@ -669,5 +684,44 @@ export class OracleDatabase {
       gameAddress
     );
     return results.map((row) => row.player_address);
+  }
+
+  public replaceGamePlayers(gameAddress: string, players: string[]): void {
+    this.runInTransaction(
+      () => {
+        this.runStatement(
+          SQL_STATEMENTS.deleteGamePlayers,
+          "Failed to clear player registry for synchronization",
+          gameAddress,
+        );
+
+        const baseTimestamp = Date.now();
+        players.forEach((playerAddress, index) => {
+          this.runStatement(
+            SQL_STATEMENTS.upsertGamePlayer,
+            "Failed to replace player during registry synchronization",
+            gameAddress,
+            playerAddress,
+            index,
+            baseTimestamp + index,
+          );
+        });
+      },
+      `Failed to replace player registry for game ${gameAddress}`,
+    );
+  }
+
+  public getPlayerTicketStats(gameAddress: string): { count: number; maxIndex: number | null } {
+    const result = this.queryOne<{ count: number; max_index: number | null }>(
+      SQL_QUERIES.selectPlayerTicketStats,
+      "Failed to query player ticket statistics",
+      { count: 0, max_index: null },
+      gameAddress,
+    );
+
+    return {
+      count: result?.count ?? 0,
+      maxIndex: result?.max_index ?? null,
+    };
   }
 }

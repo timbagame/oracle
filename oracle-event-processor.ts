@@ -15,12 +15,19 @@ export interface OracleEventProcessorOptions {
   tryAutoComplete: (gameKey: PublicKeyLike | undefined, gameAddress: string, trigger: string) => Promise<void>;
   config: ReadonlyArray<EventHandlerConfig<keyof TimbaEventMap>>;
   clearTokenProgramCache: () => void;
+  syncPlayerRegistry?: (options: {
+    gameAddress: string;
+    expectedTickets?: number;
+    trigger: string;
+    gameKey?: PublicKeyLike;
+  }) => Promise<boolean>;
 }
 
 export class OracleEventProcessor {
   private listenerIds: number[] = [];
   private listening = false;
   private startPromise: Promise<void> | null = null;
+  private readonly registrySyncInFlight = new Set<string>();
 
   constructor(private readonly options: OracleEventProcessorOptions) {}
 
@@ -140,6 +147,10 @@ export class OracleEventProcessor {
     }
 
     const { gameAddress, playerAddress, ticketIndex } = eventData;
+    const expectedTickets = resolveNumericLike(
+      (event as Record<string, unknown>)["ticketsCount"] ??
+        (event as Record<string, unknown>)["tickets_count"],
+    );
 
     await this.runEventMutation(eventType, async () => {
       if (action === "joined") {
@@ -147,6 +158,13 @@ export class OracleEventProcessor {
       } else {
         this.options.db.removePlayerFromGame(gameAddress, ticketIndex!);
       }
+
+      void this.evaluateRegistryConsistency(
+        gameAddress,
+        expectedTickets,
+        eventType,
+        event.gameKey,
+      );
 
       await this.options.tryAutoComplete(event.gameKey, gameAddress, action);
     });
@@ -214,6 +232,72 @@ export class OracleEventProcessor {
       logger.info(`🎮 Game initialized: ${gameAddress}, Type: ${gameType || "unknown"}`);
       this.options.db.trackGame(gameAddress, gameType, { preserveFinalized: true });
     });
+  }
+
+  private async evaluateRegistryConsistency(
+    gameAddress: string,
+    expectedTickets: number | undefined,
+    trigger: string,
+    gameKey?: PublicKeyLike,
+  ): Promise<void> {
+    if (!this.options.syncPlayerRegistry) {
+      return;
+    }
+
+    const stats = this.options.db.getPlayerTicketStats(gameAddress);
+
+    const contiguous = stats.maxIndex === null
+      ? stats.count === 0
+      : stats.maxIndex + 1 === stats.count;
+
+    const requiredCount = expectedTickets ?? (stats.maxIndex !== null ? stats.maxIndex + 1 : stats.count);
+    const countMismatch = expectedTickets !== undefined && stats.count !== expectedTickets;
+
+    if (contiguous && !countMismatch) {
+      return;
+    }
+
+    const normalizedExpected = requiredCount > 0 ? requiredCount : undefined;
+
+    void this.schedulePlayerRegistrySync({
+      gameAddress,
+      expectedTickets: normalizedExpected,
+      trigger,
+      gameKey,
+    });
+  }
+
+  private async schedulePlayerRegistrySync(options: {
+    gameAddress: string;
+    expectedTickets?: number;
+    trigger: string;
+    gameKey?: PublicKeyLike;
+  }): Promise<void> {
+    const { syncPlayerRegistry } = this.options;
+    if (!syncPlayerRegistry) {
+      return;
+    }
+
+    if (this.registrySyncInFlight.has(options.gameAddress)) {
+      return;
+    }
+
+    this.registrySyncInFlight.add(options.gameAddress);
+    try {
+      const synced = await syncPlayerRegistry(options);
+      if (!synced) {
+        logger.warn(
+          `⚠️  Failed to reconcile player registry for ${options.gameAddress} after ${options.trigger}`,
+        );
+      }
+    } catch (error) {
+      logger.failure(
+        `Error attempting to reconcile player registry for ${options.gameAddress}:`,
+        error,
+      );
+    } finally {
+      this.registrySyncInFlight.delete(options.gameAddress);
+    }
   }
 
   private validateEventData(

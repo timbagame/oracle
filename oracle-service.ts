@@ -18,7 +18,8 @@ import {
   type GenerateGameSecretsOptions,
 } from "./oracle-service.types.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
-import { confirmTransaction } from "./solana-utils.ts";
+import { coercePublicKey, confirmTransaction } from "./solana-utils.ts";
+import { PlayerRegistrySync } from "./player-registry-sync.ts";
 import type { Timba } from "./idl/idlType.ts";
 import idl from "./idl/idl.json" with { type: "json" };
 
@@ -49,6 +50,7 @@ export class OracleService {
   private readonly eventProcessor: OracleEventProcessor;
   private readonly completion: GameCompletionManager;
   private readonly scanner: ScanLoopRunner;
+  private readonly registrySync: PlayerRegistrySync;
   public readonly readinessCache: Map<string, GameReadinessSnapshot>;
   public readonly tokenProgramCache: Map<string, PublicKey>;
 
@@ -59,6 +61,7 @@ export class OracleService {
     this.connection = this.initConnection();
     this.adminKeypair = this.loadAdminKeypair();
     this.program = this.initProgram();
+    this.registrySync = this.initPlayerRegistrySync();
     this.interGameDelayMs = this.config.scanThrottleMs;
     this.readinessCache = new Map();
     this.tokenProgramCache = new Map();
@@ -98,6 +101,12 @@ export class OracleService {
       secretKeyLength: SECRET_KEY_LENGTH,
       noSecretKeyMessage: NO_SECRET_KEY_MESSAGE,
       confirmTransaction: (signature) => confirmTransaction(this.connection, signature),
+      recoverPlayerRegistry: async ({ context, expectedTickets }) =>
+        this.registrySync.fetchPlayersFromChain({
+          gamePda: context.gamePda,
+          expectedTickets,
+        }),
+      markGameDesynced: (gameAddress) => this.db.markGameDesynced(gameAddress),
     });
   }
 
@@ -109,6 +118,7 @@ export class OracleService {
         this.tryAutoComplete(gameKey ?? this.ensureGameKey(gameAddress), gameAddress, trigger),
       config: EVENT_HANDLER_CONFIG,
       clearTokenProgramCache: () => this.completion.clearTokenProgramCache(),
+      syncPlayerRegistry: (options) => this.syncPlayerRegistry(options),
     });
   }
 
@@ -202,6 +212,57 @@ export class OracleService {
     );
     anchor.setProvider(provider);
     return new anchor.Program(idl as Timba, provider) as anchor.Program<Timba>;
+  }
+
+  private initPlayerRegistrySync(): PlayerRegistrySync {
+    return new PlayerRegistrySync({
+      connection: this.connection,
+      program: this.program,
+    });
+  }
+
+  private async syncPlayerRegistry(options: {
+    gameAddress: string;
+    expectedTickets?: number;
+    trigger: string;
+    gameKey?: PublicKeyLike;
+  }): Promise<boolean> {
+    let gamePda = options.gameKey ? coercePublicKey(options.gameKey) : null;
+
+    if (!gamePda) {
+      const stored = this.completion.resolveStoredGame(options.gameAddress);
+      gamePda = stored?.gamePda ?? null;
+    }
+
+    if (!gamePda) {
+      logger.warn(
+        `⚠️  Unable to reconcile players for ${options.gameAddress}; missing game PDA after ${options.trigger}`,
+      );
+      return false;
+    }
+
+    try {
+      const players = await this.registrySync.fetchPlayersFromChain({
+        gamePda,
+        expectedTickets: options.expectedTickets,
+      });
+
+      if (!players) {
+        return false;
+      }
+
+      this.db.replaceGamePlayers(options.gameAddress, players);
+      logger.info(
+        `♻️  Synchronized ${players.length} players for ${options.gameAddress} after ${options.trigger}`,
+      );
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.failure(
+        `Failed to synchronize players for ${options.gameAddress}: ${message}`,
+      );
+      return false;
+    }
   }
 
   public async startEventListening(): Promise<void> {

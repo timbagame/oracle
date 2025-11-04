@@ -877,9 +877,9 @@ describe("OracleService internals", () => {
         timeout: 0n,
       }),
     });
-    res = await service.completeGame("no-players");
-    expect(res.success).toBe(false);
-    expect(String(res.error || "")).toContain("No players");
+  res = await service.completeGame("no-players");
+  expect(res.success).toBe(false);
+  expect(String(res.error || "")).toContain("Ticket registry out of sync");
   });
 
   it("completeGame success path marks DB and returns tx hash", async () => {
@@ -1159,9 +1159,14 @@ describe("OracleService internals", () => {
     try {
       const result = await service.completeGame(gameAddr);
       expect(result.success).toBe(false);
-      expect(String(result.error ?? "")).toContain("No players");
-      const pending = db.getPendingGames().find((g) => g.game_address === gameAddr);
-      expect(pending?.completion_attempts).toBe(1);
+      expect(String(result.error ?? "")).toContain("Ticket registry out of sync");
+
+      const row = (db as any).db
+        .prepare("SELECT status, completion_attempts FROM game_tracking WHERE game_address = ?")
+        .get(gameAddr);
+
+      expect(row?.completion_attempts).toBe(1);
+      expect(row?.status).toBe("desynced");
     } finally {
       completion.resolveContextAndReadiness = originalResolve;
       (service as any).program = originalProgram;
@@ -1433,9 +1438,9 @@ describe("OracleService internals", () => {
     try {
       const result = await service.completeGame(gameAddress);
 
-      expect(result.success).toBe(false);
-      expect(result.notReady).toBeUndefined();
-      expect(result.error).toBe("No players found for game");
+  expect(result.success).toBe(false);
+  expect(result.notReady).toBeUndefined();
+  expect(result.error).toBe("Ticket registry out of sync");
       expect((service as any).readinessCache.has(gameAddress)).toBe(false);
       expect(attemptsSpy).toHaveBeenCalledWith(gameAddress);
       expect(executeSpy).not.toHaveBeenCalled();

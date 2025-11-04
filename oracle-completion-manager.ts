@@ -28,6 +28,14 @@ export interface GameCompletionManagerOptions extends CoreOracleDependencies {
   secretKeyLength: number;
   noSecretKeyMessage: string;
   confirmTransaction: (signature: string) => Promise<void>;
+  recoverPlayerRegistry?: (options: {
+    gameAddress: string;
+    context: GameOnChainContext;
+    readiness: GameReadinessSnapshot;
+    expectedTickets: number;
+    reason: string;
+  }) => Promise<string[] | null>;
+  markGameDesynced?: (gameAddress: string) => void;
 }
 
 type CompletionCallbacks = {
@@ -37,6 +45,8 @@ type CompletionCallbacks = {
 };
 
 export class GameCompletionManager {
+  private readonly attemptedRegistryRecovery = new Set<string>();
+
   constructor(private readonly options: GameCompletionManagerOptions) {}
 
   public async isGameReadyForCompletion(gamePda: PublicKey): Promise<boolean> {
@@ -160,7 +170,11 @@ export class GameCompletionManager {
 
       const { context: resolvedContext, readiness } = validated;
 
-      const winnerDetails = this.resolveWinnerDetails(gameAddress, readiness, resolvedContext);
+      const winnerDetails = await this.resolveWinnerDetails(
+        gameAddress,
+        readiness,
+        resolvedContext,
+      );
       if ("error" in winnerDetails) {
         return winnerDetails.error;
       }
@@ -223,11 +237,11 @@ export class GameCompletionManager {
     };
   }
 
-  private resolveWinnerDetails(
+  private async resolveWinnerDetails(
     gameAddress: string,
     readiness: GameReadinessSnapshot,
     context: GameOnChainContext,
-  ):
+  ): Promise<
     | {
         gameAccount: TimbaGameAccount;
         winnerAddress: PublicKey;
@@ -235,7 +249,8 @@ export class GameCompletionManager {
         randomHashBuffer: Buffer;
         secretKeyBuffer: Buffer;
       }
-    | { error: GameCompletionResult } {
+    | { error: GameCompletionResult }
+  > {
     const { secretData, randomHashBuffer } = context;
 
     const missingSecret = this.guardFatalCompletionRequirement(
@@ -268,16 +283,18 @@ export class GameCompletionManager {
 
     const resolvedGameAccount = gameAccount!;
 
-    const players = this.options.db.getGamePlayers(gameAddress);
     const expectedEntries = Number(resolvedGameAccount.ticketsCount);
-    const playerValidation = this.ensurePlayersInSync(
+    const ensuredPlayers = await this.ensurePlayersInSync(
       gameAddress,
-      players,
+      context,
+      readiness,
       expectedEntries,
     );
-    if (playerValidation) {
-      return { error: playerValidation };
+    if ("error" in ensuredPlayers) {
+      return { error: ensuredPlayers.error };
     }
+
+    const players = ensuredPlayers.players;
 
     const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
     const winnerIndex = this.calculateWinnerIndex(
@@ -305,6 +322,106 @@ export class GameCompletionManager {
       randomHashBuffer,
       secretKeyBuffer,
     };
+  }
+
+  private async ensurePlayersInSync(
+    gameAddress: string,
+    context: GameOnChainContext,
+    readiness: GameReadinessSnapshot,
+    expectedEntries: number,
+  ): Promise<{ players: string[] } | { error: GameCompletionResult }> {
+    let players = this.options.db.getGamePlayers(gameAddress);
+
+    if (players.length === expectedEntries && players.length > 0) {
+      return { players };
+    }
+
+    const initialCount = players.length;
+    const recovered = await this.tryRecoverPlayerRegistry(
+      gameAddress,
+      context,
+      readiness,
+      expectedEntries,
+      initialCount,
+    );
+
+    if (recovered) {
+      players = recovered;
+    }
+
+    const mismatch = players.length !== expectedEntries || players.length === 0;
+
+    if (mismatch) {
+      logger.failure(
+        `Ticket registry mismatch for ${gameAddress}: expected ${expectedEntries}, found ${players.length}`,
+      );
+
+      if (this.options.markGameDesynced) {
+        this.options.markGameDesynced(gameAddress);
+      }
+
+      return {
+        error: this.recordFatalCompletionFailure(
+          gameAddress,
+          "Ticket registry out of sync",
+        ),
+      };
+    }
+
+    return { players };
+  }
+
+  private async tryRecoverPlayerRegistry(
+    gameAddress: string,
+    context: GameOnChainContext,
+    readiness: GameReadinessSnapshot,
+    expectedEntries: number,
+    previousCount: number,
+  ): Promise<string[] | null> {
+    const recoverFn = this.options.recoverPlayerRegistry;
+
+    if (!recoverFn) {
+      logger.failure(
+        `Ticket registry mismatch for ${gameAddress}: expected ${expectedEntries}, found ${previousCount}`,
+      );
+      return null;
+    }
+
+    if (this.attemptedRegistryRecovery.has(gameAddress)) {
+      return null;
+    }
+
+    this.attemptedRegistryRecovery.add(gameAddress);
+
+    try {
+      const recovered = await recoverFn({
+        gameAddress,
+        context,
+        readiness,
+        expectedTickets: expectedEntries,
+        reason: "completion",
+      });
+
+      if (recovered && recovered.length === expectedEntries) {
+        this.attemptedRegistryRecovery.delete(gameAddress);
+        this.options.db.replaceGamePlayers(gameAddress, recovered);
+        logger.info(
+          `♻️  Recovered ${recovered.length} player entries for ${gameAddress} before completion`,
+        );
+        return recovered;
+      }
+
+      logger.failure(
+        `Unable to recover player registry for ${gameAddress}; recovered ${recovered?.length ?? 0} of ${expectedEntries} entries`,
+      );
+      return null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.failure(
+        `Player registry recovery failed for ${gameAddress}: ${message}`,
+      );
+      return null;
+    }
   }
 
   private recordCompletionFailure(
@@ -335,25 +452,6 @@ export class GameCompletionManager {
   ): GameCompletionResult | null {
     if (value === null || value === undefined) {
       return this.recordFatalCompletionFailure(gameAddress, message);
-    }
-
-    return null;
-  }
-
-  private ensurePlayersInSync(
-    gameAddress: string,
-    players: string[],
-    expectedEntries: number,
-  ): GameCompletionResult | null {
-    if (players.length === 0) {
-      return this.recordFatalCompletionFailure(gameAddress, "No players found for game");
-    }
-
-    if (players.length !== expectedEntries) {
-      logger.failure(
-        `Ticket registry mismatch for ${gameAddress}: expected ${expectedEntries}, found ${players.length}`,
-      );
-      return this.recordFatalCompletionFailure(gameAddress, "Ticket registry out of sync");
     }
 
     return null;

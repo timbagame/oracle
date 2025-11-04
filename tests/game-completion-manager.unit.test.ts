@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as anchor from "@coral-xyz/anchor";
 import { GameCompletionManager } from "../oracle-completion-manager.ts";
+import type { GameCompletionManagerOptions } from "../oracle-completion-manager.ts";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import type { OracleMetrics } from "../metrics.ts";
@@ -10,15 +11,18 @@ import type {
   GameReadinessSnapshot,
 } from "../oracle-service.types.ts";
 import { logger } from "../logger.ts";
+import type { TimbaGameAccount } from "../types/timba.ts";
 
 function createManager(overrides: {
   accountInfo?: (pubkey: PublicKey) => Promise<{ owner: PublicKey | null } | null>;
   programId?: PublicKey;
   secretKeyLength?: number;
   metrics?: Partial<OracleMetrics>;
+  recoverPlayers?: GameCompletionManagerOptions["recoverPlayerRegistry"];
 } = {}) {
   const secretStore = new Map<string, { secretKey: string; randomHash: string }>();
   const players = new Map<string, string[]>();
+  const desyncedGames = new Set<string>();
 
   const db = {
     incrementCompletionAttempts: () => {},
@@ -26,6 +30,12 @@ function createManager(overrides: {
     getGamePlayers: (address: string) => players.get(address) ?? [],
     getSecretKey: (address: string) => secretStore.get(address) ?? null,
     markGameCompleted: () => {},
+    replaceGamePlayers: (address: string, recovered: string[]) => {
+      players.set(address, [...recovered]);
+    },
+    markGameDesynced: (address: string) => {
+      desyncedGames.add(address);
+    },
   } as const;
 
   const metrics: OracleMetrics = {
@@ -68,6 +78,10 @@ function createManager(overrides: {
     secretKeyLength: overrides.secretKeyLength ?? 32,
     noSecretKeyMessage: "missing",
     confirmTransaction: async () => {},
+    recoverPlayerRegistry: overrides.recoverPlayers,
+    markGameDesynced: (address: string) => {
+      desyncedGames.add(address);
+    },
   });
 
   return {
@@ -78,6 +92,7 @@ function createManager(overrides: {
     players,
     connection,
     metrics,
+    desyncedGames,
   };
 }
 
@@ -294,5 +309,79 @@ describe("GameCompletionManager.attemptGameCompletion outcome handling", () => {
       infoSpy.mockRestore();
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe("GameCompletionManager player registry recovery", () => {
+  const secretHex = "aa".repeat(32);
+  const randomHex = "bb".repeat(32);
+
+  const readiness: GameReadinessSnapshot = {
+    ready: true,
+    gameAccount: {
+      ticketsCount: 2,
+      lastSlot: 99,
+    } as unknown as TimbaGameAccount,
+  };
+
+  const context: GameOnChainContext = {
+    gamePda: Keypair.generate().publicKey,
+    randomHashBuffer: Buffer.alloc(32),
+    secretData: {
+      secretKey: secretHex,
+      randomHash: randomHex,
+    },
+  };
+
+  it("rebuilds the local registry before resolving winners", async () => {
+    const recoverInvocations: Array<{ expectedTickets: number }> = [];
+    const existingPlayer = Keypair.generate().publicKey.toBase58();
+    const recoveredPlayers = [existingPlayer, Keypair.generate().publicKey.toBase58()];
+    const { manager, players, secretStore, desyncedGames } = createManager({
+      recoverPlayers: async (options) => {
+        recoverInvocations.push({ expectedTickets: options.expectedTickets });
+        return recoveredPlayers;
+      },
+    });
+
+    const gameAddress = "registry-recover";
+    secretStore.set(gameAddress, { secretKey: secretHex, randomHash: randomHex });
+    players.set(gameAddress, [existingPlayer]);
+
+    const result = await (manager as any).resolveWinnerDetails(
+      gameAddress,
+      readiness,
+      context,
+    );
+
+    expect("error" in result).toBe(false);
+  expect(recoverInvocations).toEqual([{ expectedTickets: 2 }]);
+  expect(players.get(gameAddress)).toEqual(recoveredPlayers);
+    expect(desyncedGames.size).toBe(0);
+  });
+
+  it("marks the game as desynced when recovery fails", async () => {
+    const existingPlayer = Keypair.generate().publicKey.toBase58();
+    const { manager, players, secretStore, desyncedGames } = createManager({
+      recoverPlayers: async () => null,
+    });
+
+    const gameAddress = "registry-failure";
+    secretStore.set(gameAddress, { secretKey: secretHex, randomHash: randomHex });
+    players.set(gameAddress, [existingPlayer]);
+
+    const result = await (manager as any).resolveWinnerDetails(
+      gameAddress,
+      readiness,
+      context,
+    );
+
+    expect(result).toEqual({
+      error: {
+        success: false,
+        error: "Ticket registry out of sync",
+      },
+    });
+    expect(desyncedGames.has(gameAddress)).toBe(true);
   });
 });

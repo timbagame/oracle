@@ -142,6 +142,42 @@ describe("OracleService event handling", () => {
     expect(secondTrigger).toBe("unjoined");
   });
 
+  it("requests registry reconciliation when ticket indexes skip", async () => {
+    const { db } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub);
+
+    const syncCalls: Array<{ gameAddress: string; expectedTickets?: number; trigger: string }> = [];
+    (service as any).syncPlayerRegistry = async (options: any) => {
+      syncCalls.push({
+        gameAddress: options.gameAddress,
+        expectedTickets: options.expectedTickets,
+        trigger: options.trigger,
+      });
+      return true;
+    };
+
+    const gameKey = Keypair.generate().publicKey;
+    const playerKey = Keypair.generate().publicKey;
+
+    await service.events.handlePlayerEvent("joined", {
+      gameKey,
+      player: playerKey,
+      ticketIndex: 2,
+      ticketsCount: 3,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(syncCalls).toEqual([
+      {
+        gameAddress: gameKey.toBase58(),
+        expectedTickets: 3,
+        trigger: "player joined",
+      },
+    ]);
+  });
+
   it("ignores player events with missing data", async () => {
     const { db, callLog } = createDbStub();
     const programStub = createProgramStub();
@@ -457,6 +493,8 @@ type CallLog = {
   track: Array<{ game: string; type: string | undefined }>;
   markCompleted: string[];
   markClosed: string[];
+  markDesynced: string[];
+  replacePlayers: Array<{ game: string; players: string[] }>;
 };
 
 function createDbStub(): { db: OracleDatabaseStub; callLog: CallLog } {
@@ -467,28 +505,46 @@ function createDbStub(): { db: OracleDatabaseStub; callLog: CallLog } {
     track: [],
     markCompleted: [],
     markClosed: [],
+    markDesynced: [],
+    replacePlayers: [],
   };
 
   const secretKeys = new Map<string, { secretKey: string; randomHash: string }>();
+  const playerRegistry = new Map<string, Map<number, string>>();
+
+  const ensureRegistry = (game: string) => {
+    let registry = playerRegistry.get(game);
+    if (!registry) {
+      registry = new Map();
+      playerRegistry.set(game, registry);
+    }
+    return registry;
+  };
 
   const db: OracleDatabaseStub = {
     addPlayerToGame(game, player, index) {
       callLog.addPlayer.push({ game, player, index });
+      ensureRegistry(game).set(index, player);
     },
     deleteSecretKey(game) {
       secretKeys.delete(game);
     },
     removePlayerFromGame(game, index) {
       callLog.removePlayer.push({ game, index });
+      ensureRegistry(game).delete(index);
     },
     clearStalePlayersForGame(game) {
       callLog.clearPlayers.push(game);
+      playerRegistry.delete(game);
     },
     trackGame(game, type, _options) {
       callLog.track.push({ game, type: type ?? undefined });
     },
     markGameCompleted(game) {
       callLog.markCompleted.push(game);
+    },
+    markGameDesynced(game) {
+      callLog.markDesynced.push(game);
     },
     finalizeCompletedGame(game) {
       callLog.markCompleted.push(game);
@@ -519,6 +575,23 @@ function createDbStub(): { db: OracleDatabaseStub; callLog: CallLog } {
     },
     markSecretKeyUsed() {},
     incrementCompletionAttempts() {},
+    getPlayerTicketStats(game) {
+      const registry = playerRegistry.get(game);
+      if (!registry || registry.size === 0) {
+        return { count: 0, maxIndex: null };
+      }
+      const indexes = [...registry.keys()];
+      const maxIndex = Math.max(...indexes);
+      return { count: registry.size, maxIndex };
+    },
+    replaceGamePlayers(game, players) {
+      callLog.replacePlayers.push({ game, players: [...players] });
+      const registry = ensureRegistry(game);
+      registry.clear();
+      players.forEach((player, index) => {
+        registry.set(index, player);
+      });
+    },
   };
 
   return { db, callLog };
@@ -530,6 +603,7 @@ type OracleDatabaseStub = Partial<OracleDatabase> & {
   clearStalePlayersForGame(game: string): void;
   trackGame(game: string, type?: string | null, options?: { preserveFinalized?: boolean }): void;
   markGameCompleted(game: string): void;
+  markGameDesynced(game: string): void;
   finalizeCompletedGame(game: string): void;
   markGameClosed(game: string): void;
   getSecretKey(game: string): { secretKey: string; randomHash: string } | null;
@@ -553,4 +627,6 @@ type OracleDatabaseStub = Partial<OracleDatabase> & {
   };
   markSecretKeyUsed(game: string): void;
   incrementCompletionAttempts(game: string): void;
+  getPlayerTicketStats(game: string): { count: number; maxIndex: number | null };
+  replaceGamePlayers(game: string, players: string[]): void;
 };
