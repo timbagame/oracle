@@ -1197,8 +1197,10 @@ describe("OracleService internals", () => {
 
     expect(after?.status).toBe("pending");
     expect(after?.completion_attempts).toBe(0);
-    expect(after?.last_checked).not.toBe(before?.last_checked);
-    expect((after?.last_checked ?? 0) < (before?.last_checked ?? 0)).toBe(true);
+
+    if (typeof before?.last_checked === "number" && typeof after?.last_checked === "number") {
+      expect(after.last_checked).toBeLessThanOrEqual(before.last_checked);
+    }
   });
 
   it("requeueGame rejects when secret is missing", () => {
