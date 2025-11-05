@@ -86,7 +86,3 @@ const globalMetrics = new OracleMetricsRecorder();
 export function getOracleMetrics(): OracleMetricsRecorder {
   return globalMetrics;
 }
-
-export function resetOracleMetrics(): void {
-  globalMetrics.reset();
-}
