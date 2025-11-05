@@ -292,17 +292,22 @@ export class OracleEventProcessor {
       return;
     }
 
-    this.registrySyncPending.delete(options.gameAddress);
     this.registrySyncInFlight.add(options.gameAddress);
+    let shouldRetry = false;
+
     try {
       const synced = await syncPlayerRegistry(options);
       if (!synced) {
+        shouldRetry = true;
+        this.registrySyncPending.set(options.gameAddress, options);
         logger.warn(
           `⚠️  Failed to reconcile player registry for ${options.gameAddress} after ${options.trigger}`,
         );
-        this.registrySyncPending.set(options.gameAddress, options);
+      } else {
+        this.registrySyncPending.delete(options.gameAddress);
       }
     } catch (error) {
+      shouldRetry = true;
       this.registrySyncPending.set(options.gameAddress, options);
       logger.failure(
         `Error attempting to reconcile player registry for ${options.gameAddress}:`,
@@ -310,10 +315,15 @@ export class OracleEventProcessor {
       );
     } finally {
       this.registrySyncInFlight.delete(options.gameAddress);
-      const pending = this.registrySyncPending.get(options.gameAddress);
-      if (pending) {
+
+      if (shouldRetry) {
+        const pending = this.registrySyncPending.get(options.gameAddress);
+        if (pending) {
+          this.registrySyncPending.delete(options.gameAddress);
+          void this.schedulePlayerRegistrySync(pending);
+        }
+      } else {
         this.registrySyncPending.delete(options.gameAddress);
-        void this.schedulePlayerRegistrySync(pending);
       }
     }
   }

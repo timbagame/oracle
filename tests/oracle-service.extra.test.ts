@@ -312,38 +312,6 @@ describe("OracleService internals", () => {
       ],
     });
 
-    it("requeueGame succeeds on consecutive calls even without new timestamps", () => {
-      const db = OracleDatabase.getInstance();
-      const service = OracleService.createWith(db);
-
-      resetPendingGames(db, { service });
-
-      const gameAddress = "requeue-repeat";
-      seedTrackedGame(db, {
-        service,
-        address: gameAddress,
-        secret: "aa".repeat(32),
-        randomHash: "bb".repeat(32),
-      });
-
-      db.incrementCompletionAttempts(gameAddress);
-
-      const timestamp = Date.now();
-      const nowSpy = spyOn(Date, "now").mockReturnValue(timestamp);
-
-      try {
-        expect(service.requeueGame(gameAddress)).toEqual({ success: true });
-        expect(service.requeueGame(gameAddress)).toEqual({ success: true });
-
-        const pending = db
-          .getPendingGames(Number.POSITIVE_INFINITY)
-          .find((entry) => entry.game_address === gameAddress);
-        expect(pending?.completion_attempts).toBe(0);
-      } finally {
-        nowSpy.mockRestore();
-      }
-    });
-
     const readiness: GameReadinessSnapshot = {
       ready: true,
       gameAccount: createGameAccountStub({
@@ -1288,6 +1256,38 @@ describe("OracleService internals", () => {
 
     const result = service.requeueGame(gameAddr);
     expect(result).toEqual({ success: false, reason: "missing-secret" });
+  });
+
+  it("requeueGame succeeds on consecutive calls even without new timestamps", () => {
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+
+    resetPendingGames(db, { service });
+
+    const gameAddress = "requeue-repeat";
+    seedTrackedGame(db, {
+      service,
+      address: gameAddress,
+      secret: "aa".repeat(32),
+      randomHash: "bb".repeat(32),
+    });
+
+    db.incrementCompletionAttempts(gameAddress);
+
+    const timestamp = Date.now();
+    const nowSpy = spyOn(Date, "now").mockReturnValue(timestamp);
+
+    try {
+      expect(service.requeueGame(gameAddress)).toEqual({ success: true });
+      expect(service.requeueGame(gameAddress)).toEqual({ success: true });
+
+      const pending = db
+        .getPendingGames(Number.POSITIVE_INFINITY)
+        .find((entry) => entry.game_address === gameAddress);
+      expect(pending?.completion_attempts).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("scanAndCompleteActiveGames clears tracked games lacking secrets", async () => {
