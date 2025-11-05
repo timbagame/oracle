@@ -215,4 +215,47 @@ describe("PlayerRegistrySync", () => {
     expect(callCount).toBe(1);
     expect(requestedLimits).toEqual([1]);
   });
+
+  it("processes versioned transactions without forcing legacy-only lookups", async () => {
+    const gamePda = Keypair.generate().publicKey;
+    const player = Keypair.generate().publicKey;
+
+    const events: EventData[] = [
+      {
+        name: "playerJoined",
+        data: {
+          gameKey: gamePda,
+          player,
+          ticketIndex: 0,
+        },
+      },
+    ];
+
+    const signatures = [{ signature: "sig-v1" }];
+    let calls = 0;
+    let receivedMaxVersion: number | undefined;
+
+    const connection = {
+      async getSignaturesForAddress() {
+        return calls++ === 0 ? signatures : [];
+      },
+      async getTransaction(_signature: string, opts?: { maxSupportedTransactionVersion?: number }) {
+        receivedMaxVersion = opts?.maxSupportedTransactionVersion;
+        return {
+          version: 1,
+          meta: { logMessages: ["dummy"] },
+        } as const;
+      },
+    } as unknown as anchor.web3.Connection;
+
+    const sync = createSync([events], { connection });
+
+    const players = await sync.fetchPlayersFromChain({
+      gamePda,
+      expectedTickets: 1,
+    });
+
+    expect(players).toEqual([player.toBase58()]);
+    expect(receivedMaxVersion).toBeUndefined();
+  });
 });

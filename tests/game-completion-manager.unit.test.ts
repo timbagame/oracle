@@ -459,6 +459,32 @@ describe("GameCompletionManager player registry recovery", () => {
     expect(desyncedGames.size).toBe(0);
   });
 
+  it("attempts registry recovery when duplicates exist despite matching length", async () => {
+    const duplicatePlayer = Keypair.generate().publicKey.toBase58();
+    const recoveredPlayers = [duplicatePlayer, Keypair.generate().publicKey.toBase58()];
+    let recoverCalls = 0;
+    const { manager, players, secretStore } = createManager({
+      recoverPlayers: async () => {
+        recoverCalls++;
+        return recoveredPlayers;
+      },
+    });
+
+    const gameAddress = "duplicate-registry";
+    secretStore.set(gameAddress, { secretKey: secretHex, randomHash: randomHex });
+    players.set(gameAddress, [duplicatePlayer, duplicatePlayer]);
+
+    const result = await (manager as any).resolveWinnerDetails(
+      gameAddress,
+      readiness,
+      context,
+    );
+
+    expect("error" in result).toBe(false);
+    expect(recoverCalls).toBe(1);
+    expect(players.get(gameAddress)).toEqual(recoveredPlayers);
+  });
+
   it("marks the game as desynced when recovery fails", async () => {
     const existingPlayer = Keypair.generate().publicKey.toBase58();
     const { manager, players, secretStore, desyncedGames } = createManager({
@@ -482,5 +508,96 @@ describe("GameCompletionManager player registry recovery", () => {
       },
     });
     expect(desyncedGames.has(gameAddress)).toBe(true);
+  });
+});
+
+describe("GameCompletionManager registry prefetch", () => {
+  const secretHex = "aa".repeat(32);
+  const randomHex = "bb".repeat(32);
+  const readiness: GameReadinessSnapshot = {
+    ready: true,
+    gameAccount: {
+      ticketsCount: 2,
+      lastSlot: 99,
+    } as unknown as TimbaGameAccount,
+  };
+  const context: GameOnChainContext = {
+    gamePda: Keypair.generate().publicKey,
+    randomHashBuffer: Buffer.alloc(32),
+    secretData: {
+      secretKey: secretHex,
+      randomHash: randomHex,
+    },
+  };
+
+  it("retries immediately after a failed registry prefetch", async () => {
+    const recoveredPlayers = [
+      Keypair.generate().publicKey.toBase58(),
+      Keypair.generate().publicKey.toBase58(),
+    ];
+    let attempts = 0;
+    const { manager, players } = createManager({
+      recoverPlayers: async () => {
+        attempts++;
+        if (attempts === 1) {
+          throw new Error("boom");
+        }
+        return recoveredPlayers;
+      },
+    });
+
+    const nowSpy = spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const gameAddress = "prefetch-retry";
+
+    try {
+      await (manager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+      expect(players.get(gameAddress)).toBeUndefined();
+
+      await (manager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+
+      expect(attempts).toBe(2);
+      expect(players.get(gameAddress)).toEqual(recoveredPlayers);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("allows a concurrent attempt when the first prefetch fails", async () => {
+    const recoveredPlayers = [
+      Keypair.generate().publicKey.toBase58(),
+      Keypair.generate().publicKey.toBase58(),
+    ];
+    let attempts = 0;
+    let release: (() => void) | undefined;
+
+    const { manager, players } = createManager({
+      recoverPlayers: async () => {
+        attempts++;
+        if (attempts === 1) {
+          await new Promise((_, reject) => {
+            release = () => reject(new Error("network"));
+          });
+        }
+        return recoveredPlayers;
+      },
+    });
+
+    const nowSpy = spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const gameAddress = "prefetch-concurrent";
+
+    try {
+      const firstAttempt = (manager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+      await Promise.resolve();
+      const secondAttempt = (manager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+
+      release?.();
+
+      await Promise.allSettled([firstAttempt, secondAttempt]);
+
+      expect(attempts).toBe(2);
+      expect(players.get(gameAddress)).toEqual(recoveredPlayers);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

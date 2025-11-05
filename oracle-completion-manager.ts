@@ -366,6 +366,7 @@ export class GameCompletionManager {
   ): Promise<{ players: string[] } | { error: GameCompletionResult }> {
     let players = this.options.db.getGamePlayers(gameAddress);
 
+    const hasPlayers = players.length > 0;
     const initialAnalysis = analyzeRegistryState(
       {
         count: players.length,
@@ -374,10 +375,9 @@ export class GameCompletionManager {
       },
       expectedEntries,
     );
+    const hasDuplicatePlayers = players.length > 0 && new Set(players).size !== players.length;
 
-    const hasPlayers = players.length > 0;
-
-    if (!initialAnalysis.needsReconciliation && hasPlayers) {
+    if (!initialAnalysis.needsReconciliation && hasPlayers && !hasDuplicatePlayers) {
       return { players };
     }
 
@@ -402,8 +402,9 @@ export class GameCompletionManager {
       },
       expectedEntries,
     );
+    const postRecoveryDuplicates = players.length > 0 && new Set(players).size !== players.length;
 
-    if (postRecoveryAnalysis.needsReconciliation || players.length === 0) {
+    if (postRecoveryAnalysis.needsReconciliation || postRecoveryDuplicates || players.length === 0) {
       logger.failure(
         `Ticket registry mismatch for ${gameAddress}: expected ${expectedEntries}, found ${players.length}`,
       );
@@ -542,8 +543,7 @@ export class GameCompletionManager {
       return;
     }
 
-    this.registryPrefetchSchedule.set(gameAddress, now + this.registryPrefetchCooldownMs);
-
+    const nextWindow = now + this.registryPrefetchCooldownMs;
     try {
       const recovered = await recoverFn({
         gameAddress,
@@ -558,12 +558,18 @@ export class GameCompletionManager {
         logger.info(
           `♻️  Prefetched ${recovered.length} players for ${gameAddress} during readiness evaluation`,
         );
+        this.registryPrefetchSchedule.set(gameAddress, nextWindow);
       }
     } catch (error) {
+      this.registryPrefetchSchedule.delete(gameAddress);
       const message = error instanceof Error ? error.message : String(error);
       logger.warning(
         `Unable to prefetch player registry for ${gameAddress}: ${message}`,
       );
+    }
+
+    if (!this.registryPrefetchSchedule.has(gameAddress)) {
+      this.registryPrefetchSchedule.delete(gameAddress);
     }
   }
 

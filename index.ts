@@ -118,11 +118,17 @@ function createHtmlResponse(html: string): Response {
   return new Response(html, { headers: { "Content-Type": "text/html" } });
 }
 
+function sanitizeErrorMessage(error: string): string {
+  const normalized = error.replace(/[\x00-\x1F\x7F]+/g, " ");
+  const collapsed = normalized.replace(/\s+/g, " ").trim();
+  return collapsed.length > 0 ? collapsed : "Unknown error";
+}
+
 function createErrorResponse(error: string, status: number = 500): Response {
   return createServiceResponse({
     success: false,
     status,
-    payload: { error },
+    payload: { error: sanitizeErrorMessage(error) },
   });
 }
 

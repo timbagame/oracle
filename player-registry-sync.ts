@@ -67,7 +67,6 @@ export class PlayerRegistrySync {
           try {
             return await this.options.connection.getTransaction(signatureInfo.signature, {
               commitment: "confirmed",
-              maxSupportedTransactionVersion: 0,
             });
           } catch (error) {
             logger.warning(
