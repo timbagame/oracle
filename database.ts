@@ -37,6 +37,8 @@ const SQL_QUERIES = Object.freeze({
   selectGameType: "SELECT game_type FROM game_tracking WHERE game_address = ?",
   selectGameStatus:
     "SELECT status, game_type FROM game_tracking WHERE game_address = ?",
+  selectGameStatusWithAttempts:
+    "SELECT status, completion_attempts FROM game_tracking WHERE game_address = ?",
   selectPendingGames:
     "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?",
   selectPendingGamesWithAttempts:
@@ -531,6 +533,24 @@ export class OracleDatabase {
 
     const updated = typeof result?.changes === "number" && result.changes > 0;
     if (!updated) {
+      const currentState = this.queryOne<{
+        status: string;
+        completion_attempts: number;
+      }>(
+        SQL_QUERIES.selectGameStatusWithAttempts,
+        "Failed to lookup completion attempts",
+        null,
+        gameAddress,
+      );
+
+      if (
+        currentState &&
+        currentState.status === DEFAULT_STATUS &&
+        (currentState.completion_attempts ?? 0) === 0
+      ) {
+        return { success: true };
+      }
+
       return { success: false, reason: "unchanged" };
     }
 

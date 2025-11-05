@@ -121,7 +121,17 @@ function createHtmlResponse(html: string): Response {
 function sanitizeErrorMessage(error: string): string {
   const normalized = error.replace(/[\x00-\x1F\x7F]+/g, " ");
   const collapsed = normalized.replace(/\s+/g, " ").trim();
-  return collapsed.length > 0 ? collapsed : "Unknown error";
+  if (collapsed.length === 0) {
+    return "Unknown error";
+  }
+
+  const escapeMap: Record<string, string> = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+  };
+
+  return collapsed.replace(/[&<>]/g, (char) => escapeMap[char] ?? char);
 }
 
 function createErrorResponse(error: string, status: number = 500): Response {
@@ -236,6 +246,8 @@ export function buildHandlers(oracle: OracleApi) {
               }
               gameType = trimmed;
             }
+          } else if (provided !== undefined) {
+            return createErrorResponse("gameType must be a string", 400);
           }
         }
 

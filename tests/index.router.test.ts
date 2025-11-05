@@ -117,6 +117,30 @@ describe("index router", () => {
     }
   });
 
+  test("POST /generate-hash rejects non-string game types", async () => {
+    const rejectingContext = await createIndexRouterTestContext("index-router-type-check", {
+      generateGameSecrets: () => ({ randomHash: "abc", gameAddress: "game123" }),
+    });
+
+    try {
+      const { response, json } = await executeJsonRequest(
+        rejectingContext.router,
+        "/generate-hash",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameType: 42 }),
+        },
+      );
+
+      expect(response.status).toBe(400);
+      expect((json as any).success).toBe(false);
+      expect((json as any).error).toContain("gameType");
+    } finally {
+      rejectingContext.testEnv.cleanup();
+    }
+  });
+
   test("POST /generate-hash accepts max-length game type", async () => {
     const calls: string[] = [];
     const acceptingContext = await createIndexRouterTestContext("index-router-max-length", {
@@ -279,6 +303,32 @@ describe("index router", () => {
       } finally {
         failingContext.testEnv.cleanup();
       }
+    }
+  });
+
+  test("POST /games/requeue sanitizes error messages", async () => {
+    const failingContext = await createIndexRouterTestContext("index-router-requeue-sanitize", {
+      requeueGame: () => ({ success: false, reason: "not-found" }),
+    });
+
+    try {
+      const maliciousAddress = "<script>alert('xss')</script>";
+      const { response, json } = await executeJsonRequest(
+        failingContext.router,
+        "/games/requeue",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameAddress: maliciousAddress }),
+        },
+      );
+
+      expect(response.status).toBe(404);
+      const errorMessage = String((json as any).error ?? "");
+      expect(errorMessage).toContain("&lt;script&gt;");
+      expect(errorMessage).not.toContain("<script>");
+    } finally {
+      failingContext.testEnv.cleanup();
     }
   });
 

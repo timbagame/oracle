@@ -29,6 +29,15 @@ export class OracleEventProcessor {
   private listening = false;
   private startPromise: Promise<void> | null = null;
   private readonly registrySyncInFlight = new Set<string>();
+  private readonly registrySyncPending = new Map<
+    string,
+    {
+      gameAddress: string;
+      expectedTickets?: number;
+      trigger: string;
+      gameKey?: PublicKeyLike;
+    }
+  >();
 
   constructor(private readonly options: OracleEventProcessorOptions) {}
 
@@ -279,9 +288,11 @@ export class OracleEventProcessor {
     }
 
     if (this.registrySyncInFlight.has(options.gameAddress)) {
+      this.registrySyncPending.set(options.gameAddress, options);
       return;
     }
 
+    this.registrySyncPending.delete(options.gameAddress);
     this.registrySyncInFlight.add(options.gameAddress);
     try {
       const synced = await syncPlayerRegistry(options);
@@ -289,14 +300,21 @@ export class OracleEventProcessor {
         logger.warn(
           `⚠️  Failed to reconcile player registry for ${options.gameAddress} after ${options.trigger}`,
         );
+        this.registrySyncPending.set(options.gameAddress, options);
       }
     } catch (error) {
+      this.registrySyncPending.set(options.gameAddress, options);
       logger.failure(
         `Error attempting to reconcile player registry for ${options.gameAddress}:`,
         error,
       );
     } finally {
       this.registrySyncInFlight.delete(options.gameAddress);
+      const pending = this.registrySyncPending.get(options.gameAddress);
+      if (pending) {
+        this.registrySyncPending.delete(options.gameAddress);
+        void this.schedulePlayerRegistrySync(pending);
+      }
     }
   }
 

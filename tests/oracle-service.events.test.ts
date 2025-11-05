@@ -236,6 +236,53 @@ describe("OracleService event handling", () => {
     expect(syncCalls).toHaveLength(1);
   });
 
+  it("retries player registry sync when a pending request arrives during a failed attempt", async () => {
+    const { db } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub);
+
+    const firstAttempt = createDeferred<boolean>();
+    const syncCalls: Array<{ gameAddress: string; trigger: string }> = [];
+
+    (service as any).syncPlayerRegistry = async (options: any) => {
+      syncCalls.push({ gameAddress: options.gameAddress, trigger: options.trigger });
+      if (syncCalls.length === 1) {
+        return firstAttempt.promise;
+      }
+      return true;
+    };
+
+    const gameKey = Keypair.generate().publicKey;
+    const playerKey = Keypair.generate().publicKey;
+
+    const first = service.events.handlePlayerEvent("joined", {
+      gameKey,
+      player: playerKey,
+      ticketIndex: 2,
+      ticketsCount: 3,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const second = service.events.handlePlayerEvent("joined", {
+      gameKey,
+      player: playerKey,
+      ticketIndex: 2,
+      ticketsCount: 3,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(syncCalls).toHaveLength(1);
+
+    firstAttempt.resolve(false);
+
+    await Promise.all([first, second]);
+
+    expect(syncCalls).toHaveLength(2);
+    expect(syncCalls[0]?.gameAddress).toBe(gameKey.toBase58());
+    expect(syncCalls[1]?.gameAddress).toBe(gameKey.toBase58());
+  });
+
   it("ignores player events with missing data", async () => {
     const { db, callLog } = createDbStub();
     const programStub = createProgramStub();
