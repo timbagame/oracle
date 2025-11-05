@@ -1207,42 +1207,46 @@ describe("OracleService internals", () => {
     resetPendingGames(db, { service });
 
     const gameAddr = "requeue-fresh";
-    seedTrackedGame(db, {
-      address: gameAddr,
-      secret: "aa".repeat(32),
-      randomHash: "bb".repeat(32),
-    });
+    const fixedTimestamp = 1_700_000_000_000;
+    const nowSpy = spyOn(Date, "now").mockReturnValue(fixedTimestamp);
 
-    const sqlite = (db as any).db as {
-      prepare: (
-        sql: string,
-      ) => {
-        get: (
-          ...args: unknown[]
-        ) => { status: string; completion_attempts: number; last_checked: number } | undefined;
+    try {
+      seedTrackedGame(db, {
+        address: gameAddr,
+        secret: "aa".repeat(32),
+        randomHash: "bb".repeat(32),
+      });
+
+      const sqlite = (db as any).db as {
+        prepare: (
+          sql: string,
+        ) => {
+          get: (
+            ...args: unknown[]
+          ) => { status: string; completion_attempts: number; last_checked: number } | undefined;
+        };
       };
-    };
 
-    const before = sqlite
-      .prepare("SELECT status, completion_attempts, last_checked FROM game_tracking WHERE game_address = ?")
-      .get(gameAddr);
+      const before = sqlite
+        .prepare("SELECT status, completion_attempts, last_checked FROM game_tracking WHERE game_address = ?")
+        .get(gameAddr);
 
-    expect(before?.status).toBe("pending");
-    expect(before?.completion_attempts).toBe(0);
-    expect(typeof before?.last_checked).toBe("number");
+      expect(before?.status).toBe("pending");
+      expect(before?.completion_attempts).toBe(0);
+      expect(before?.last_checked).toBe(fixedTimestamp);
 
-    const result = service.requeueGame(gameAddr);
-    expect(result).toEqual({ success: true });
+      const result = service.requeueGame(gameAddr);
+      expect(result).toEqual({ success: true });
 
-    const after = sqlite
-      .prepare("SELECT status, completion_attempts, last_checked FROM game_tracking WHERE game_address = ?")
-      .get(gameAddr);
+      const after = sqlite
+        .prepare("SELECT status, completion_attempts, last_checked FROM game_tracking WHERE game_address = ?")
+        .get(gameAddr);
 
-    expect(after?.status).toBe("pending");
-    expect(after?.completion_attempts).toBe(0);
-
-    if (typeof before?.last_checked === "number" && typeof after?.last_checked === "number") {
-      expect(after.last_checked).toBeLessThanOrEqual(before.last_checked);
+      expect(after?.status).toBe("pending");
+      expect(after?.completion_attempts).toBe(0);
+      expect(after?.last_checked).toBe(fixedTimestamp - 1);
+    } finally {
+      nowSpy.mockRestore();
     }
   });
 
