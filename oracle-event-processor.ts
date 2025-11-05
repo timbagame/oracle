@@ -6,6 +6,7 @@ import type { PublicKeyLike } from "./solana-utils.ts";
 import type { EventHandlerConfig } from "./oracle-service.types.ts";
 import { toBase58, resolveNumericLike, coercePublicKey } from "./solana-utils.ts";
 import { logger } from "./logger.ts";
+import { analyzeRegistryState } from "./player-registry-utils.ts";
 
 const GAME_TYPE_MAX_LENGTH = 128;
 
@@ -245,23 +246,22 @@ export class OracleEventProcessor {
     }
 
     const stats = this.options.db.getPlayerTicketStats(gameAddress);
+    const analysis = analyzeRegistryState(
+      {
+        count: stats.count,
+        maxIndex: stats.maxIndex,
+        minIndex: stats.minIndex,
+      },
+      expectedTickets,
+    );
 
-    const contiguous = stats.maxIndex === null
-      ? stats.count === 0
-      : stats.maxIndex + 1 === stats.count;
-
-    const requiredCount = expectedTickets ?? (stats.maxIndex !== null ? stats.maxIndex + 1 : stats.count);
-    const countMismatch = expectedTickets !== undefined && stats.count !== expectedTickets;
-
-    if (contiguous && !countMismatch) {
+    if (!analysis.needsReconciliation) {
       return;
     }
 
-    const normalizedExpected = requiredCount > 0 ? requiredCount : undefined;
-
     void this.schedulePlayerRegistrySync({
       gameAddress,
-      expectedTickets: normalizedExpected,
+      expectedTickets: analysis.normalizedExpected,
       trigger,
       gameKey,
     });

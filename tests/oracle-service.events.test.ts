@@ -450,7 +450,7 @@ describe("OracleService event handling", () => {
         requireOnChain: true,
       },
     );
-    expect(missing.context).toBeNull();
+    expect(missing.status).toBe("missing-context");
     expect(programStub.fetchCalls).toHaveLength(0);
 
     const activeGame = "active-game";
@@ -466,8 +466,11 @@ describe("OracleService event handling", () => {
         requireOnChain: true,
       },
     );
-    expect(exists.context?.gamePda).toBeInstanceOf(PublicKey);
-    expect(exists.readiness?.gameAccount).toBeDefined();
+    if (exists.status === "missing-context") {
+      throw new Error("expected context for active game");
+    }
+    expect(exists.context.gamePda).toBeInstanceOf(PublicKey);
+    expect(exists.readiness.gameAccount).toBeDefined();
     expect(programStub.fetchCalls).toHaveLength(1);
 
     const goneGame = "gone-game";
@@ -481,7 +484,7 @@ describe("OracleService event handling", () => {
     const gone = await service.completionManager.resolveContextAndReadiness(goneGame, {
       requireOnChain: true,
     });
-    expect(gone.context).toBeNull();
+    expect(gone.status).toBe("missing-context");
     expect(programStub.fetchCalls).toHaveLength(2);
   });
 
@@ -636,11 +639,12 @@ function createDbStub(): { db: OracleDatabaseStub; callLog: CallLog } {
     getPlayerTicketStats(game) {
       const registry = playerRegistry.get(game);
       if (!registry || registry.size === 0) {
-        return { count: 0, maxIndex: null };
+        return { count: 0, maxIndex: null, minIndex: null };
       }
       const indexes = [...registry.keys()];
       const maxIndex = Math.max(...indexes);
-      return { count: registry.size, maxIndex };
+      const minIndex = Math.min(...indexes);
+      return { count: registry.size, maxIndex, minIndex };
     },
     replaceGamePlayers(game, players) {
       callLog.replacePlayers.push({ game, players: [...players] });
@@ -693,6 +697,6 @@ type OracleDatabaseStub = Partial<OracleDatabase> & {
   };
   markSecretKeyUsed(game: string): void;
   incrementCompletionAttempts(game: string): void;
-  getPlayerTicketStats(game: string): { count: number; maxIndex: number | null };
+  getPlayerTicketStats(game: string): { count: number; maxIndex: number | null; minIndex: number | null };
   replaceGamePlayers(game: string, players: string[]): void;
 };

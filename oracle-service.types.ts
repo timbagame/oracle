@@ -67,6 +67,15 @@ export interface GameReadinessSnapshot {
   evaluatedAt?: number;
 }
 
+export type ReadinessResolution =
+  | { status: "missing-context" }
+  | {
+      status: "ready" | "not-ready";
+      context: GameOnChainContext;
+      readiness: GameReadinessSnapshot;
+      prefetchScheduled: boolean;
+    };
+
 export interface GameOnChainContext {
   gamePda: PublicKey;
   secretData: { secretKey: string; randomHash: string };
@@ -188,11 +197,7 @@ export interface OracleScanDependencies {
         requireOnChain?: boolean;
         blockTime?: number;
       },
-    ) => Promise<{
-      context: GameOnChainContext | null;
-      readiness?: GameReadinessSnapshot;
-      notReady: boolean;
-    }>;
+    ) => Promise<ReadinessResolution>;
     attemptGameCompletion: (options: AttemptGameCompletionOptions) => Promise<GameCompletionResult | null>;
     consumeReadiness: (gameAddress: string) => GameReadinessSnapshot | undefined;
     getBlockchainTime: () => Promise<number>;

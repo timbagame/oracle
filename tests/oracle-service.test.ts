@@ -33,7 +33,12 @@ const makeFakeContext = () => ({
 
 const makeReadyResolution = () => {
   const context = makeFakeContext();
-  return { context, readiness: context.readiness, notReady: false };
+  return {
+    status: "ready" as const,
+    context,
+    readiness: context.readiness,
+    prefetchScheduled: false,
+  };
 };
 
 let OracleService: typeof import("../oracle-service.ts").OracleService;
@@ -202,7 +207,7 @@ describe("OracleService", () => {
 
     service.completionManager.resolveContextAndReadiness = async (addr: string) => {
       if (addr === "gameGone") {
-        return { context: null, readiness: undefined, notReady: false };
+        return { status: "missing-context" as const };
       }
       return makeReadyResolution();
     };
@@ -267,9 +272,10 @@ describe("OracleService", () => {
       service.completionManager,
       "resolveContextAndReadiness"
     ).mockResolvedValue({
+      status: "not-ready",
       context,
       readiness: context.readiness,
-      notReady: true,
+      prefetchScheduled: false,
     });
     const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockResolvedValue({
       success: false,
@@ -323,9 +329,10 @@ describe("OracleService", () => {
       service.completionManager,
       "resolveContextAndReadiness",
     ).mockResolvedValue({
+      status: "ready",
       context,
       readiness: context.readiness,
-      notReady: false,
+      prefetchScheduled: false,
     });
     const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockResolvedValue(
       null,

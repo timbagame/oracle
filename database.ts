@@ -51,7 +51,7 @@ const SQL_QUERIES = Object.freeze({
   selectPlayersForGame:
     "SELECT player_address FROM game_players WHERE game_address = ? ORDER BY ticket_index ASC",
   selectPlayerTicketStats:
-    "SELECT COUNT(*) as count, MAX(ticket_index) as max_index FROM game_players WHERE game_address = ?",
+    "SELECT COUNT(*) as count, MAX(ticket_index) as max_index, MIN(ticket_index) as min_index FROM game_players WHERE game_address = ?",
 } satisfies Record<string, string>);
 
 const COMPLETED_GAME_PREDICATE = "status != ? AND completed_at IS NOT NULL AND completed_at < ?";
@@ -759,17 +759,18 @@ export class OracleDatabase {
     );
   }
 
-  public getPlayerTicketStats(gameAddress: string): { count: number; maxIndex: number | null } {
-    const result = this.queryOne<{ count: number; max_index: number | null }>(
+  public getPlayerTicketStats(gameAddress: string): { count: number; maxIndex: number | null; minIndex: number | null } {
+    const result = this.queryOne<{ count: number; max_index: number | null; min_index: number | null }>(
       SQL_QUERIES.selectPlayerTicketStats,
       "Failed to query player ticket statistics",
-      { count: 0, max_index: null },
+      { count: 0, max_index: null, min_index: null },
       gameAddress,
     );
 
     return {
       count: result?.count ?? 0,
       maxIndex: result?.max_index ?? null,
+      minIndex: result?.min_index ?? null,
     };
   }
 }

@@ -5,6 +5,7 @@ import {
   type GameCompletionResult,
   type GameOnChainContext,
   type GameReadinessSnapshot,
+  type ReadinessResolution,
   type ScanLoopOptions,
   type ScanLoopSummary,
   createEmptyCompletionStats,
@@ -26,11 +27,7 @@ export interface ScanLoopRunnerOptions {
         requireOnChain?: boolean;
         blockTime?: number;
       },
-    ) => Promise<{
-      context: GameOnChainContext | null;
-      readiness?: GameReadinessSnapshot;
-      notReady: boolean;
-    }>;
+    ) => Promise<ReadinessResolution>;
     attemptGameCompletion: (
       options: AttemptGameCompletionOptions,
     ) => Promise<GameCompletionResult | null>;
@@ -71,7 +68,7 @@ export class ScanLoopRunner {
       return stats;
     }
 
-  logger.info(`🔍 Scanning ${pendingCount} pending games...`);
+    logger.info(`🔍 Scanning ${pendingCount} pending games...`);
 
     let cachedBlockTime: number | undefined;
 
@@ -87,7 +84,7 @@ export class ScanLoopRunner {
           break;
         }
 
-        const { context: onChainContext, readiness } =
+        const readinessResolution =
           await this.options.completion.resolveContextAndReadiness(
             game.game_address,
             {
@@ -99,10 +96,14 @@ export class ScanLoopRunner {
         if (signal?.aborted) {
           break;
         }
-        if (!onChainContext) {
+
+        if (readinessResolution.status === "missing-context") {
           this.options.db.markGameCompleted(game.game_address);
           continue;
         }
+
+        const onChainContext = readinessResolution.context;
+        const readiness = readinessResolution.readiness;
 
         const result = await this.options.completion.attemptGameCompletion({
           gameAddress: game.game_address,
@@ -123,7 +124,7 @@ export class ScanLoopRunner {
           this.options.db.touchGameCheck(game.game_address);
         }
 
-        if (readiness && !readiness.ready) {
+        if (!readiness.ready) {
           cachedBlockTime = undefined;
         }
 
@@ -133,8 +134,8 @@ export class ScanLoopRunner {
           await delayHelper(this.options.interGameDelayMs, { signal });
         }
       } catch (error) {
-        stats.errors++;
-  logger.error(`❌ Error completing game ${game.game_address}:`, error);
+    stats.errors++;
+    logger.error(`❌ Error completing game ${game.game_address}:`, error);
         this.options.metrics.recordCompletion({
           gameAddress: game.game_address,
           outcome: "error",
@@ -186,7 +187,7 @@ export class ScanLoopRunner {
       cycle += 1;
       onCycleStart?.(cycle);
 
-  const stats = await this.scanAndCompleteActiveGames({ signal });
+    const stats = await this.scanAndCompleteActiveGames({ signal });
       lastStats = stats;
 
       totals.completed += stats.completed;

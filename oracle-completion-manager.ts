@@ -7,6 +7,7 @@ import {
   type GameCompletionResult,
   type GameOnChainContext,
   type GameReadinessSnapshot,
+  type ReadinessResolution,
 } from "./oracle-service.types.ts";
 import type { TimbaGameAccount } from "./types/timba.ts";
 import { coercePublicKey, ensurePublicKey } from "./solana-utils.ts";
@@ -21,6 +22,7 @@ import {
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { logger } from "./logger.ts";
+import { analyzeRegistryState } from "./player-registry-utils.ts";
 
 export interface GameCompletionManagerOptions extends CoreOracleDependencies {
   readinessCache: Map<string, GameReadinessSnapshot>;
@@ -95,17 +97,22 @@ export class GameCompletionManager {
         return null;
       }
 
-      const readinessState = await this.resolveContextAndReadiness(gameAddress, {
+      const readinessResolution = await this.resolveContextAndReadiness(gameAddress, {
         context,
         readiness,
         requireOnChain: !skipReadinessCheck,
       });
 
-      const completionContext = readinessState.context ?? undefined;
-      const completionReadiness = readinessState.readiness;
-      const notReady = skipReadinessCheck ? false : readinessState.notReady;
+      if (readinessResolution.status === "missing-context") {
+        return null;
+      }
 
-      if (notReady) {
+      const completionContext = readinessResolution.context;
+      const completionReadiness = readinessResolution.readiness;
+      const shouldAbortForReadiness =
+        !skipReadinessCheck && readinessResolution.status === "not-ready";
+
+      if (shouldAbortForReadiness) {
         return this.recordNotReady(gameAddress, { onResult });
       }
 
@@ -223,14 +230,23 @@ export class GameCompletionManager {
 
   private validateCompletionState(
     gameAddress: string,
-    state: {
-      context: GameOnChainContext | null;
-      readiness?: GameReadinessSnapshot;
-      notReady: boolean;
-    },
+    state: ReadinessResolution,
   ):
     | { context: GameOnChainContext; readiness: GameReadinessSnapshot }
     | { error: GameCompletionResult } {
+    if (state.status === "missing-context") {
+      return {
+        error: this.recordFatalCompletionFailure(
+          gameAddress,
+          this.options.noSecretKeyMessage,
+        ),
+      };
+    }
+
+    if (state.status === "not-ready") {
+      return { error: { success: false, notReady: true } };
+    }
+
     const missingContext = this.guardFatalCompletionRequirement(
       gameAddress,
       state.context,
@@ -238,10 +254,6 @@ export class GameCompletionManager {
     );
     if (missingContext) {
       return { error: missingContext };
-    }
-
-    if (state.notReady || !state.readiness) {
-      return { error: { success: false, notReady: true } };
     }
 
     const missingGameAccount = this.guardFatalCompletionRequirement(
@@ -254,7 +266,7 @@ export class GameCompletionManager {
     }
 
     return {
-      context: state.context!,
+      context: state.context,
       readiness: state.readiness,
     };
   }
@@ -354,7 +366,18 @@ export class GameCompletionManager {
   ): Promise<{ players: string[] } | { error: GameCompletionResult }> {
     let players = this.options.db.getGamePlayers(gameAddress);
 
-    if (players.length === expectedEntries && players.length > 0) {
+    const initialAnalysis = analyzeRegistryState(
+      {
+        count: players.length,
+        maxIndex: players.length === 0 ? null : players.length - 1,
+        minIndex: players.length === 0 ? null : 0,
+      },
+      expectedEntries,
+    );
+
+    const hasPlayers = players.length > 0;
+
+    if (!initialAnalysis.needsReconciliation && hasPlayers) {
       return { players };
     }
 
@@ -371,9 +394,16 @@ export class GameCompletionManager {
       players = recovered;
     }
 
-    const mismatch = players.length !== expectedEntries || players.length === 0;
+    const postRecoveryAnalysis = analyzeRegistryState(
+      {
+        count: players.length,
+        maxIndex: players.length === 0 ? null : players.length - 1,
+        minIndex: players.length === 0 ? null : 0,
+      },
+      expectedEntries,
+    );
 
-    if (mismatch) {
+    if (postRecoveryAnalysis.needsReconciliation || players.length === 0) {
       logger.failure(
         `Ticket registry mismatch for ${gameAddress}: expected ${expectedEntries}, found ${players.length}`,
       );
@@ -545,11 +575,7 @@ export class GameCompletionManager {
       requireOnChain?: boolean;
       blockTime?: number;
     } = {},
-  ): Promise<{
-    context: GameOnChainContext | null;
-    readiness?: GameReadinessSnapshot;
-    notReady: boolean;
-  }> {
+  ): Promise<ReadinessResolution> {
     const {
       context: providedContext = null,
       readiness: providedReadiness,
@@ -564,10 +590,10 @@ export class GameCompletionManager {
     );
 
     if (!resolvedContext) {
-      return { context: null, readiness: undefined, notReady: false };
+      return { status: "missing-context" };
     }
 
-    const readinessSnapshot = await this.resolveReadinessSnapshot(
+    const { snapshot, shouldPrefetch } = await this.resolveReadinessSnapshot(
       gameAddress,
       resolvedContext,
       {
@@ -578,20 +604,26 @@ export class GameCompletionManager {
       },
     );
 
-    if (!readinessSnapshot) {
-      return { context: null, readiness: undefined, notReady: false };
+    if (!snapshot) {
+      return { status: "missing-context" };
     }
 
-    const contextWithReadiness = resolvedContext.readiness !== readinessSnapshot
-      ? { ...resolvedContext, readiness: readinessSnapshot }
-      : resolvedContext;
+    const contextWithReadiness = resolvedContext.readiness === snapshot
+      ? resolvedContext
+      : { ...resolvedContext, readiness: snapshot };
 
-    const notReady = !readinessSnapshot.ready || !readinessSnapshot.gameAccount;
+    if (shouldPrefetch) {
+      await this.prefetchPlayerRegistry(gameAddress, contextWithReadiness, snapshot);
+    }
+
+    const status: "ready" | "not-ready" =
+      snapshot.ready && snapshot.gameAccount ? "ready" : "not-ready";
 
     return {
+      status,
       context: contextWithReadiness,
-      readiness: readinessSnapshot,
-      notReady,
+      readiness: snapshot,
+      prefetchScheduled: shouldPrefetch,
     };
   }
 
@@ -604,7 +636,7 @@ export class GameCompletionManager {
       requireOnChain: boolean;
       blockTime?: number;
     },
-  ): Promise<GameReadinessSnapshot | null> {
+  ): Promise<{ snapshot: GameReadinessSnapshot | null; shouldPrefetch: boolean }> {
     const { providedReadiness, providedContext, requireOnChain, blockTime } = options;
 
     const providedCandidate = this.getProvidedReadinessCandidate(
@@ -613,12 +645,12 @@ export class GameCompletionManager {
       requireOnChain,
     );
     if (providedCandidate) {
-      return providedCandidate;
+      return { snapshot: providedCandidate, shouldPrefetch: false };
     }
 
     const cachedCandidate = this.consumeCachedReadiness(gameAddress, requireOnChain);
     if (cachedCandidate) {
-      return cachedCandidate;
+      return { snapshot: cachedCandidate, shouldPrefetch: false };
     }
 
     const evaluation = await this.evaluateAndCacheReadiness(
@@ -629,14 +661,13 @@ export class GameCompletionManager {
 
     if (!evaluation.gameAccount && requireOnChain) {
       logger.warning(`Game ${gameAddress} no longer exists on-chain`);
-      return null;
+      return { snapshot: null, shouldPrefetch: false };
     }
 
-    if (evaluation.gameAccount) {
-      await this.prefetchPlayerRegistry(gameAddress, context, evaluation);
-    }
-
-    return evaluation;
+    return {
+      snapshot: evaluation,
+      shouldPrefetch: Boolean(evaluation.gameAccount),
+    };
   }
 
   private getProvidedReadinessCandidate(

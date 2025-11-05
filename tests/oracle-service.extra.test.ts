@@ -19,7 +19,11 @@ import { ScanLoopRunner } from "../oracle-scan-runner.ts";
 import { logger } from "../logger.ts";
 import { resetConfigForTesting } from "../config.ts";
 import type { TimbaGameAccount } from "../types/timba.ts";
-import type { GameReadinessSnapshot } from "../oracle-service.types.ts";
+import type {
+  GameOnChainContext,
+  GameReadinessSnapshot,
+  ReadinessResolution,
+} from "../oracle-service.types.ts";
 import * as delayModule from "../delay.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 import { createProgramStub } from "./helpers/program-stub.ts";
@@ -75,6 +79,39 @@ function createReadyContext(overrides: {
     },
   } as const;
 }
+
+function makeReadinessResolution(
+  status: "ready" | "not-ready",
+  overrides: {
+    context?: GameOnChainContext;
+    readiness?: GameReadinessSnapshot;
+    prefetchScheduled?: boolean;
+  } = {},
+): ReadinessResolution {
+  let context = overrides.context;
+  let readiness = overrides.readiness;
+
+  if (!context || !readiness) {
+    const base = createReadyContext();
+    context ??= base.context;
+    readiness ??= base.readiness;
+  }
+
+  return {
+    status,
+    context,
+    readiness,
+    prefetchScheduled: overrides.prefetchScheduled ?? false,
+  };
+}
+
+const makeReadyResolution = (
+  overrides: Parameters<typeof makeReadinessResolution>[1] = {},
+): ReadinessResolution => makeReadinessResolution("ready", overrides);
+
+const makeNotReadyResolution = (
+  overrides: Parameters<typeof makeReadinessResolution>[1] = {},
+): ReadinessResolution => makeReadinessResolution("not-ready", overrides);
 
 async function runExecuteGameCompletionScenario({
   tokenProgram,
@@ -294,9 +331,10 @@ describe("OracleService internals", () => {
 
     const resolveSpy = spyOn(service.completionManager, "resolveContextAndReadiness").mockImplementation(
       async () => ({
+        status: "ready",
         context,
         readiness,
-        notReady: false,
+        prefetchScheduled: false,
       }),
     );
 
@@ -368,13 +406,14 @@ describe("OracleService internals", () => {
     ).mockImplementation(async (_address: string, options: any) => {
       observedBlockTimes.push(options?.blockTime);
       return {
+        status: "ready" as const,
         context: {
           gamePda: Keypair.generate().publicKey,
           secretData: { secretKey: "ee".repeat(64), randomHash: "ff".repeat(64) },
           randomHashBuffer: Buffer.alloc(32, 0),
         },
         readiness: { ready: true, gameAccount: createGameAccountStub() },
-        notReady: false,
+        prefetchScheduled: false,
       };
     });
 
@@ -442,15 +481,16 @@ describe("OracleService internals", () => {
     const resolveSpy = spyOn(
       service.completionManager,
       "resolveContextAndReadiness"
-    ).mockImplementation(async () => ({
-      context: {
-        gamePda: Keypair.generate().publicKey,
-        secretData: { secretKey: "aa".repeat(64), randomHash: "bb".repeat(64) },
-        randomHashBuffer: Buffer.alloc(32, 0),
-      },
-      readiness: { ready: true, gameAccount: createGameAccountStub() },
-      notReady: false,
-    }));
+    ).mockImplementation(async () =>
+      makeReadyResolution({
+        context: {
+          gamePda: Keypair.generate().publicKey,
+          secretData: { secretKey: "aa".repeat(64), randomHash: "bb".repeat(64) },
+          randomHashBuffer: Buffer.alloc(32, 0),
+        },
+        readiness: { ready: true, gameAccount: createGameAccountStub() },
+      }),
+    );
 
     const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockImplementation(
       async () => outcomes[completionIndex++] ?? { success: true }
@@ -510,11 +550,7 @@ describe("OracleService internals", () => {
       } as unknown as import("../database.ts").OracleDatabase,
       metrics: new OracleMetricsRecorder(),
       completion: {
-        resolveContextAndReadiness: async () => ({
-          context: null,
-          readiness: undefined,
-          notReady: false,
-        }),
+        resolveContextAndReadiness: async () => makeReadyResolution(),
         attemptGameCompletion: async () => ({ success: true }),
         consumeReadiness: () => undefined,
         getBlockchainTime: async () => 0,
@@ -873,9 +909,12 @@ describe("OracleService internals", () => {
         requireOnChain: false,
       });
 
+      expect(first.status).toBe("ready");
+      if (first.status !== "ready") {
+        throw new Error("expected cached readiness to resolve as ready");
+      }
       expect(first.readiness).toBe(cachedSnapshot);
-      expect(first.context?.readiness).toBe(cachedSnapshot);
-      expect(first.notReady).toBe(false);
+      expect(first.context.readiness).toBe(cachedSnapshot);
       expect(evaluateSpy).not.toHaveBeenCalled();
       expect((service as any).readinessCache.has(gameAddress)).toBe(false);
 
@@ -884,9 +923,12 @@ describe("OracleService internals", () => {
       });
 
       expect(evaluateSpy).toHaveBeenCalledTimes(1);
-      expect(second.readiness?.ready).toBe(true);
-      expect(second.notReady).toBe(false);
-      expect(second.context?.readiness).toBe(second.readiness);
+      expect(second.status).toBe("ready");
+      if (second.status !== "ready") {
+        throw new Error("expected evaluated readiness to resolve as ready");
+      }
+      expect(second.readiness.ready).toBe(true);
+      expect(second.context.readiness).toBe(second.readiness);
     } finally {
       evaluateSpy.mockRestore();
       (service as any).program = originalProgram;
@@ -944,10 +986,11 @@ describe("OracleService internals", () => {
       });
 
       const originalResolve = completion.resolveContextAndReadiness;
-      completion.resolveContextAndReadiness = async () => ({
-        ...ready,
-        notReady: false,
-      });
+      completion.resolveContextAndReadiness = async () =>
+        makeReadyResolution({
+          context: ready.context,
+          readiness: ready.readiness,
+        });
 
       const result = await service.completeGame(gameAddr);
 
@@ -1037,21 +1080,21 @@ describe("OracleService internals", () => {
     const originalResolve = completion.resolveContextAndReadiness;
     const originalExecute = completion.executeGameCompletion;
 
-    completion.resolveContextAndReadiness = async () => ({
-      context: {
-        gamePda: Keypair.generate().publicKey,
-        secretData: { secretKey: "a".repeat(64), randomHash: "b".repeat(64) },
-        randomHashBuffer: Buffer.from("b".repeat(64), "hex"),
-      },
-      readiness: {
-        ready: true,
-        gameAccount: createGameAccountStub({
-          ticketsCount: BigInt(2) as unknown as number,
-          lastSlot: 123,
-        }) as any,
-      },
-      notReady: false,
-    });
+    completion.resolveContextAndReadiness = async () =>
+      makeReadyResolution({
+        context: {
+          gamePda: Keypair.generate().publicKey,
+          secretData: { secretKey: "a".repeat(64), randomHash: "b".repeat(64) },
+          randomHashBuffer: Buffer.from("b".repeat(64), "hex"),
+        },
+        readiness: {
+          ready: true,
+          gameAccount: createGameAccountStub({
+            ticketsCount: BigInt(2) as unknown as number,
+            lastSlot: 123,
+          }) as any,
+        },
+      });
 
     (service as any).program = createProgramStub({
       programId: Keypair.generate().publicKey,
@@ -1094,18 +1137,18 @@ describe("OracleService internals", () => {
     const completion = service.completionManager;
     const originalResolve = completion.resolveContextAndReadiness;
 
-    completion.resolveContextAndReadiness = async () => ({
-      context: {
-        gamePda: Keypair.generate().publicKey,
-        secretData: { secretKey: "a".repeat(64), randomHash: "c".repeat(64) },
-        randomHashBuffer: Buffer.from("c".repeat(64), "hex"),
-      },
-      readiness: {
-        ready: true,
-        gameAccount: createGameAccountStub({ ticketsCount: 2, lastSlot: 456 }) as any,
-      },
-      notReady: false,
-    });
+    completion.resolveContextAndReadiness = async () =>
+      makeReadyResolution({
+        context: {
+          gamePda: Keypair.generate().publicKey,
+          secretData: { secretKey: "a".repeat(64), randomHash: "c".repeat(64) },
+          randomHashBuffer: Buffer.from("c".repeat(64), "hex"),
+        },
+        readiness: {
+          ready: true,
+          gameAccount: createGameAccountStub({ ticketsCount: 2, lastSlot: 456 }) as any,
+        },
+      });
 
     (service as any).program = createProgramStub({
       programId: Keypair.generate().publicKey,
@@ -1271,6 +1314,11 @@ describe("OracleService internals", () => {
 
     completion.isGameReadyForCompletion = async () => true;
 
+    const ready = createReadyContext();
+    const resolveSpy = spyOn(completion, "resolveContextAndReadiness").mockResolvedValue(
+      makeReadyResolution({ context: ready.context, readiness: ready.readiness }),
+    );
+
     let invocation = 0;
     const errors: string[] = [];
     console.error = (...args: any[]) => {
@@ -1299,6 +1347,7 @@ describe("OracleService internals", () => {
     } finally {
       completion.isGameReadyForCompletion = originalReady;
       (service as any).completeGame = originalComplete;
+      resolveSpy.mockRestore();
       console.error = originalError;
     }
   });
@@ -1319,16 +1368,18 @@ describe("OracleService internals", () => {
       randomHashBuffer: Buffer.alloc(32),
     };
     const resolveSpy = spyOn(completion, "resolveContextAndReadiness")
-      .mockResolvedValueOnce({
-        context: null,
-        readiness: undefined,
-        notReady: true,
-      })
-      .mockResolvedValueOnce({
-        context: readyContext,
-        readiness: { ready: true, gameAccount: readyGameAccount },
-        notReady: false,
-      });
+      .mockResolvedValueOnce(
+        makeNotReadyResolution({
+          context: readyContext,
+          readiness: { ready: false, gameAccount: readyGameAccount },
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeReadyResolution({
+          context: readyContext,
+          readiness: { ready: true, gameAccount: readyGameAccount },
+        }),
+      );
     (service as any).completeGame = async () => {
       completions++;
       return { success: true };
@@ -1372,10 +1423,11 @@ describe("OracleService internals", () => {
       }),
     });
 
-    completion.resolveContextAndReadiness = async () => ({
-      ...ready,
-      notReady: false,
-    });
+    completion.resolveContextAndReadiness = async () =>
+      makeReadyResolution({
+        context: ready.context,
+        readiness: ready.readiness,
+      });
     (service as any).program = createProgramStub({
       programId: Keypair.generate().publicKey,
       fetchImpl: async () => ready.readiness.gameAccount,
@@ -1429,10 +1481,11 @@ describe("OracleService internals", () => {
       }),
     });
 
-    completion.resolveContextAndReadiness = async () => ({
-      ...ready,
-      notReady: false,
-    });
+    completion.resolveContextAndReadiness = async () =>
+      makeReadyResolution({
+        context: ready.context,
+        readiness: ready.readiness,
+      });
     (service as any).program = createProgramStub({
       programId: Keypair.generate().publicKey,
       fetchImpl: async () => ready.readiness.gameAccount,
@@ -1594,11 +1647,8 @@ describe("OracleService internals", () => {
       () => undefined,
     );
 
-    completion.resolveContextAndReadiness = async () => ({
-      context,
-      readiness,
-      notReady: false,
-    });
+    completion.resolveContextAndReadiness = async () =>
+      makeReadyResolution({ context, readiness });
 
     try {
       const result = await service.completeGame(gameAddress);
@@ -1654,11 +1704,8 @@ describe("OracleService internals", () => {
       () => undefined,
     );
 
-    completion.resolveContextAndReadiness = async () => ({
-      context,
-      readiness,
-      notReady: false,
-    });
+    completion.resolveContextAndReadiness = async () =>
+      makeReadyResolution({ context, readiness });
 
     try {
       const result = await service.completeGame(gameAddress);
@@ -1722,11 +1769,8 @@ describe("OracleService internals", () => {
       () => undefined,
     );
 
-    completion.resolveContextAndReadiness = async () => ({
-      context,
-      readiness,
-      notReady: false,
-    });
+    completion.resolveContextAndReadiness = async () =>
+      makeReadyResolution({ context, readiness });
 
     try {
       const result = await service.completeGame(gameAddress);
@@ -1782,15 +1826,16 @@ describe("OracleService internals", () => {
     const resolveSpy = spyOn(
       service.completionManager,
       "resolveContextAndReadiness"
-    ).mockImplementation(async () => ({
-      context: {
-        gamePda: Keypair.generate().publicKey,
-        secretData: { secretKey: "55".repeat(32), randomHash: "66".repeat(32) },
-        randomHashBuffer: Buffer.alloc(32, 9),
-      },
-      readiness: { ready: true, gameAccount },
-      notReady: false,
-    }));
+    ).mockImplementation(async () =>
+      makeReadyResolution({
+        context: {
+          gamePda: Keypair.generate().publicKey,
+          secretData: { secretKey: "55".repeat(32), randomHash: "66".repeat(32) },
+          randomHashBuffer: Buffer.alloc(32, 9),
+        },
+        readiness: { ready: true, gameAccount },
+      }),
+    );
 
     const completionSpy = spyOn(service as any, "completeGame").mockImplementation(
       async (address: string) => {

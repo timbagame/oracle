@@ -4,6 +4,10 @@ import type { Timba } from "./idl/idlType.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 import { ensurePublicKey, resolveNumericLike } from "./solana-utils.ts";
 import { logger } from "./logger.ts";
+import {
+  analyzeRegistryState,
+  summarizeTicketAssignments,
+} from "./player-registry-utils.ts";
 
 export interface PlayerRegistrySyncOptions {
   connection: anchor.web3.Connection;
@@ -13,6 +17,7 @@ export interface PlayerRegistrySyncOptions {
   eventParserFactory?: (programId: PublicKey, coder: anchor.Coder) => {
     parseLogs: (logs: string[]) => Iterable<unknown>;
   };
+  transactionConcurrency?: number;
 }
 
 export interface FetchRegistryParams {
@@ -24,6 +29,7 @@ export interface FetchRegistryParams {
 export class PlayerRegistrySync {
   private readonly batchSize: number;
   private readonly maxBatches: number;
+  private readonly transactionConcurrency: number;
   private readonly createEventParser: (
     programId: PublicKey,
     coder: anchor.Coder,
@@ -32,6 +38,8 @@ export class PlayerRegistrySync {
   constructor(private readonly options: PlayerRegistrySyncOptions) {
     this.batchSize = Math.max(10, options.batchSize ?? 500);
     this.maxBatches = Math.max(1, options.maxBatches ?? 6);
+    const desiredConcurrency = options.transactionConcurrency ?? 4;
+    this.transactionConcurrency = Math.min(10, Math.max(1, desiredConcurrency));
     this.createEventParser = options.eventParserFactory
       ?? ((programId, coder) => new anchor.EventParser(programId, coder));
   }
@@ -50,70 +58,97 @@ export class PlayerRegistrySync {
     const parser = this.createEventParser(program.programId, coder);
 
     const ticketAssignments = new Map<number, string>();
+    let shouldStopProcessing = false;
 
-    for (const signatureInfo of signatures) {
-      const transaction = await this.options.connection.getTransaction(signatureInfo.signature, {
-        commitment: "confirmed",
-        maxSupportedTransactionVersion: 0,
-      });
+    for (let offset = 0; offset < signatures.length && !shouldStopProcessing; offset += this.transactionConcurrency) {
+      const batch = signatures.slice(offset, offset + this.transactionConcurrency);
+      const transactions = await Promise.all(
+        batch.map(async (signatureInfo) => {
+          try {
+            return await this.options.connection.getTransaction(signatureInfo.signature, {
+              commitment: "confirmed",
+              maxSupportedTransactionVersion: 0,
+            });
+          } catch (error) {
+            logger.warning(
+              `Failed to fetch transaction ${signatureInfo.signature}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+            return null;
+          }
+        }),
+      );
 
-      const logs = transaction?.meta?.logMessages;
-      if (!logs || logs.length === 0) {
-        continue;
-      }
-
-      for (const event of parser.parseLogs(logs)) {
-        if (!event || typeof event !== "object") {
+      for (let index = 0; index < batch.length && !shouldStopProcessing; index += 1) {
+        const transaction = transactions[index];
+        const logs = transaction?.meta?.logMessages;
+        if (!logs || logs.length === 0) {
           continue;
         }
 
-        const { name, data } = event as { name?: string; data?: Record<string, unknown> };
-        if (!name || !data) {
-          continue;
+        for (const event of parser.parseLogs(logs)) {
+          if (!event || typeof event !== "object") {
+            continue;
+          }
+
+          const { name, data } = event as { name?: string; data?: Record<string, unknown> };
+          if (!name || !data) {
+            continue;
+          }
+
+          if (name !== "playerJoined" && name !== "playerUnjoined") {
+            continue;
+          }
+
+          let eventGameKey: PublicKey;
+          try {
+            eventGameKey = ensurePublicKey(
+              (data["gameKey"] ?? data["game_key"] ?? data["game"] ?? null) as PublicKeyLike,
+            );
+          } catch (error) {
+            logger.warning(`Skipping player event with invalid game key: ${String(error)}`);
+            continue;
+          }
+          if (!eventGameKey.equals(gamePda)) {
+            continue;
+          }
+
+          const ticketIndex = resolveNumericLike(data["ticketIndex"] ?? data["ticket_index"]);
+          if (ticketIndex === undefined) {
+            continue;
+          }
+
+          if (ticketIndex < 0) {
+            continue;
+          }
+
+          if (name === "playerUnjoined") {
+            ticketAssignments.delete(ticketIndex);
+            continue;
+          }
+
+          let playerKey: PublicKey;
+          try {
+            playerKey = ensurePublicKey(
+              (data["player"] ?? data["playerAddress"] ?? data["player_address"] ?? null) as PublicKeyLike,
+            );
+          } catch (error) {
+            logger.warning(`Skipping player event with invalid player key: ${String(error)}`);
+            continue;
+          }
+
+          ticketAssignments.set(ticketIndex, playerKey.toBase58());
         }
 
-        if (name !== "playerJoined" && name !== "playerUnjoined") {
-          continue;
+        if (
+          expectedTickets !== undefined &&
+          ticketAssignments.size === expectedTickets
+        ) {
+          const { stats } = summarizeTicketAssignments(ticketAssignments);
+          const analysis = analyzeRegistryState(stats, expectedTickets);
+          if (!analysis.needsReconciliation) {
+            shouldStopProcessing = true;
+          }
         }
-
-        let eventGameKey: PublicKey;
-        try {
-          eventGameKey = ensurePublicKey(
-            (data["gameKey"] ?? data["game_key"] ?? data["game"] ?? null) as PublicKeyLike,
-          );
-        } catch (error) {
-          logger.warning(`Skipping player event with invalid game key: ${String(error)}`);
-          continue;
-        }
-        if (!eventGameKey.equals(gamePda)) {
-          continue;
-        }
-
-        const ticketIndex = resolveNumericLike(data["ticketIndex"] ?? data["ticket_index"]);
-        if (ticketIndex === undefined) {
-          continue;
-        }
-
-        if (ticketIndex < 0) {
-          continue;
-        }
-
-        if (name === "playerUnjoined") {
-          ticketAssignments.delete(ticketIndex);
-          continue;
-        }
-
-        let playerKey: PublicKey;
-        try {
-          playerKey = ensurePublicKey(
-            (data["player"] ?? data["playerAddress"] ?? data["player_address"] ?? null) as PublicKeyLike,
-          );
-        } catch (error) {
-          logger.warning(`Skipping player event with invalid player key: ${String(error)}`);
-          continue;
-        }
-
-        ticketAssignments.set(ticketIndex, playerKey.toBase58());
       }
     }
 
@@ -121,22 +156,21 @@ export class PlayerRegistrySync {
       return null;
     }
 
-    const ordered = [...ticketAssignments.entries()].sort((a, b) => a[0] - b[0]);
-    const firstIndex = ordered[0]?.[0] ?? 0;
-    const contiguous = ordered.every(([index], position) => index === firstIndex + position);
+    const { orderedEntries, stats } = summarizeTicketAssignments(ticketAssignments);
+    const analysis = analyzeRegistryState(stats, expectedTickets);
 
-    if (!contiguous) {
+    if (!analysis.contiguous) {
       logger.warning(
-        `Recovered player registry for ${gamePda.toBase58()} contains gaps (indexes: ${ordered.map((entry) => entry[0]).join(",")})`,
+        `Recovered player registry for ${gamePda.toBase58()} contains gaps (indexes: ${orderedEntries.map((entry) => entry[0]).join(",")})`,
       );
       return null;
     }
 
-    if (expectedTickets !== undefined && ordered.length !== expectedTickets) {
+    if (!analysis.expectedMatches) {
       return null;
     }
 
-    return ordered.map(([, address]) => address);
+    return orderedEntries.map(([, address]) => address);
   }
 
   private async collectSignatures(gamePda: PublicKey, maxSignatures?: number) {

@@ -27,9 +27,10 @@ const createStubbedRunner = () => {
 
   const completion: ScanLoopRunnerOptions["completion"] = {
     resolveContextAndReadiness: async () => ({
+      status: "ready",
       context: {} as any,
-      readiness: { ready: true } as any,
-      notReady: false,
+      readiness: { ready: true, gameAccount: {} } as any,
+      prefetchScheduled: false,
     }),
     attemptGameCompletion: async (options: { gameAddress: string }) => {
       attemptCalls.push(options.gameAddress);

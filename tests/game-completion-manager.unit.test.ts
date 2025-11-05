@@ -227,9 +227,10 @@ describe("GameCompletionManager.attemptGameCompletion outcome handling", () => {
     });
 
     const readinessSpy = spyOn(manager as any, "resolveContextAndReadiness").mockResolvedValue({
-      context: null,
-      readiness: undefined,
-      notReady: true,
+      status: "not-ready",
+      context: {} as any,
+      readiness: { ready: false, gameAccount: null },
+      prefetchScheduled: false,
     });
 
     const onResults: GameCompletionResult[] = [];
@@ -270,9 +271,10 @@ describe("GameCompletionManager.attemptGameCompletion outcome handling", () => {
     };
 
     const resolveSpy = spyOn(manager as any, "resolveContextAndReadiness").mockResolvedValue({
+      status: "ready",
       context,
       readiness,
-      notReady: false,
+      prefetchScheduled: false,
     });
 
     const infoSpy = spyOn(logger, "info").mockImplementation(() => {});
@@ -352,9 +354,10 @@ describe("GameCompletionManager.attemptGameCompletion outcome handling", () => {
     };
 
     const resolveSpy = spyOn(manager as any, "resolveContextAndReadiness").mockResolvedValue({
+      status: "ready",
       context,
       readiness,
-      notReady: false,
+      prefetchScheduled: false,
     });
 
     let release: (() => void) | undefined;
