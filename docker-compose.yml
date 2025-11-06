@@ -5,7 +5,7 @@ services:
       - "3001:3001"
     environment:
       SOLANA_NETWORK: ${SOLANA_NETWORK}
-      ORACLE_PORT: ${ORACLE_PORT}
+      ORACLE_PORT: "3001"
     volumes:
       # Read-only keypair; required for on-chain actions
       - ./admin-keypair.json:/app/admin-keypair.json:ro
