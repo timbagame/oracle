@@ -9,6 +9,7 @@ import { logger } from "./logger.ts";
 import { analyzeRegistryState } from "./player-registry-utils.ts";
 
 const GAME_TYPE_MAX_LENGTH = 128;
+const DEFAULT_REGISTRY_SYNC_RETRY_DELAY_MS = 2000;
 
 export interface OracleEventProcessorOptions {
   getProgram: () => anchor.Program<Timba>;
@@ -22,6 +23,9 @@ export interface OracleEventProcessorOptions {
     trigger: string;
     gameKey?: PublicKeyLike;
   }) => Promise<boolean>;
+  setTimeoutFn?: typeof setTimeout;
+  clearTimeoutFn?: typeof clearTimeout;
+  registrySyncRetryDelayMs?: number;
 }
 
 export class OracleEventProcessor {
@@ -38,8 +42,17 @@ export class OracleEventProcessor {
       gameKey?: PublicKeyLike;
     }
   >();
+  private readonly registrySyncRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly scheduleRetryTimeout: typeof setTimeout;
+  private readonly clearRetryTimeout: typeof clearTimeout;
+  private readonly registrySyncRetryDelayMs: number;
 
-  constructor(private readonly options: OracleEventProcessorOptions) {}
+  constructor(private readonly options: OracleEventProcessorOptions) {
+    this.scheduleRetryTimeout = options.setTimeoutFn ?? setTimeout;
+    this.clearRetryTimeout = options.clearTimeoutFn ?? clearTimeout;
+    this.registrySyncRetryDelayMs =
+      options.registrySyncRetryDelayMs ?? DEFAULT_REGISTRY_SYNC_RETRY_DELAY_MS;
+  }
 
   private async runEventMutation(
     eventType: string,
@@ -287,6 +300,8 @@ export class OracleEventProcessor {
       return;
     }
 
+    this.clearRegistryRetryTimer(options.gameAddress);
+
     if (this.registrySyncInFlight.has(options.gameAddress)) {
       this.registrySyncPending.set(options.gameAddress, options);
       return;
@@ -315,17 +330,45 @@ export class OracleEventProcessor {
       );
     } finally {
       this.registrySyncInFlight.delete(options.gameAddress);
-
       if (shouldRetry) {
-        const pending = this.registrySyncPending.get(options.gameAddress);
-        if (pending) {
-          this.registrySyncPending.delete(options.gameAddress);
-          void this.schedulePlayerRegistrySync(pending);
-        }
+        this.enqueueRegistrySyncRetry(options.gameAddress);
       } else {
         this.registrySyncPending.delete(options.gameAddress);
+        this.clearRegistryRetryTimer(options.gameAddress);
       }
     }
+  }
+
+  private clearRegistryRetryTimer(gameAddress: string): void {
+    const existing = this.registrySyncRetryTimers.get(gameAddress);
+    if (existing !== undefined) {
+      this.clearRetryTimeout(existing);
+      this.registrySyncRetryTimers.delete(gameAddress);
+    }
+  }
+
+  private enqueueRegistrySyncRetry(gameAddress: string): void {
+    if (this.registrySyncRetryTimers.has(gameAddress)) {
+      return;
+    }
+
+    const pending = this.registrySyncPending.get(gameAddress);
+    if (!pending) {
+      return;
+    }
+
+    const timer = this.scheduleRetryTimeout(() => {
+      this.registrySyncRetryTimers.delete(gameAddress);
+      const retry = this.registrySyncPending.get(gameAddress);
+      if (!retry) {
+        return;
+      }
+
+      this.registrySyncPending.delete(gameAddress);
+      void this.schedulePlayerRegistrySync(retry);
+    }, this.registrySyncRetryDelayMs);
+
+    this.registrySyncRetryTimers.set(gameAddress, timer);
   }
 
   private validateEventData(
