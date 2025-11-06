@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { coercePublicKey } from "../solana-utils.ts";
+import { OracleEventProcessor } from "../oracle-event-processor.ts";
 import type { OracleDatabase } from "../database.ts";
 import type { OracleMetrics } from "../metrics.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
@@ -241,6 +242,14 @@ describe("OracleService event handling", () => {
     const programStub = createProgramStub();
     const service = createService(db, programStub);
 
+    const processor = service.events as any;
+    processor.registrySyncRetryDelayMs = 0;
+    processor.scheduleRetryTimeout = (callback: () => void) => {
+      callback();
+      return 0;
+    };
+    processor.clearRetryTimeout = () => {};
+
     const firstAttempt = createDeferred<boolean>();
     const syncCalls: Array<{ gameAddress: string; trigger: string }> = [];
 
@@ -281,6 +290,77 @@ describe("OracleService event handling", () => {
     expect(syncCalls).toHaveLength(2);
     expect(syncCalls[0]?.gameAddress).toBe(gameKey.toBase58());
     expect(syncCalls[1]?.gameAddress).toBe(gameKey.toBase58());
+  });
+
+  it("throttles player registry sync retries after repeated failures", async () => {
+    const { db } = createDbStub();
+    const retryDelayMs = 25;
+    const timers: Array<{ id: number; callback: () => void; delay: number }> = [];
+    let nextTimerId = 1;
+
+    const setTimeoutStub: typeof setTimeout = ((callback: (...args: unknown[]) => void, delay?: number) => {
+      const id = nextTimerId++;
+      timers.push({ id, callback: callback as () => void, delay: Number(delay ?? 0) });
+      return id as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+
+    const clearTimeoutStub: typeof clearTimeout = (id) => {
+      const numericId = Number(id);
+      const index = timers.findIndex((timer) => timer.id === numericId);
+      if (index >= 0) {
+        timers.splice(index, 1);
+      }
+    };
+
+    const outcomes = [false, false, true];
+    const syncCalls: Array<{ attempt: number; trigger: string }> = [];
+
+    const processor = new OracleEventProcessor({
+      getProgram: () =>
+        ({
+          addEventListener: async () => 0,
+          removeEventListener: async () => {},
+        }) as any,
+      db: db as unknown as OracleDatabase,
+      tryAutoComplete: async () => {},
+      config: [],
+      clearTokenProgramCache: () => {},
+      syncPlayerRegistry: async (options) => {
+        const attempt = syncCalls.length + 1;
+        syncCalls.push({ attempt, trigger: options.trigger });
+        return outcomes[attempt - 1] ?? true;
+      },
+      setTimeoutFn: setTimeoutStub,
+      clearTimeoutFn: clearTimeoutStub,
+      registrySyncRetryDelayMs: retryDelayMs,
+    });
+
+    const gameAddress = "game-retry";
+
+    await (processor as any).schedulePlayerRegistrySync({
+      gameAddress,
+      trigger: "initial",
+    });
+
+    expect(syncCalls).toHaveLength(1);
+    expect(timers).toHaveLength(1);
+    expect(timers[0]?.delay).toBe(retryDelayMs);
+
+    const firstTimer = timers.shift();
+    firstTimer?.callback();
+    await Promise.resolve();
+
+    expect(syncCalls).toHaveLength(2);
+    expect(timers).toHaveLength(1);
+    expect(timers[0]?.delay).toBe(retryDelayMs);
+
+    const secondTimer = timers.shift();
+    secondTimer?.callback();
+    await Promise.resolve();
+
+    expect(syncCalls).toHaveLength(3);
+    expect(timers).toHaveLength(0);
+    expect((processor as any).registrySyncPending.size).toBe(0);
   });
 
   it("ignores player events with missing data", async () => {

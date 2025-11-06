@@ -217,6 +217,7 @@ export class OracleDatabase {
   private static instance: OracleDatabase;
   private db: Database;
   private closed: boolean = false;
+  private readonly statementCache = new Map<string, ReturnType<Database["prepare"]>>();
 
   private constructor() {
     this.db = new Database(getDatabaseFile(), { create: true });
@@ -286,13 +287,22 @@ export class OracleDatabase {
     }
   }
 
+  private getPreparedStatement(sql: string): ReturnType<Database["prepare"]> {
+    let statement = this.statementCache.get(sql);
+    if (!statement) {
+      statement = this.db.prepare(sql);
+      this.statementCache.set(sql, statement);
+    }
+    return statement;
+  }
+
   private runStatement(
     sql: string,
     errorMessage: string,
     ...params: Parameters<ReturnType<Database["prepare"]>["run"]>
   ): ReturnType<ReturnType<Database["prepare"]>["run"]> {
     return this.executeDbOperation(() => {
-      const stmt = this.db.prepare(sql);
+      const stmt = this.getPreparedStatement(sql);
       return stmt.run(...params);
     }, errorMessage);
   }
@@ -310,7 +320,7 @@ export class OracleDatabase {
     ...params: Parameters<ReturnType<Database["prepare"]>["run"]>
   ): number {
     return this.executeDbOperation(() => {
-      const stmt = this.db.prepare(sql);
+      const stmt = this.getPreparedStatement(sql);
       const result = stmt.run(...params);
       return typeof result?.changes === "number" ? result.changes : 0;
     }, errorMessage);
@@ -323,7 +333,7 @@ export class OracleDatabase {
     ...params: Parameters<ReturnType<Database["prepare"]>["get"]>
   ): T | null {
     return this.executeDbOperation(() => {
-      const stmt = this.db.prepare(sql);
+      const stmt = this.getPreparedStatement(sql);
       const result = stmt.get(...params) as T;
       return result || defaultValue;
     }, errorMessage, defaultValue);
@@ -335,7 +345,7 @@ export class OracleDatabase {
     ...params: Parameters<ReturnType<Database["prepare"]>["all"]>
   ): T[] {
     return this.executeDbOperation(() => {
-      const stmt = this.db.prepare(sql);
+      const stmt = this.getPreparedStatement(sql);
       return stmt.all(...params) as T[];
     }, errorMessage, []);
   }
@@ -695,11 +705,23 @@ export class OracleDatabase {
 
   public close(): void {
     try {
+      this.finalizePreparedStatements();
       this.db.close();
       this.closed = true;
     } catch (error) {
       logger.failure("Failed to close database:", error);
     }
+  }
+
+  private finalizePreparedStatements(): void {
+    for (const [sql, statement] of this.statementCache) {
+      try {
+        statement.finalize();
+      } catch (error) {
+        logger.warn(`Failed to finalize statement for ${sql}:`, error);
+      }
+    }
+    this.statementCache.clear();
   }
 
   public getConnectionInfo(): { file: string; isOpen: boolean } {

@@ -332,6 +332,32 @@ describe("index router", () => {
     }
   });
 
+  test("POST /games/requeue strips control characters from error payloads", async () => {
+    const failingContext = await createIndexRouterTestContext("index-router-requeue-crlf", {
+      requeueGame: () => ({ success: false, reason: "not-found" }),
+    });
+
+    try {
+      const maliciousAddress = "evil\r\nSet-Cookie: attack";
+      const { response, json } = await executeJsonRequest(
+        failingContext.router,
+        "/games/requeue",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameAddress: maliciousAddress }),
+        },
+      );
+
+      expect(response.status).toBe(404);
+      const errorMessage = String((json as any).error ?? "");
+      expect(errorMessage).not.toMatch(/[\r\n]/);
+      expect(errorMessage).toContain("Set-Cookie: attack");
+    } finally {
+      failingContext.testEnv.cleanup();
+    }
+  });
+
   test("GET / returns HTML", async () => {
     const { response, text } = await executeTextRequest(context.router, "/", {
       method: "GET",
