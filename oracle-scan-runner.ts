@@ -26,6 +26,7 @@ export interface ScanLoopRunnerOptions {
         readiness?: GameReadinessSnapshot;
         requireOnChain?: boolean;
         blockTime?: number;
+        getBlockTime?: () => Promise<number>;
       },
     ) => Promise<ReadinessResolution>;
     attemptGameCompletion: (
@@ -72,14 +73,19 @@ export class ScanLoopRunner {
 
     let cachedBlockTime: number | undefined;
 
+    const ensureBlockTime = async () => {
+      if (cachedBlockTime === undefined) {
+        cachedBlockTime = await this.options.completion.getBlockchainTime();
+      }
+      return cachedBlockTime;
+    };
+
     for (let index = 0; index < pendingGames.length; index++) {
       if (signal?.aborted) {
         break;
       }
       const game = pendingGames[index]!;
       try {
-        cachedBlockTime ??= await this.options.completion.getBlockchainTime();
-
         if (signal?.aborted) {
           break;
         }
@@ -90,6 +96,8 @@ export class ScanLoopRunner {
             {
               requireOnChain: true,
               blockTime: cachedBlockTime,
+              getBlockTime:
+                cachedBlockTime === undefined ? ensureBlockTime : undefined,
             },
           );
 

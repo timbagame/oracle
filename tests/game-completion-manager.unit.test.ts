@@ -509,6 +509,45 @@ describe("GameCompletionManager player registry recovery", () => {
     });
     expect(desyncedGames.has(gameAddress)).toBe(true);
   });
+
+  it("allows registry recovery to retry after a failure", async () => {
+    const recoveredPlayers = [
+      Keypair.generate().publicKey.toBase58(),
+      Keypair.generate().publicKey.toBase58(),
+    ];
+    let recoveryCalls = 0;
+    const gameAddress = "retry-registry";
+    const { manager, players } = createManager({
+      recoverPlayers: async () => {
+        recoveryCalls += 1;
+        if (recoveryCalls === 1) {
+          return null;
+        }
+        return recoveredPlayers;
+      },
+    });
+
+    const firstAttempt = await (manager as any).tryRecoverPlayerRegistry(
+      gameAddress,
+      context,
+      readiness,
+      2,
+      1,
+    );
+
+    const secondAttempt = await (manager as any).tryRecoverPlayerRegistry(
+      gameAddress,
+      context,
+      readiness,
+      2,
+      1,
+    );
+
+    expect(firstAttempt).toBeNull();
+    expect(secondAttempt).toEqual(recoveredPlayers);
+    expect(players.get(gameAddress)).toEqual(recoveredPlayers);
+    expect(recoveryCalls).toBe(2);
+  });
 });
 
 describe("GameCompletionManager registry prefetch", () => {

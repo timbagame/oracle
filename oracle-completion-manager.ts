@@ -456,7 +456,6 @@ export class GameCompletionManager {
       });
 
       if (recovered && recovered.length === expectedEntries) {
-        this.attemptedRegistryRecovery.delete(gameAddress);
         this.options.db.replaceGamePlayers(gameAddress, recovered);
         logger.info(
           `♻️  Recovered ${recovered.length} player entries for ${gameAddress} before completion`,
@@ -474,6 +473,8 @@ export class GameCompletionManager {
         `Player registry recovery failed for ${gameAddress}: ${message}`,
       );
       return null;
+    } finally {
+      this.attemptedRegistryRecovery.delete(gameAddress);
     }
   }
 
@@ -580,6 +581,7 @@ export class GameCompletionManager {
       readiness?: GameReadinessSnapshot;
       requireOnChain?: boolean;
       blockTime?: number;
+      getBlockTime?: () => Promise<number>;
     } = {},
   ): Promise<ReadinessResolution> {
     const {
@@ -587,6 +589,7 @@ export class GameCompletionManager {
       readiness: providedReadiness,
       requireOnChain = false,
       blockTime,
+      getBlockTime,
     } = options;
 
     const resolvedContext = await this.resolveGameContext(
@@ -607,6 +610,7 @@ export class GameCompletionManager {
         providedContext,
         requireOnChain,
         blockTime,
+        getBlockTime,
       },
     );
 
@@ -641,9 +645,16 @@ export class GameCompletionManager {
       providedContext?: GameOnChainContext | null;
       requireOnChain: boolean;
       blockTime?: number;
+      getBlockTime?: () => Promise<number>;
     },
   ): Promise<{ snapshot: GameReadinessSnapshot | null; shouldPrefetch: boolean }> {
-    const { providedReadiness, providedContext, requireOnChain, blockTime } = options;
+    const {
+      providedReadiness,
+      providedContext,
+      requireOnChain,
+      blockTime,
+      getBlockTime,
+    } = options;
 
     const providedCandidate = this.getProvidedReadinessCandidate(
       providedReadiness,
@@ -659,10 +670,13 @@ export class GameCompletionManager {
       return { snapshot: cachedCandidate, shouldPrefetch: false };
     }
 
+    const evaluationBlockTime =
+      blockTime ?? (getBlockTime ? await getBlockTime() : undefined);
+
     const evaluation = await this.evaluateAndCacheReadiness(
       context.gamePda,
       gameAddress,
-      blockTime,
+      evaluationBlockTime,
     );
 
     if (!evaluation.gameAccount && requireOnChain) {

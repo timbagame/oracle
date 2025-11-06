@@ -404,7 +404,10 @@ describe("OracleService internals", () => {
       service.completionManager,
       "resolveContextAndReadiness"
     ).mockImplementation(async (_address: string, options: any) => {
-      observedBlockTimes.push(options?.blockTime);
+      const resolvedBlockTime =
+        options?.blockTime ??
+        (options?.getBlockTime ? await options.getBlockTime() : undefined);
+      observedBlockTimes.push(resolvedBlockTime);
       return {
         status: "ready" as const,
         context: {
@@ -430,6 +433,70 @@ describe("OracleService internals", () => {
       expect(blockTimes).toHaveLength(1);
       expect(new Set(observedBlockTimes)).toEqual(new Set([blockTimes[0]]));
       expect(attemptSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      blockSpy.mockRestore();
+      resolveSpy.mockRestore();
+      attemptSpy.mockRestore();
+    }
+  });
+
+  it("skips blockchain time fetch when readiness is already available", async () => {
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+
+    resetPendingGames(db, { service });
+
+    seedTrackedGame(db, {
+      address: "provided-ready-game",
+      secret: "aa".repeat(64),
+      randomHash: "bb".repeat(64),
+      service,
+    });
+
+    let blockCalls = 0;
+    const blockSpy = spyOn(service.completionManager, "getBlockchainTime").mockImplementation(
+      async () => {
+        blockCalls += 1;
+        return 1_234_567;
+      }
+    );
+
+    const observedOptions: Array<{ blockTime: number | undefined; hasProvider: boolean }> = [];
+    const resolveSpy = spyOn(
+      service.completionManager,
+      "resolveContextAndReadiness"
+    ).mockImplementation(async (_address: string, options: any) => {
+      observedOptions.push({
+        blockTime: options?.blockTime,
+        hasProvider: typeof options?.getBlockTime === "function",
+      });
+      return {
+        status: "ready" as const,
+        context: {
+          gamePda: Keypair.generate().publicKey,
+          secretData: { secretKey: "11".repeat(32), randomHash: "22".repeat(32) },
+          randomHashBuffer: Buffer.alloc(32, 0),
+        },
+        readiness: { ready: true, gameAccount: createGameAccountStub() },
+        prefetchScheduled: false,
+      };
+    });
+
+    const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockImplementation(
+      async ({ gameAddress }: { gameAddress: string }) => ({
+        success: true,
+        txHash: `${gameAddress}-tx`,
+      })
+    );
+
+    try {
+      const stats = await service.scanRunner.scanAndCompleteActiveGames();
+      expect(stats).toEqual({ completed: 1, errors: 0, notReady: 0 });
+      expect(blockCalls).toBe(0);
+      expect(observedOptions).toEqual([
+        { blockTime: undefined, hasProvider: true },
+      ]);
+      expect(attemptSpy).toHaveBeenCalledTimes(1);
     } finally {
       blockSpy.mockRestore();
       resolveSpy.mockRestore();
