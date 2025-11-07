@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as anchor from "@coral-xyz/anchor";
+import type { ActiveEndpointChange } from "../rpc-endpoints.ts";
 import {
   DEFAULT_MAINNET_ENDPOINT,
   RpcEndpointManager,
@@ -56,5 +57,32 @@ describe("RpcEndpointManager", () => {
 
     expect(blockHeight).toBe(123);
     expect(manager.getActiveEndpoint()).toBe("https://rpc-b");
+  });
+
+  test("emits endpoint change notifications", async () => {
+    const endpoints = ["https://rpc-a", "https://rpc-b"];
+    const connectionFactory = (endpoint: string, commitment: string) =>
+      new FakeConnection(endpoint, commitment, endpoint === endpoints[0]) as unknown as anchor.web3.Connection;
+
+    const manager = new RpcEndpointManager(endpoints, {
+      connectionFactory,
+    });
+
+    const changes: ActiveEndpointChange[] = [];
+    manager.onActiveEndpointChange((change) => {
+      changes.push({ ...change });
+    });
+
+    const connection = manager.getConnection();
+    await connection.getBlockHeight();
+
+    expect(changes).toEqual([
+      {
+        endpoint: "https://rpc-b",
+        index: 1,
+        previousEndpoint: "https://rpc-a",
+        previousIndex: 0,
+      },
+    ]);
   });
 });

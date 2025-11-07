@@ -82,6 +82,7 @@ export class OracleService {
 
     this.completion = this.initCompletion();
     this.eventProcessor = this.initEventProcessor();
+    this.registerRpcEndpointFailoverListener();
     this.scanner = this.initScanner();
   }
 
@@ -157,6 +158,39 @@ export class OracleService {
       interGameDelayMs: this.interGameDelayMs,
       maxCompletionAttempts: MAX_COMPLETION_ATTEMPTS,
       cleanupOldRecords: (hours) => this.cleanupOldRecords(hours),
+    });
+  }
+
+  private registerRpcEndpointFailoverListener(): void {
+    this.rpcEndpointManager.onActiveEndpointChange(({ endpoint, previousEndpoint }) => {
+      if (!this.eventProcessor.isListening()) {
+        return;
+      }
+
+      logger.warning(
+        `RPC endpoint changed from ${previousEndpoint} to ${endpoint}; restarting event listeners.`,
+      );
+
+      const restartListeners = async (): Promise<void> => {
+        try {
+          await this.eventProcessor.stopListening();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          logger.warn(`Failed to stop event listeners before RPC restart: ${message}`);
+        }
+
+        try {
+          await this.eventProcessor.startListening();
+          logger.info(`Re-subscribed event listeners on ${endpoint}`);
+        } catch (error) {
+          logger.failure(
+            `Failed to restart event listeners after switching to ${endpoint}:`,
+            error,
+          );
+        }
+      };
+
+      void restartListeners();
     });
   }
 

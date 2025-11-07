@@ -15,6 +15,17 @@ export interface RpcEndpointManagerOptions {
   connectionFactory?: (endpoint: string, commitment: Commitment) => Connection;
 }
 
+export interface ActiveEndpointChange {
+  endpoint: string;
+  index: number;
+  previousEndpoint: string;
+  previousIndex: number;
+}
+
+type ActiveEndpointChangeListener = (
+  change: ActiveEndpointChange,
+) => void | Promise<void>;
+
 export const DEFAULT_MAINNET_ENDPOINT = "https://api.mainnet-beta.solana.com";
 const DEFAULT_COMMITMENT: Commitment = "confirmed";
 const TRANSIENT_ERROR_TOKENS = [
@@ -66,6 +77,7 @@ export class RpcEndpointManager {
   private readonly connectionCache = new Map<number, Connection>();
   private readonly proxyConnection: Connection;
   private activeIndex = 0;
+  private readonly endpointChangeListeners = new Set<ActiveEndpointChangeListener>();
 
   constructor(endpointsInput: readonly string[], options: RpcEndpointManagerOptions = {}) {
     const endpoints = Array.isArray(endpointsInput) ? Array.from(endpointsInput) : [];
@@ -101,6 +113,28 @@ export class RpcEndpointManager {
     return this.endpoints;
   }
 
+  public onActiveEndpointChange(listener: ActiveEndpointChangeListener): () => void {
+    this.endpointChangeListeners.add(listener);
+    return () => {
+      this.endpointChangeListeners.delete(listener);
+    };
+  }
+
+  private notifyEndpointChange(change: ActiveEndpointChange): void {
+    for (const listener of this.endpointChangeListeners) {
+      try {
+        const result = listener(change);
+        if (result && typeof (result as Promise<unknown>).then === "function") {
+          (result as Promise<unknown>).catch((error) => {
+            this.logger?.error?.("RPC endpoint change listener failed:", error);
+          });
+        }
+      } catch (error) {
+        this.logger?.error?.("RPC endpoint change listener threw:", error);
+      }
+    }
+  }
+
   private ensureConnection(index: number): Connection {
     let connection = this.connectionCache.get(index);
     if (!connection) {
@@ -115,10 +149,18 @@ export class RpcEndpointManager {
     if (this.activeIndex === index) {
       return;
     }
+    const previousIndex = this.activeIndex;
+    const previousEndpoint = this.endpoints[previousIndex] ?? this.endpoints[0]!;
     this.activeIndex = index;
     this.logger?.info?.(
       `Switched Solana RPC endpoint to ${this.endpoints[index]} (commitment=${this.commitment})`,
     );
+    this.notifyEndpointChange({
+      endpoint: this.endpoints[index] ?? this.endpoints[0]!,
+      index,
+      previousEndpoint,
+      previousIndex,
+    });
   }
 
   private createProxyConnection(): Connection {
