@@ -69,6 +69,19 @@ function isRetryableRpcError(error: unknown): boolean {
   return TRANSIENT_ERROR_TOKENS.some((token) => normalized.includes(token));
 }
 
+function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
+  if (value === null) {
+    return false;
+  }
+
+  const type = typeof value;
+  if (type !== "object" && type !== "function") {
+    return false;
+  }
+
+  return typeof (value as { then?: unknown }).then === "function";
+}
+
 export class RpcEndpointManager {
   private readonly endpoints: string[];
   private readonly commitment: Commitment;
@@ -198,11 +211,34 @@ export class RpcEndpointManager {
     return new Proxy(initialConnection, handler);
   }
 
-  private async invokeWithFallback(prop: string | symbol, args: unknown[]): Promise<any> {
-    let lastError: unknown;
-    const total = this.endpoints.length;
+  private shouldRetryRpcCall(
+    error: unknown,
+    methodName: string,
+    endpoint: string,
+    attempt: number,
+    total: number,
+  ): boolean {
+    if (!isRetryableRpcError(error) || total === 1 || attempt >= total - 1) {
+      this.logger?.error?.(`RPC call ${methodName} failed on ${endpoint} without fallback:`, error);
+      return false;
+    }
 
-    for (let offset = 0; offset < total; offset++) {
+    this.logger?.warn?.(
+      `RPC call ${methodName} failed on ${endpoint}; trying next endpoint (${attempt + 1}/${total}).`,
+    );
+    return true;
+  }
+
+  private invokeWithFallback(prop: string | symbol, args: unknown[]): unknown {
+    const total = this.endpoints.length;
+    const methodName = typeof prop === "symbol" ? prop.toString() : prop;
+    let lastError: unknown;
+
+    const attemptCall = (offset: number): unknown => {
+      if (offset >= total) {
+        throw lastError ?? new Error("RPC invocation failed without specific error");
+      }
+
       const index = (this.activeIndex + offset) % total;
       const connection = this.ensureConnection(index);
       const method = Reflect.get(connection, prop, connection);
@@ -211,31 +247,35 @@ export class RpcEndpointManager {
         return method;
       }
 
-      try {
-        const result = method.apply(connection, args);
-        const awaited = await Promise.resolve(result);
-        this.promote(index);
-        return awaited;
-      } catch (error) {
+      const endpoint = this.endpoints[index] ?? this.endpoints[0]!;
+      const handleFailure = (error: unknown): unknown => {
         lastError = error;
-        const methodName = typeof prop === "symbol" ? prop.toString() : prop;
-        const endpoint = this.endpoints[index];
-
-        if (!isRetryableRpcError(error) || total === 1 || offset === total - 1) {
-          this.logger?.error?.(
-            `RPC call ${methodName} failed on ${endpoint} without fallback:`,
-            error,
-          );
+        if (!this.shouldRetryRpcCall(error, methodName, endpoint, offset, total)) {
           throw error;
         }
+        return attemptCall(offset + 1);
+      };
 
-        this.logger?.warn?.(
-          `RPC call ${methodName} failed on ${endpoint}; trying next endpoint (${offset + 1}/${total}).`,
-        );
+      try {
+        const result = method.apply(connection, args);
+
+        if (!isPromiseLike(result)) {
+          this.promote(index);
+          return result;
+        }
+
+        return Promise.resolve(result)
+          .then((value) => {
+            this.promote(index);
+            return value;
+          })
+          .catch(handleFailure);
+      } catch (error) {
+        return handleFailure(error);
       }
-    }
+    };
 
-    throw lastError ?? new Error("RPC invocation failed without specific error");
+    return attemptCall(0);
   }
 }
 
