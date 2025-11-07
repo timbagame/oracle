@@ -133,18 +133,26 @@ export class RpcEndpointManager {
     };
   }
 
-  private notifyEndpointChange(change: ActiveEndpointChange): void {
+  private async notifyEndpointChange(change: ActiveEndpointChange): Promise<void> {
+    const pending: Promise<void>[] = [];
+
     for (const listener of this.endpointChangeListeners) {
       try {
         const result = listener(change);
-        if (result && typeof (result as Promise<unknown>).then === "function") {
-          (result as Promise<unknown>).catch((error) => {
-            this.logger?.error?.("RPC endpoint change listener failed:", error);
-          });
+        if (isPromiseLike(result)) {
+          pending.push(
+            Promise.resolve(result).catch((error) => {
+              this.logger?.error?.("RPC endpoint change listener failed:", error);
+            }),
+          );
         }
       } catch (error) {
         this.logger?.error?.("RPC endpoint change listener threw:", error);
       }
+    }
+
+    if (pending.length > 0) {
+      await Promise.all(pending);
     }
   }
 
@@ -158,22 +166,25 @@ export class RpcEndpointManager {
     return connection;
   }
 
-  private promote(index: number): void {
+  private async promote(index: number): Promise<void> {
     if (this.activeIndex === index) {
       return;
     }
     const previousIndex = this.activeIndex;
     const previousEndpoint = this.endpoints[previousIndex] ?? this.endpoints[0]!;
-    this.activeIndex = index;
-    this.logger?.info?.(
-      `Switched Solana RPC endpoint to ${this.endpoints[index]} (commitment=${this.commitment})`,
-    );
-    this.notifyEndpointChange({
-      endpoint: this.endpoints[index] ?? this.endpoints[0]!,
+    const endpoint = this.endpoints[index] ?? this.endpoints[0]!;
+
+    await this.notifyEndpointChange({
+      endpoint,
       index,
       previousEndpoint,
       previousIndex,
     });
+
+    this.activeIndex = index;
+    this.logger?.info?.(
+      `Switched Solana RPC endpoint to ${endpoint} (commitment=${this.commitment})`,
+    );
   }
 
   private createProxyConnection(): Connection {
@@ -260,13 +271,13 @@ export class RpcEndpointManager {
         const result = method.apply(connection, args);
 
         if (!isPromiseLike(result)) {
-          this.promote(index);
+          void this.promote(index);
           return result;
         }
 
         return Promise.resolve(result)
           .then((value) => {
-            this.promote(index);
+            void this.promote(index);
             return value;
           })
           .catch(handleFailure);

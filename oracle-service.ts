@@ -171,7 +171,7 @@ export class OracleService {
         `RPC endpoint changed from ${previousEndpoint} to ${endpoint}; restarting event listeners.`,
       );
 
-      const restartListeners = async (): Promise<void> => {
+      return (async (): Promise<void> => {
         try {
           await this.eventProcessor.stopListening();
         } catch (error) {
@@ -179,18 +179,20 @@ export class OracleService {
           logger.warn(`Failed to stop event listeners before RPC restart: ${message}`);
         }
 
-        try {
-          await this.eventProcessor.startListening();
-          logger.info(`Re-subscribed event listeners on ${endpoint}`);
-        } catch (error) {
-          logger.failure(
-            `Failed to restart event listeners after switching to ${endpoint}:`,
-            error,
-          );
-        }
-      };
-
-      void restartListeners();
+        setTimeout(() => {
+          void (async () => {
+            try {
+              await this.eventProcessor.startListening();
+              logger.info(`Re-subscribed event listeners on ${endpoint}`);
+            } catch (error) {
+              logger.failure(
+                `Failed to restart event listeners after switching to ${endpoint}:`,
+                error,
+              );
+            }
+          })();
+        }, 0);
+      })();
     });
   }
 
