@@ -1,4 +1,7 @@
-import { Connection, type Commitment } from "@solana/web3.js";
+import * as anchor from "@coral-xyz/anchor";
+import type { Commitment } from "@solana/web3.js";
+
+type Connection = anchor.web3.Connection;
 
 export type RpcEndpointLogger = {
   info?: (...args: unknown[]) => void;
@@ -64,8 +67,9 @@ export class RpcEndpointManager {
   private readonly proxyConnection: Connection;
   private activeIndex = 0;
 
-  constructor(endpoints: string[], options: RpcEndpointManagerOptions = {}) {
-    if (!Array.isArray(endpoints) || endpoints.length === 0) {
+  constructor(endpointsInput: readonly string[], options: RpcEndpointManagerOptions = {}) {
+    const endpoints = Array.isArray(endpointsInput) ? Array.from(endpointsInput) : [];
+    if (endpoints.length === 0) {
       throw new Error("At least one RPC endpoint is required");
     }
 
@@ -81,7 +85,7 @@ export class RpcEndpointManager {
     this.logger = options.logger;
     this.connectionFactory =
       options.connectionFactory ??
-      ((endpoint: string, commitment: Commitment) => new Connection(endpoint, commitment));
+      ((endpoint: string, commitment: Commitment) => new anchor.web3.Connection(endpoint, commitment));
     this.proxyConnection = this.createProxyConnection();
   }
 
@@ -90,7 +94,7 @@ export class RpcEndpointManager {
   }
 
   public getActiveEndpoint(): string {
-    return this.endpoints[this.activeIndex];
+    return this.endpoints[this.activeIndex] ?? this.endpoints[0]!;
   }
 
   public getAllEndpoints(): readonly string[] {
@@ -100,7 +104,8 @@ export class RpcEndpointManager {
   private ensureConnection(index: number): Connection {
     let connection = this.connectionCache.get(index);
     if (!connection) {
-      connection = this.connectionFactory(this.endpoints[index], this.commitment);
+      const endpoint = this.endpoints[index] ?? this.endpoints[0]!;
+      connection = this.connectionFactory(endpoint, this.commitment);
       this.connectionCache.set(index, connection);
     }
     return connection;
@@ -262,5 +267,5 @@ export function resolvePrimaryRpcEndpoint(
   fallback: string | string[] = DEFAULT_MAINNET_ENDPOINT,
 ): string {
   const endpoints = parseRpcEndpointList(value, { fallback });
-  return endpoints[0];
+  return endpoints[0]!;
 }

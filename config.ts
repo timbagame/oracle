@@ -85,7 +85,7 @@ let cachedConfig: OracleRuntimeConfig | null = null;
 function loadConfig(): OracleRuntimeConfig {
   const environment = getEnvironmentMode();
   const solanaNetworks = parseRpcEndpointList(readEnv("SOLANA_NETWORK"));
-  const solanaNetwork = solanaNetworks[0];
+  const solanaNetwork = solanaNetworks[0]!;
 
   const databaseFile = readEnv("DATABASE_FILE") ?? DEFAULT_DATABASE_FILE;
   const adminKeypairSource = readEnv("ORACLE_KEYPAIR_PATH") ?? DEFAULT_KEYPAIR_FILE;

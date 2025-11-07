@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Connection } from "@solana/web3.js";
+import * as anchor from "@coral-xyz/anchor";
 import {
   DEFAULT_MAINNET_ENDPOINT,
   RpcEndpointManager,
@@ -45,7 +45,7 @@ describe("RpcEndpointManager", () => {
   test("switches endpoints after a retryable failure", async () => {
     const endpoints = ["https://rpc-a", "https://rpc-b"];
     const connectionFactory = (endpoint: string, commitment: string) =>
-      new FakeConnection(endpoint, commitment, endpoint === endpoints[0]) as unknown as Connection;
+      new FakeConnection(endpoint, commitment, endpoint === endpoints[0]) as unknown as anchor.web3.Connection;
 
     const manager = new RpcEndpointManager(endpoints, {
       connectionFactory,
