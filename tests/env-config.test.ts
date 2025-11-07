@@ -65,7 +65,7 @@ describe("environment helpers", () => {
 
 describe("runtime config", () => {
   it("throws when SOLANA_NETWORK is missing", () => {
-    expect(() => getConfig()).toThrow("SOLANA_NETWORK environment variable is required");
+    expect(() => getConfig()).toThrow("SOLANA_NETWORK is required");
   });
 
   it("normalizes numeric inputs and enforces bounds", () => {
@@ -107,5 +107,16 @@ describe("runtime config", () => {
     resetConfigForTesting();
     const refreshed = getConfig();
     expect(refreshed.databaseFile).toBe("ignored.sqlite");
+  });
+
+  it("supports multi-endpoint SOLANA_NETWORK definitions", () => {
+    process.env["SOLANA_NETWORK"] =
+      '["https://rpc-primary","https://rpc-secondary"]';
+    const config = getConfig();
+    expect(config.solanaNetwork).toBe("https://rpc-primary");
+    expect(config.solanaNetworks).toEqual([
+      "https://rpc-primary",
+      "https://rpc-secondary",
+    ]);
   });
 });

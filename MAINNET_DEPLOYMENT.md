@@ -19,10 +19,12 @@ cp env.example .env
 Edit `.env` with production values:
 
 ```bash
-SOLANA_NETWORK=https://api.mainnet-beta.solana.com
+SOLANA_NETWORK=["https://api.mainnet-beta.solana.com","https://rpc-backup.example.com"]
 ORACLE_PORT=3001                # optional
 ORACLE_KEYPAIR_PATH=./admin-keypair.json
 ```
+
+`SOLANA_NETWORK` accepts JSON arrays or comma-delimited strings; the oracle automatically advances through the ordered list when encountering retryable RPC errors.
 
 > Ensure `ORACLE_KEYPAIR_PATH` points to the same oracle authority configured during contract deployment.
 

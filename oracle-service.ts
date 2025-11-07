@@ -9,6 +9,7 @@ import { OracleEventProcessor, EVENT_HANDLER_CONFIG } from "./oracle-event-proce
 import { GameCompletionManager } from "./oracle-completion-manager.ts";
 import { ScanLoopRunner } from "./oracle-scan-runner.ts";
 import { logger } from "./logger.ts";
+import { RpcEndpointManager } from "./rpc-endpoints.ts";
 import {
   type AttemptGameCompletionOptions,
   type GameCompletionResult,
@@ -55,6 +56,7 @@ export class OracleService {
   private readonly db: OracleDatabase;
   private readonly metrics: OracleMetrics;
   private readonly connection: anchor.web3.Connection;
+  private readonly rpcEndpointManager: RpcEndpointManager;
   private readonly adminKeypair: anchor.web3.Keypair;
   private readonly program: anchor.Program<Timba>;
   private readonly interGameDelayMs: number;
@@ -69,7 +71,8 @@ export class OracleService {
     this.config = getConfig();
     this.db = db ?? OracleDatabase.getInstance();
     this.metrics = metrics ?? getOracleMetrics();
-    this.connection = this.initConnection();
+    this.rpcEndpointManager = this.initRpcEndpointManager();
+    this.connection = this.rpcEndpointManager.getConnection();
     this.adminKeypair = this.loadAdminKeypair();
     this.program = this.initProgram();
     this.registrySync = this.initPlayerRegistrySync();
@@ -96,8 +99,15 @@ export class OracleService {
     return new OracleService(db, options.metrics);
   }
 
-  private initConnection(): anchor.web3.Connection {
-    return new anchor.web3.Connection(this.config.solanaNetwork, "confirmed");
+  private initRpcEndpointManager(): RpcEndpointManager {
+    return new RpcEndpointManager(this.config.solanaNetworks, {
+      commitment: "confirmed",
+      logger: {
+        info: (...args: unknown[]) => logger.info(...args),
+        warn: (...args: unknown[]) => logger.warn(...args),
+        error: (...args: unknown[]) => logger.error(...args),
+      },
+    });
   }
 
   private initCompletion(): GameCompletionManager {
