@@ -1,5 +1,6 @@
 import * as path from "path";
 import { getEnvironmentMode, readEnv, shouldUseEphemeralKeypair } from "./env.ts";
+import { parseRpcEndpointList } from "./rpc-endpoints.ts";
 
 export const DEFAULT_ORACLE_PORT = 3001;
 const DEFAULT_DATABASE_FILE = "oracle.sqlite";
@@ -69,6 +70,7 @@ function resolvePath(relativeOrAbsolute: string): string {
 
 export interface OracleRuntimeConfig {
   readonly solanaNetwork: string;
+  readonly solanaNetworks: readonly string[];
   readonly oraclePort: number;
   readonly databaseFile: string;
   readonly adminKeypairPath: string;
@@ -82,11 +84,8 @@ let cachedConfig: OracleRuntimeConfig | null = null;
 
 function loadConfig(): OracleRuntimeConfig {
   const environment = getEnvironmentMode();
-  const solanaNetwork = readEnv("SOLANA_NETWORK");
-
-  if (!solanaNetwork) {
-    throw new Error("SOLANA_NETWORK environment variable is required");
-  }
+  const solanaNetworks = parseRpcEndpointList(readEnv("SOLANA_NETWORK"));
+  const solanaNetwork = solanaNetworks[0]!;
 
   const databaseFile = readEnv("DATABASE_FILE") ?? DEFAULT_DATABASE_FILE;
   const adminKeypairSource = readEnv("ORACLE_KEYPAIR_PATH") ?? DEFAULT_KEYPAIR_FILE;
@@ -108,6 +107,7 @@ function loadConfig(): OracleRuntimeConfig {
 
   return {
     solanaNetwork,
+    solanaNetworks,
     oraclePort,
     databaseFile,
     adminKeypairPath,

@@ -86,8 +86,9 @@ The Oracle service uses a hybrid approach with performance optimizations:
 Configure via environment variables in `.env`:
 
 ```bash
-# Required: Solana network endpoint
-SOLANA_NETWORK=https://api.mainnet-beta.solana.com
+# Required: Solana network endpoints (JSON array or comma-separated list); the oracle walks
+# the ordered set automatically when it encounters transient RPC failures.
+SOLANA_NETWORK=["https://api.mainnet-beta.solana.com","https://rpc-backup.example.com"]
 
 # Optional: API server port (default: 3001)
 ORACLE_PORT=3001
