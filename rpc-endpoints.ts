@@ -134,26 +134,16 @@ export class RpcEndpointManager {
   }
 
   private async notifyEndpointChange(change: ActiveEndpointChange): Promise<void> {
-    const pending: Promise<void>[] = [];
-
-    for (const listener of this.endpointChangeListeners) {
-      try {
-        const result = listener(change);
-        if (isPromiseLike(result)) {
-          pending.push(
-            Promise.resolve(result).catch((error) => {
-              this.logger?.error?.("RPC endpoint change listener failed:", error);
-            }),
-          );
+    const listeners = Array.from(this.endpointChangeListeners);
+    await Promise.all(
+      listeners.map(async (listener) => {
+        try {
+          await listener(change);
+        } catch (error) {
+          this.logger?.error?.("RPC endpoint change listener failed:", error);
         }
-      } catch (error) {
-        this.logger?.error?.("RPC endpoint change listener threw:", error);
-      }
-    }
-
-    if (pending.length > 0) {
-      await Promise.all(pending);
-    }
+      }),
+    );
   }
 
   private ensureConnection(index: number): Connection {

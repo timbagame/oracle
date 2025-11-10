@@ -31,6 +31,8 @@ const SQL_STATEMENTS = Object.freeze({
     "UPDATE game_tracking SET status = ?, completed_at = NULL, last_checked = ? WHERE game_address = ?",
 } satisfies Record<string, string>);
 
+const COMPLETED_GAME_PREDICATE = "status != ? AND completed_at IS NOT NULL AND completed_at < ?";
+
 const SQL_QUERIES = Object.freeze({
   selectSecretKey:
     "SELECT secret_key, random_hash FROM secret_keys WHERE game_address = ? AND used = FALSE",
@@ -54,17 +56,35 @@ const SQL_QUERIES = Object.freeze({
     "SELECT player_address FROM game_players WHERE game_address = ? ORDER BY ticket_index ASC",
   selectPlayerTicketStats:
     "SELECT COUNT(*) as count, MAX(ticket_index) as max_index, MIN(ticket_index) as min_index FROM game_players WHERE game_address = ?",
+  cleanupOldRecords: `
+    WITH candidate_games AS (
+      SELECT game_address FROM game_tracking WHERE ${COMPLETED_GAME_PREDICATE}
+    ),
+    deleted_secrets AS (
+      DELETE FROM secret_keys
+      WHERE created_at < ?
+        AND (
+          used = TRUE OR
+          game_address IN (SELECT game_address FROM candidate_games)
+        )
+      RETURNING 1
+    ),
+    deleted_players AS (
+      DELETE FROM game_players
+      WHERE game_address IN (SELECT game_address FROM candidate_games)
+      RETURNING 1
+    ),
+    deleted_games AS (
+      DELETE FROM game_tracking
+      WHERE ${COMPLETED_GAME_PREDICATE}
+      RETURNING 1
+    )
+    SELECT
+      (SELECT COUNT(*) FROM deleted_secrets) AS deletedSecrets,
+      (SELECT COUNT(*) FROM deleted_players) AS deletedPlayers,
+      (SELECT COUNT(*) FROM deleted_games) AS deletedGames;
+  `,
 } satisfies Record<string, string>);
-
-const COMPLETED_GAME_PREDICATE = "status != ? AND completed_at IS NOT NULL AND completed_at < ?";
-const COMPLETED_GAME_SUBQUERY = `
-  SELECT game_address FROM game_tracking
-  WHERE ${COMPLETED_GAME_PREDICATE}
-`;
-const DELETE_COMPLETED_GAMES_SQL = `
-  DELETE FROM game_tracking
-  WHERE ${COMPLETED_GAME_PREDICATE}
-`;
 
 function getDatabaseFile(): string {
   return getConfig().databaseFile;
@@ -311,18 +331,6 @@ export class OracleDatabase {
     return this.executeDbOperation(() => {
       const transaction = this.db.transaction(operation);
       return transaction();
-    }, errorMessage);
-  }
-
-  private runDelete(
-    sql: string,
-    errorMessage: string,
-    ...params: Parameters<ReturnType<Database["prepare"]>["run"]>
-  ): number {
-    return this.executeDbOperation(() => {
-      const stmt = this.getPreparedStatement(sql);
-      const result = stmt.run(...params);
-      return typeof result?.changes === "number" ? result.changes : 0;
     }, errorMessage);
   }
 
@@ -653,43 +661,25 @@ export class OracleDatabase {
     try {
       const cutoffTime = Date.now() - hoursOld * 60 * 60 * 1000;
 
-      // Clean up old secret keys that have already been used or whose game is finished.
-      const deletedSecrets = this.runDelete(
-        `DELETE FROM secret_keys
-         WHERE created_at < ?
-           AND (
-             used = TRUE OR
-             game_address IN (
-               SELECT game_address FROM game_tracking WHERE status != ?
-             )
-           )`,
-        "Failed to delete old secret keys",
+      const result = this.queryOne<{
+        deletedSecrets: number;
+        deletedPlayers: number;
+        deletedGames: number;
+      }>(
+        SQL_QUERIES.cleanupOldRecords,
+        "Failed to delete old records",
+        { deletedSecrets: 0, deletedPlayers: 0, deletedGames: 0 },
+        DEFAULT_STATUS,
         cutoffTime,
-        DEFAULT_STATUS
-      );
-
-      const deletedPlayers = this.runDelete(
-        `DELETE FROM game_players
-         WHERE game_address IN (
-           ${COMPLETED_GAME_SUBQUERY}
-         )`,
-        "Failed to delete old player rows",
+        cutoffTime,
         DEFAULT_STATUS,
-        cutoffTime
-      );
-
-      // Clean up old game tracking records (completed/cancelled games older than cutoff)
-      const deletedGames = this.runDelete(
-        DELETE_COMPLETED_GAMES_SQL,
-        "Failed to delete old game tracking rows",
-        DEFAULT_STATUS,
-        cutoffTime
+        cutoffTime,
       );
 
       const deletedCounts = {
-        deletedSecrets,
-        deletedGames,
-        deletedPlayers,
+        deletedSecrets: result?.deletedSecrets ?? 0,
+        deletedGames: result?.deletedGames ?? 0,
+        deletedPlayers: result?.deletedPlayers ?? 0,
       };
 
       logger.info(
