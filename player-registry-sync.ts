@@ -46,7 +46,10 @@ export class PlayerRegistrySync {
 
   public async fetchPlayersFromChain(params: FetchRegistryParams): Promise<string[] | null> {
     const { gamePda, expectedTickets } = params;
-    const signatures = await this.collectSignatures(gamePda, params.maxSignatures);
+    const signatures = await this.collectSignatures(gamePda, {
+      maxSignatures: params.maxSignatures,
+      expectedTickets: params.expectedTickets,
+    });
 
     if (signatures.length === 0) {
       return null;
@@ -246,17 +249,49 @@ export class PlayerRegistrySync {
     return orderedEntries.map(([, address]) => address);
   }
 
-  private async collectSignatures(gamePda: PublicKey, maxSignatures?: number) {
+  private async collectSignatures(
+    gamePda: PublicKey,
+    options: { maxSignatures?: number; expectedTickets?: number } = {},
+  ) {
+    const finiteMaxSignatures =
+      options.maxSignatures !== undefined && Number.isFinite(options.maxSignatures)
+        ? Math.max(0, Math.floor(options.maxSignatures))
+        : undefined;
+    const targetSignatures =
+      options.expectedTickets !== undefined &&
+      Number.isFinite(options.expectedTickets) &&
+      options.expectedTickets > 0
+        ? Math.max(0, Math.floor(options.expectedTickets))
+        : undefined;
+
     const collected: anchor.web3.ConfirmedSignatureInfo[] = [];
     let before: string | undefined;
 
     for (let batch = 0; batch < this.maxBatches; batch++) {
-      if (maxSignatures !== undefined && collected.length >= maxSignatures) {
+      if (
+        (targetSignatures !== undefined && collected.length >= targetSignatures) ||
+        (finiteMaxSignatures !== undefined && collected.length >= finiteMaxSignatures)
+      ) {
         break;
       }
 
-      const remaining = maxSignatures ? Math.max(1, maxSignatures - collected.length) : this.batchSize;
-      const limit = Math.min(this.batchSize, remaining);
+      const remainingByTarget =
+        targetSignatures !== undefined ? Math.max(0, targetSignatures - collected.length) : undefined;
+      const remainingByMax =
+        finiteMaxSignatures !== undefined ? Math.max(0, finiteMaxSignatures - collected.length) : undefined;
+
+      if (remainingByTarget === 0 || remainingByMax === 0) {
+        break;
+      }
+
+      let limit = this.batchSize;
+      if (remainingByTarget !== undefined) {
+        limit = Math.min(limit, Math.max(1, remainingByTarget));
+      }
+
+      if (remainingByMax !== undefined) {
+        limit = Math.min(limit, Math.max(1, remainingByMax));
+      }
 
       const page = await this.options.connection.getSignaturesForAddress(gamePda, {
         before,

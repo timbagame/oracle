@@ -5,10 +5,10 @@ import type { TimbaEventMap, TimbaEvent, TimbaPlayerEvent, TimbaGameStatusEvent,
 import type { PublicKeyLike } from "./solana-utils.ts";
 import type { EventHandlerConfig } from "./oracle-service.types.ts";
 import { toBase58, resolveNumericLike, coercePublicKey } from "./solana-utils.ts";
+import { normalizeGameType } from "./game-type.ts";
 import { logger } from "./logger.ts";
 import { analyzeRegistryState } from "./player-registry-utils.ts";
 
-const GAME_TYPE_MAX_LENGTH = 128;
 const DEFAULT_REGISTRY_SYNC_RETRY_DELAY_MS = 2000;
 
 export interface OracleEventProcessorOptions {
@@ -23,6 +23,7 @@ export interface OracleEventProcessorOptions {
     trigger: string;
     gameKey?: PublicKeyLike;
   }) => Promise<boolean>;
+  onGameFinalized?: (gameAddress: string) => void;
   setTimeoutFn?: typeof setTimeout;
   clearTimeoutFn?: typeof clearTimeout;
   registrySyncRetryDelayMs?: number;
@@ -32,26 +33,29 @@ export class OracleEventProcessor {
   private listenerIds: number[] = [];
   private listening = false;
   private startPromise: Promise<void> | null = null;
-  private readonly registrySyncInFlight = new Set<string>();
-  private readonly registrySyncPending = new Map<
-    string,
-    {
-      gameAddress: string;
-      expectedTickets?: number;
-      trigger: string;
-      gameKey?: PublicKeyLike;
-    }
-  >();
-  private readonly registrySyncRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly scheduleRetryTimeout: typeof setTimeout;
-  private readonly clearRetryTimeout: typeof clearTimeout;
+  private readonly registrySyncScheduler?: RegistrySyncScheduler;
   private readonly registrySyncRetryDelayMs: number;
+  public scheduleRetryTimeout: (
+    callback: () => void,
+    delay: number,
+  ) => ReturnType<typeof setTimeout>;
+  public clearRetryTimeout: (timer: ReturnType<typeof setTimeout>) => void;
 
   constructor(private readonly options: OracleEventProcessorOptions) {
-    this.scheduleRetryTimeout = options.setTimeoutFn ?? setTimeout;
-    this.clearRetryTimeout = options.clearTimeoutFn ?? clearTimeout;
+    this.scheduleRetryTimeout =
+      options.setTimeoutFn ?? ((callback, delay) => setTimeout(callback, delay));
+    this.clearRetryTimeout =
+      options.clearTimeoutFn ?? ((timer) => clearTimeout(timer));
     this.registrySyncRetryDelayMs =
       options.registrySyncRetryDelayMs ?? DEFAULT_REGISTRY_SYNC_RETRY_DELAY_MS;
+    if (options.syncPlayerRegistry) {
+      this.registrySyncScheduler = new RegistrySyncScheduler(
+        options.syncPlayerRegistry,
+        this.registrySyncRetryDelayMs,
+        (...args) => this.scheduleRetryTimeout(...args),
+        (timer) => this.clearRetryTimeout(timer),
+      );
+    }
   }
 
   private async runEventMutation(
@@ -212,12 +216,14 @@ export class OracleEventProcessor {
     void this.runEventMutation(eventType, async () => {
       if (status === "completed") {
         this.options.db.markGameCompleted(gameAddress);
+        this.options.onGameFinalized?.(gameAddress);
         return;
       }
 
       this.options.db.markGameClosed(gameAddress);
       this.options.db.clearStalePlayersForGame(gameAddress);
       logger.info(`🚫 Game closed: ${gameAddress}`);
+      this.options.onGameFinalized?.(gameAddress);
     });
   }
 
@@ -240,14 +246,14 @@ export class OracleEventProcessor {
       if (event.gameType) {
         const gameTypeKeys = Object.keys(event.gameType);
         if (gameTypeKeys.length > 0 && gameTypeKeys[0]) {
-          const normalized = gameTypeKeys[0].toLowerCase();
-          if (normalized.length > GAME_TYPE_MAX_LENGTH) {
-            logger.warn(
-              `⚠️  Truncating game type for ${gameAddress}; received ${normalized.length} characters`,
-            );
-            gameType = normalized.slice(0, GAME_TYPE_MAX_LENGTH);
-          } else {
-            gameType = normalized;
+          const normalized = normalizeGameType(gameTypeKeys[0], { allowTruncate: true });
+          if (normalized.value) {
+            if (normalized.truncated) {
+              logger.warn(
+                `⚠️  Truncating game type for ${gameAddress}; received ${normalized.originalLength ?? "more than allowed"} characters`,
+              );
+            }
+            gameType = normalized.value;
           }
         }
       }
@@ -289,86 +295,13 @@ export class OracleEventProcessor {
     });
   }
 
-  private async schedulePlayerRegistrySync(options: {
+  private schedulePlayerRegistrySync(options: {
     gameAddress: string;
     expectedTickets?: number;
     trigger: string;
     gameKey?: PublicKeyLike;
-  }): Promise<void> {
-    const { syncPlayerRegistry } = this.options;
-    if (!syncPlayerRegistry) {
-      return;
-    }
-
-    this.clearRegistryRetryTimer(options.gameAddress);
-
-    if (this.registrySyncInFlight.has(options.gameAddress)) {
-      this.registrySyncPending.set(options.gameAddress, options);
-      return;
-    }
-
-    this.registrySyncInFlight.add(options.gameAddress);
-    let shouldRetry = false;
-
-    try {
-      const synced = await syncPlayerRegistry(options);
-      if (!synced) {
-        shouldRetry = true;
-        this.registrySyncPending.set(options.gameAddress, options);
-        logger.warn(
-          `⚠️  Failed to reconcile player registry for ${options.gameAddress} after ${options.trigger}`,
-        );
-      } else {
-        this.registrySyncPending.delete(options.gameAddress);
-      }
-    } catch (error) {
-      shouldRetry = true;
-      this.registrySyncPending.set(options.gameAddress, options);
-      logger.failure(
-        `Error attempting to reconcile player registry for ${options.gameAddress}:`,
-        error,
-      );
-    } finally {
-      this.registrySyncInFlight.delete(options.gameAddress);
-      if (shouldRetry) {
-        this.enqueueRegistrySyncRetry(options.gameAddress);
-      } else {
-        this.registrySyncPending.delete(options.gameAddress);
-        this.clearRegistryRetryTimer(options.gameAddress);
-      }
-    }
-  }
-
-  private clearRegistryRetryTimer(gameAddress: string): void {
-    const existing = this.registrySyncRetryTimers.get(gameAddress);
-    if (existing !== undefined) {
-      this.clearRetryTimeout(existing);
-      this.registrySyncRetryTimers.delete(gameAddress);
-    }
-  }
-
-  private enqueueRegistrySyncRetry(gameAddress: string): void {
-    if (this.registrySyncRetryTimers.has(gameAddress)) {
-      return;
-    }
-
-    const pending = this.registrySyncPending.get(gameAddress);
-    if (!pending) {
-      return;
-    }
-
-    const timer = this.scheduleRetryTimeout(() => {
-      this.registrySyncRetryTimers.delete(gameAddress);
-      const retry = this.registrySyncPending.get(gameAddress);
-      if (!retry) {
-        return;
-      }
-
-      this.registrySyncPending.delete(gameAddress);
-      void this.schedulePlayerRegistrySync(retry);
-    }, this.registrySyncRetryDelayMs);
-
-    this.registrySyncRetryTimers.set(gameAddress, timer);
+  }): void {
+    this.registrySyncScheduler?.schedule(options);
   }
 
   private validateEventData(
@@ -432,6 +365,109 @@ export class OracleEventProcessor {
       playerAddress: playerKey ? toBase58(playerKey) : undefined,
       ticketIndex: resolveNumericLike(event.ticketIndex ?? event.ticket_index),
     };
+  }
+}
+
+type RegistrySyncScheduleOptions = Parameters<
+  NonNullable<OracleEventProcessorOptions["syncPlayerRegistry"]>
+>[0];
+
+interface RegistrySyncEntry {
+  queue: RegistrySyncScheduleOptions[];
+  running: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+  retryPending?: RegistrySyncScheduleOptions;
+}
+
+class RegistrySyncScheduler {
+  private readonly entries = new Map<string, RegistrySyncEntry>();
+
+  constructor(
+    private readonly syncFn: (options: RegistrySyncScheduleOptions) => Promise<boolean>,
+    private readonly retryDelayMs: number,
+    private readonly setTimer: typeof setTimeout,
+    private readonly clearTimer: typeof clearTimeout,
+  ) {}
+
+  public schedule(options: RegistrySyncScheduleOptions): void {
+    const entry = this.entries.get(options.gameAddress) ?? {
+      queue: [],
+      running: false,
+    };
+    if (entry.running || entry.queue.length > 0) {
+      this.entries.set(options.gameAddress, entry);
+      return;
+    }
+    entry.queue.push(options);
+
+    if (!entry.running && entry.timer === undefined) {
+      void this.processQueue(options.gameAddress, entry);
+    }
+
+    this.entries.set(options.gameAddress, entry);
+  }
+
+  private async processQueue(gameAddress: string, entry: RegistrySyncEntry): Promise<void> {
+    if (entry.running) {
+      return;
+    }
+
+    entry.running = true;
+
+    try {
+      while (entry.queue.length > 0) {
+        const next = entry.queue.shift()!;
+        let success = false;
+
+        try {
+          success = await this.syncFn(next);
+        } catch {
+          success = false;
+        }
+
+        if (!success) {
+          entry.retryPending = next;
+          entry.queue.length = 0;
+          return;
+        }
+
+        if (entry.timer !== undefined) {
+          this.clearTimer(entry.timer);
+          entry.timer = undefined;
+        }
+      }
+    } finally {
+      entry.running = false;
+      if (entry.retryPending) {
+        this.scheduleRetryTimer(gameAddress, entry);
+        return;
+      }
+      if (entry.queue.length === 0 && entry.timer === undefined) {
+        this.entries.delete(gameAddress);
+      }
+    }
+  }
+
+  private scheduleRetryTimer(gameAddress: string, entry: RegistrySyncEntry): void {
+    if (entry.timer !== undefined) {
+      return;
+    }
+
+    entry.timer = this.setTimer(() => {
+      entry.timer = undefined;
+      if (entry.retryPending) {
+        entry.queue.push(entry.retryPending);
+        entry.retryPending = undefined;
+      }
+
+      if (!entry.running) {
+        void this.processQueue(gameAddress, entry);
+      }
+    }, this.retryDelayMs);
+  }
+
+  public hasPendingEntry(gameAddress: string): boolean {
+    return this.entries.has(gameAddress);
   }
 }
 

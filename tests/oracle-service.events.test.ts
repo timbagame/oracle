@@ -360,7 +360,9 @@ describe("OracleService event handling", () => {
 
     expect(syncCalls).toHaveLength(3);
     expect(timers).toHaveLength(0);
-    expect((processor as any).registrySyncPending.size).toBe(0);
+    expect(
+      (processor as any).registrySyncScheduler?.hasPendingEntry(gameAddress),
+    ).toBe(false);
   });
 
   it("ignores player events with missing data", async () => {

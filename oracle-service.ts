@@ -141,6 +141,8 @@ export class OracleService {
       config: EVENT_HANDLER_CONFIG,
       clearTokenProgramCache: () => this.completion.clearTokenProgramCache(),
       syncPlayerRegistry: (options) => this.syncPlayerRegistry(options),
+      onGameFinalized: (gameAddress) =>
+        this.completion.resetRegistryPrefetchSchedule(gameAddress),
     });
   }
 
