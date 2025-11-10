@@ -257,7 +257,7 @@ export class PlayerRegistrySync {
       options.maxSignatures !== undefined && Number.isFinite(options.maxSignatures)
         ? Math.max(0, Math.floor(options.maxSignatures))
         : undefined;
-    const targetSignatures =
+    const expectedSignatureHint =
       options.expectedTickets !== undefined &&
       Number.isFinite(options.expectedTickets) &&
       options.expectedTickets > 0
@@ -268,29 +268,28 @@ export class PlayerRegistrySync {
     let before: string | undefined;
 
     for (let batch = 0; batch < this.maxBatches; batch++) {
-      if (
-        (targetSignatures !== undefined && collected.length >= targetSignatures) ||
-        (finiteMaxSignatures !== undefined && collected.length >= finiteMaxSignatures)
-      ) {
+      if (finiteMaxSignatures !== undefined && collected.length >= finiteMaxSignatures) {
         break;
       }
 
-      const remainingByTarget =
-        targetSignatures !== undefined ? Math.max(0, targetSignatures - collected.length) : undefined;
       const remainingByMax =
         finiteMaxSignatures !== undefined ? Math.max(0, finiteMaxSignatures - collected.length) : undefined;
+      const remainingByHint =
+        expectedSignatureHint !== undefined
+          ? Math.max(0, expectedSignatureHint - collected.length)
+          : undefined;
 
-      if (remainingByTarget === 0 || remainingByMax === 0) {
+      if (remainingByMax === 0) {
         break;
       }
 
       let limit = this.batchSize;
-      if (remainingByTarget !== undefined) {
-        limit = Math.min(limit, Math.max(1, remainingByTarget));
-      }
-
       if (remainingByMax !== undefined) {
         limit = Math.min(limit, Math.max(1, remainingByMax));
+      }
+
+      if (remainingByHint !== undefined && remainingByHint > 0) {
+        limit = Math.min(limit, Math.max(1, remainingByHint));
       }
 
       const page = await this.options.connection.getSignaturesForAddress(gamePda, {

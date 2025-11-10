@@ -234,7 +234,7 @@ describe("OracleService event handling", () => {
     deferred.resolve(true);
     await Promise.all([first, second]);
 
-    expect(syncCalls).toHaveLength(1);
+    expect(syncCalls).toHaveLength(2);
   });
 
   it("retries player registry sync when a pending request arrives during a failed attempt", async () => {

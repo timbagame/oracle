@@ -395,16 +395,44 @@ class RegistrySyncScheduler {
       running: false,
     };
     if (entry.running || entry.queue.length > 0) {
+      if (entry.queue.length === 0) {
+        entry.queue.push({ ...options });
+      } else {
+        const lastIndex = entry.queue.length - 1;
+        entry.queue[lastIndex] = this.mergeScheduleOptions(entry.queue[lastIndex]!, options);
+      }
+
+      if (entry.retryPending) {
+        entry.retryPending = this.mergeScheduleOptions(entry.retryPending, options);
+      }
+
       this.entries.set(options.gameAddress, entry);
       return;
     }
-    entry.queue.push(options);
+    entry.queue.push({ ...options });
+
+    if (entry.retryPending) {
+      entry.retryPending = this.mergeScheduleOptions(entry.retryPending, options);
+    }
 
     if (!entry.running && entry.timer === undefined) {
       void this.processQueue(options.gameAddress, entry);
     }
 
     this.entries.set(options.gameAddress, entry);
+  }
+
+  private mergeScheduleOptions(
+    current: RegistrySyncScheduleOptions,
+    incoming: RegistrySyncScheduleOptions,
+  ): RegistrySyncScheduleOptions {
+    return {
+      ...current,
+      ...incoming,
+      expectedTickets: incoming.expectedTickets ?? current.expectedTickets,
+      gameKey: incoming.gameKey ?? current.gameKey,
+      trigger: incoming.trigger,
+    };
   }
 
   private async processQueue(gameAddress: string, entry: RegistrySyncEntry): Promise<void> {
