@@ -413,7 +413,7 @@ export class GameCompletionManager {
         this.options.markGameDesynced(gameAddress);
       }
 
-      this.deletePrefetchSchedule(gameAddress);
+      this.resetRegistryPrefetchSchedule(gameAddress);
 
       return {
         error: this.recordFatalCompletionFailure(
@@ -565,16 +565,13 @@ export class GameCompletionManager {
         this.registryPrefetchSchedule.set(gameAddress, nextWindow);
       }
     } catch (error) {
-      this.registryPrefetchSchedule.delete(gameAddress);
+      this.resetRegistryPrefetchSchedule(gameAddress);
       const message = error instanceof Error ? error.message : String(error);
       logger.warning(
         `Unable to prefetch player registry for ${gameAddress}: ${message}`,
       );
     }
 
-    if (!this.registryPrefetchSchedule.has(gameAddress)) {
-      this.registryPrefetchSchedule.delete(gameAddress);
-    }
   }
 
   private deletePrefetchSchedule(gameAddress: string): void {

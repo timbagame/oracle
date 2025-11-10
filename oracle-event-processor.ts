@@ -393,25 +393,14 @@ class RegistrySyncScheduler {
       running: false,
     };
     if (entry.running || entry.queue.length > 0) {
-      if (entry.queue.length === 0) {
-        entry.queue.push({ ...options });
-      } else {
-        const lastIndex = entry.queue.length - 1;
-        entry.queue[lastIndex] = this.mergeScheduleOptions(entry.queue[lastIndex]!, options);
-      }
-
+      entry.queue.push({ ...options });
       if (entry.retryPending) {
         entry.retryPending = this.mergeScheduleOptions(entry.retryPending, options);
       }
-
       this.entries.set(options.gameAddress, entry);
       return;
     }
     entry.queue.push({ ...options });
-
-    if (entry.retryPending) {
-      entry.retryPending = this.mergeScheduleOptions(entry.retryPending, options);
-    }
 
     if (!entry.running && entry.timer === undefined) {
       void this.processQueue(options.gameAddress, entry);
@@ -453,18 +442,11 @@ class RegistrySyncScheduler {
 
         if (!success) {
           let pending = next;
-          if (entry.queue.length > 0) {
-            for (const queued of entry.queue) {
-              pending = this.mergeScheduleOptions(pending, queued);
-            }
-          }
-
           if (entry.retryPending) {
             pending = this.mergeScheduleOptions(entry.retryPending, pending);
           }
 
           entry.retryPending = pending;
-          entry.queue.length = 0;
           return;
         }
 
@@ -530,3 +512,5 @@ export const EVENT_HANDLER_CONFIG: ReadonlyArray<EventHandlerConfig<keyof TimbaE
     createHandler: (ctx) => (event) => ctx.handleGameStatusChange("closed", event),
   },
 ];
+
+export { RegistrySyncScheduler };
