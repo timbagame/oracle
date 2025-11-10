@@ -111,6 +111,6 @@ describe("RpcEndpointManager", () => {
     await expect(manager.getConnection().getBlockHeight()).rejects.toThrow(
       "HTTP 400",
     );
-    expect(manager.getActiveEndpoint()).toBe(endpoints[0]);
+    expect(manager.getActiveEndpoint()).toBe(endpoints[0]!);
   });
 });
