@@ -400,9 +400,6 @@ class RegistrySyncScheduler {
     };
     if (entry.running || entry.queue.length > 0 || entry.timerPending) {
       entry.queue.push({ ...options });
-      if (entry.retryPending) {
-        entry.retryPending = this.mergeScheduleOptions(entry.retryPending, options);
-      }
       this.entries.set(options.gameAddress, entry);
       return;
     }
@@ -485,11 +482,7 @@ class RegistrySyncScheduler {
       if (entry.retryPending) {
         const pending = { ...entry.retryPending };
         entry.retryPending = undefined;
-        if (entry.queue.length > 0) {
-          entry.queue[0] = this.mergeScheduleOptions(entry.queue[0]!, pending);
-        } else {
-          entry.queue.push(pending);
-        }
+        entry.queue.unshift(pending);
       }
 
       if (!entry.running) {
