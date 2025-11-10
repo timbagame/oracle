@@ -379,6 +379,7 @@ interface RegistrySyncEntry {
   running: boolean;
   timer?: ReturnType<typeof setTimeout>;
   retryPending?: RegistrySyncScheduleOptions;
+  timerPending?: boolean;
 }
 
 class RegistrySyncScheduler {
@@ -395,8 +396,9 @@ class RegistrySyncScheduler {
     const entry = this.entries.get(options.gameAddress) ?? {
       queue: [],
       running: false,
+      timerPending: false,
     };
-    if (entry.running || entry.queue.length > 0) {
+    if (entry.running || entry.queue.length > 0 || entry.timerPending) {
       entry.queue.push({ ...options });
       if (entry.retryPending) {
         entry.retryPending = this.mergeScheduleOptions(entry.retryPending, options);
@@ -406,7 +408,7 @@ class RegistrySyncScheduler {
     }
     entry.queue.push({ ...options });
 
-    if (!entry.running && entry.timer === undefined) {
+    if (!entry.running && entry.timer === undefined && !entry.timerPending) {
       void this.processQueue(options.gameAddress, entry);
     }
 
@@ -476,11 +478,18 @@ class RegistrySyncScheduler {
       return;
     }
 
+    entry.timerPending = true;
     entry.timer = this.setTimer(() => {
       entry.timer = undefined;
+      entry.timerPending = false;
       if (entry.retryPending) {
-        entry.queue.push({ ...entry.retryPending });
+        const pending = { ...entry.retryPending };
         entry.retryPending = undefined;
+        if (entry.queue.length > 0) {
+          entry.queue[0] = this.mergeScheduleOptions(entry.queue[0]!, pending);
+        } else {
+          entry.queue.push(pending);
+        }
       }
 
       if (!entry.running) {

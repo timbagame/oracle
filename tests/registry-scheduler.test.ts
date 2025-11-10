@@ -36,4 +36,49 @@ describe("RegistrySyncScheduler", () => {
 
     expect(syncCalls).toEqual(["first", "second", "first"]);
   });
+
+  it("processes new events even while a retry timer is pending", async () => {
+    const timerCallbacks: Array<() => void> = [];
+    const syncCalls: string[] = [];
+    let firstResolver: ((value: boolean | PromiseLike<boolean>) => void) | undefined;
+
+    const scheduler = new RegistrySyncScheduler(
+      async (options) => {
+        syncCalls.push(options.trigger);
+        if (syncCalls.length === 1) {
+          return new Promise((resolve) => {
+            firstResolver = resolve;
+          });
+        }
+        return true;
+      },
+      10,
+      (callback) => {
+        timerCallbacks.push(callback);
+        return {} as ReturnType<typeof setTimeout>;
+      },
+      () => {},
+    );
+
+    scheduler.schedule({ gameAddress: "race", trigger: "first" });
+    scheduler.schedule({ gameAddress: "race", trigger: "second" });
+    await Promise.resolve();
+    if (firstResolver) {
+      firstResolver(false);
+    }
+    await Promise.resolve();
+
+    scheduler.schedule({ gameAddress: "race", trigger: "third" });
+    while (timerCallbacks.length === 0) {
+      await Promise.resolve();
+    }
+    const timer = timerCallbacks.shift();
+    timer?.();
+
+    while (syncCalls.length < 3) {
+      await Promise.resolve();
+    }
+
+    expect(syncCalls).toEqual(["first", "second", "third"]);
+  });
 });
