@@ -60,96 +60,170 @@ export class PlayerRegistrySync {
     const ticketAssignments = new Map<number, string>();
     let shouldStopProcessing = false;
 
-    for (let offset = 0; offset < signatures.length && !shouldStopProcessing; offset += this.transactionConcurrency) {
-      const batch = signatures.slice(offset, offset + this.transactionConcurrency);
-      const transactions = await Promise.all(
-        batch.map(async (signatureInfo) => {
-          try {
-            return await this.options.connection.getTransaction(signatureInfo.signature, {
-              commitment: "confirmed",
-            });
-          } catch (error) {
-            logger.warning(
-              `Failed to fetch transaction ${signatureInfo.signature}: ${error instanceof Error ? error.message : String(error)}`,
-            );
-            return null;
-          }
-        }),
-      );
+    type RegistryEvent =
+      | { kind: "join"; ticketIndex: number; playerAddress: string }
+      | { kind: "unjoin"; ticketIndex: number };
 
-      for (let index = 0; index < batch.length && !shouldStopProcessing; index += 1) {
-        const transaction = transactions[index];
-        const logs = transaction?.meta?.logMessages;
-        if (!logs || logs.length === 0) {
+    const isRegistrySatisfied = () => {
+      if (expectedTickets === undefined) {
+        return false;
+      }
+
+      const { stats } = summarizeTicketAssignments(ticketAssignments);
+      const analysis = analyzeRegistryState(stats, expectedTickets);
+      return !analysis.needsReconciliation;
+    };
+
+    const processSignature = async (
+      signatureInfo: anchor.web3.ConfirmedSignatureInfo,
+    ): Promise<RegistryEvent[]> => {
+      if (shouldStopProcessing) {
+        return [];
+      }
+
+      let transaction: anchor.web3.TransactionResponse | null;
+      try {
+        transaction = await this.options.connection.getTransaction(signatureInfo.signature, {
+          commitment: "confirmed",
+        });
+      } catch (error) {
+        logger.warning(
+          `Failed to fetch transaction ${signatureInfo.signature}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return [];
+      }
+
+      const logs = transaction?.meta?.logMessages;
+      if (!logs?.length) {
+        return [];
+      }
+
+      const events: RegistryEvent[] = [];
+      for (const event of parser.parseLogs(logs)) {
+        if (!event || typeof event !== "object") {
           continue;
         }
 
-        for (const event of parser.parseLogs(logs)) {
-          if (!event || typeof event !== "object") {
-            continue;
-          }
-
-          const { name, data } = event as { name?: string; data?: Record<string, unknown> };
-          if (!name || !data) {
-            continue;
-          }
-
-          if (name !== "playerJoined" && name !== "playerUnjoined") {
-            continue;
-          }
-
-          let eventGameKey: PublicKey;
-          try {
-            eventGameKey = ensurePublicKey(
-              (data["gameKey"] ?? data["game_key"] ?? data["game"] ?? null) as PublicKeyLike,
-            );
-          } catch (error) {
-            logger.warning(`Skipping player event with invalid game key: ${String(error)}`);
-            continue;
-          }
-          if (!eventGameKey.equals(gamePda)) {
-            continue;
-          }
-
-          const ticketIndex = resolveNumericLike(data["ticketIndex"] ?? data["ticket_index"]);
-          if (ticketIndex === undefined) {
-            continue;
-          }
-
-          if (ticketIndex < 0) {
-            continue;
-          }
-
-          if (name === "playerUnjoined") {
-            ticketAssignments.delete(ticketIndex);
-            continue;
-          }
-
-          let playerKey: PublicKey;
-          try {
-            playerKey = ensurePublicKey(
-              (data["player"] ?? data["playerAddress"] ?? data["player_address"] ?? null) as PublicKeyLike,
-            );
-          } catch (error) {
-            logger.warning(`Skipping player event with invalid player key: ${String(error)}`);
-            continue;
-          }
-
-          ticketAssignments.set(ticketIndex, playerKey.toBase58());
+        const { name, data } = event as { name?: string; data?: Record<string, unknown> };
+        if (!name || !data) {
+          continue;
         }
 
-        if (
-          expectedTickets !== undefined &&
-          ticketAssignments.size === expectedTickets
-        ) {
-          const { stats } = summarizeTicketAssignments(ticketAssignments);
-          const analysis = analyzeRegistryState(stats, expectedTickets);
-          if (!analysis.needsReconciliation) {
-            shouldStopProcessing = true;
-          }
+        if (name !== "playerJoined" && name !== "playerUnjoined") {
+          continue;
+        }
+
+        let eventGameKey: PublicKey;
+        try {
+          eventGameKey = ensurePublicKey(
+            (data["gameKey"] ?? data["game_key"] ?? data["game"] ?? null) as PublicKeyLike,
+          );
+        } catch (error) {
+          logger.warning(`Skipping player event with invalid game key: ${String(error)}`);
+          continue;
+        }
+        if (!eventGameKey.equals(gamePda)) {
+          continue;
+        }
+
+        const ticketIndex = resolveNumericLike(data["ticketIndex"] ?? data["ticket_index"]);
+        if (ticketIndex === undefined || ticketIndex < 0) {
+          continue;
+        }
+
+        if (name === "playerUnjoined") {
+          events.push({ kind: "unjoin", ticketIndex });
+          continue;
+        }
+
+        let playerKey: PublicKey;
+        try {
+          playerKey = ensurePublicKey(
+            (data["player"] ?? data["playerAddress"] ?? data["player_address"] ?? null) as PublicKeyLike,
+          );
+        } catch (error) {
+          logger.warning(`Skipping player event with invalid player key: ${String(error)}`);
+          continue;
+        }
+
+        events.push({ kind: "join", ticketIndex, playerAddress: playerKey.toBase58() });
+      }
+
+      return events;
+    };
+
+    const active = new Set<Promise<void>>();
+    const pendingResults = new Map<number, RegistryEvent[]>();
+    let nextIndexToApply = 0;
+
+    const applyEventsSequentially = (events: RegistryEvent[]) => {
+      if (shouldStopProcessing) {
+        return;
+      }
+
+      for (const event of events) {
+        if (event.kind === "unjoin") {
+          ticketAssignments.delete(event.ticketIndex);
+          continue;
+        }
+
+        ticketAssignments.set(event.ticketIndex, event.playerAddress);
+      }
+
+      if (isRegistrySatisfied()) {
+        shouldStopProcessing = true;
+      }
+    };
+
+    const tryApplyPending = () => {
+      while (!shouldStopProcessing && pendingResults.has(nextIndexToApply)) {
+        const events = pendingResults.get(nextIndexToApply) ?? [];
+        pendingResults.delete(nextIndexToApply);
+        applyEventsSequentially(events);
+        nextIndexToApply += 1;
+      }
+
+      if (shouldStopProcessing) {
+        while (pendingResults.has(nextIndexToApply)) {
+          pendingResults.delete(nextIndexToApply);
+          nextIndexToApply += 1;
         }
       }
+    };
+
+    const enqueue = (
+      signatureInfo: anchor.web3.ConfirmedSignatureInfo,
+      index: number,
+    ) => {
+      const task = processSignature(signatureInfo)
+        .then((events) => {
+          pendingResults.set(index, events);
+          tryApplyPending();
+        })
+        .finally(() => {
+          active.delete(task);
+        });
+      active.add(task);
+      return task;
+    };
+
+    for (const [index, signatureInfo] of signatures.entries()) {
+      if (shouldStopProcessing) {
+        break;
+      }
+
+      enqueue(signatureInfo, index);
+
+      if (active.size >= this.transactionConcurrency) {
+        await Promise.race(active);
+      }
     }
+
+    if (active.size > 0) {
+      await Promise.all(active);
+    }
+
+    tryApplyPending();
 
     if (ticketAssignments.size === 0) {
       return null;

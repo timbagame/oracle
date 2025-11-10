@@ -1,66 +1,24 @@
 import { describe, it, expect, spyOn } from "bun:test";
-import { ScanLoopRunner, type ScanLoopRunnerOptions } from "../oracle-scan-runner.ts";
-import type { OracleDatabase } from "../database.ts";
-import type { OracleMetrics } from "../metrics.ts";
+import { createScanRunnerFixture } from "./helpers/scan-runner-fixtures.ts";
 import * as delayModule from "../delay.ts";
-
-const createStubbedRunner = () => {
-  const touchCalls: string[] = [];
-  const attemptCalls: string[] = [];
-
-  const db = {
-    getPendingGames: () => [
-      { game_address: "game-1", completion_attempts: 0 },
-      { game_address: "game-2", completion_attempts: 0 },
-    ],
-    markGameCompleted: () => {},
-    touchGameCheck: (address: string) => {
-      touchCalls.push(address);
-    },
-  } as unknown as OracleDatabase;
-
-  const metrics: OracleMetrics = {
-    recordCompletion: () => {},
-    recordScanCycle: () => {},
-    recordCleanupSweep: () => {},
-  };
-
-  const completion: ScanLoopRunnerOptions["completion"] = {
-    resolveContextAndReadiness: async () => ({
-      status: "ready",
-      context: {} as any,
-      readiness: { ready: true, gameAccount: {} } as any,
-      prefetchScheduled: false,
-    }),
-    attemptGameCompletion: async (options: { gameAddress: string }) => {
-      attemptCalls.push(options.gameAddress);
-      if (attemptCalls.length === 1) {
-        return { success: false, notReady: true } as const;
-      }
-      return { success: true } as const;
-    },
-    consumeReadiness: () => undefined,
-    getBlockchainTime: async () => 123,
-  };
-
-  const runnerOptions: ScanLoopRunnerOptions = {
-    db,
-    metrics,
-    completion,
-    interGameDelayMs: 50,
-    maxCompletionAttempts: 5,
-    cleanupOldRecords: () => {},
-  };
-
-  const runner = new ScanLoopRunner(runnerOptions);
-
-  return { runner, touchCalls, attemptCalls };
-};
 
 describe("ScanLoopRunner abort handling", () => {
   it("stops iteration when aborted during inter-game delay", async () => {
     const abortController = new AbortController();
-  const { runner, touchCalls, attemptCalls } = createStubbedRunner();
+
+    const { runner, touchCalls, attemptCalls } = createScanRunnerFixture({
+      pendingGames: () => [
+        { game_address: "game-1", completion_attempts: 0 },
+        { game_address: "game-2", completion_attempts: 0 },
+      ],
+      interGameDelayMs: 50,
+      attemptGameCompletion: async () => {
+        if (attemptCalls.length === 1) {
+          return { success: false, notReady: true };
+        }
+        return { success: true };
+      },
+    });
 
     const delaySpy = spyOn(delayModule, "delay").mockImplementation(
       async (_ms, options) => {
@@ -70,7 +28,9 @@ describe("ScanLoopRunner abort handling", () => {
     );
 
     try {
-      const stats = await runner.scanAndCompleteActiveGames({ signal: abortController.signal });
+      const stats = await runner.scanAndCompleteActiveGames({
+        signal: abortController.signal,
+      });
 
       expect(stats).toEqual({ completed: 0, errors: 0, notReady: 1 });
       expect(attemptCalls).toEqual(["game-1"]);
@@ -84,39 +44,10 @@ describe("ScanLoopRunner abort handling", () => {
 
 describe("ScanLoopRunner run-loop waiting", () => {
   it("skips inter-cycle delays when waitForPendingOnly is true and stats report nothing to retry", async () => {
-    const db = {
-      getPendingGames: () => [],
-      markGameCompleted: () => {},
-      touchGameCheck: () => {},
-    } as unknown as OracleDatabase;
-
-    const metrics: OracleMetrics = {
-      recordCompletion: () => {},
-      recordScanCycle: () => {},
-      recordCleanupSweep: () => {},
-    };
-
-    const completion: ScanLoopRunnerOptions["completion"] = {
-      resolveContextAndReadiness: async () => ({
-        status: "ready",
-        context: {} as any,
-        readiness: { ready: true, gameAccount: {} } as any,
-        prefetchScheduled: false,
-      }),
-      attemptGameCompletion: async () => {
-        return { success: true };
-      },
-      consumeReadiness: () => undefined,
-      getBlockchainTime: async () => 123,
-    };
-
-    const runner = new ScanLoopRunner({
-      db,
-      metrics,
-      completion,
+    const { runner } = createScanRunnerFixture({
+      pendingGames: () => [],
       interGameDelayMs: 0,
-      maxCompletionAttempts: 5,
-      cleanupOldRecords: () => {},
+      attemptGameCompletion: async () => ({ success: true }),
     });
 
     const scanSpy = spyOn(runner, "scanAndCompleteActiveGames").mockResolvedValue({
@@ -131,7 +62,7 @@ describe("ScanLoopRunner run-loop waiting", () => {
       await runner.runScanLoop({
         waitBetweenCyclesMs: 10,
         waitForPendingOnly: true,
-        shouldContinue: (_stats, cycle) => cycle < 2,
+        shouldContinue: (_stats: unknown, cycle: number) => cycle < 2,
       });
 
       expect(scanSpy).toHaveBeenCalledTimes(2);

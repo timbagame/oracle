@@ -31,6 +31,8 @@ const SQL_STATEMENTS = Object.freeze({
     "UPDATE game_tracking SET status = ?, completed_at = NULL, last_checked = ? WHERE game_address = ?",
 } satisfies Record<string, string>);
 
+const COMPLETED_GAME_PREDICATE = "status != ? AND completed_at IS NOT NULL AND completed_at < ?";
+
 const SQL_QUERIES = Object.freeze({
   selectSecretKey:
     "SELECT secret_key, random_hash FROM secret_keys WHERE game_address = ? AND used = FALSE",
@@ -56,7 +58,6 @@ const SQL_QUERIES = Object.freeze({
     "SELECT COUNT(*) as count, MAX(ticket_index) as max_index, MIN(ticket_index) as min_index FROM game_players WHERE game_address = ?",
 } satisfies Record<string, string>);
 
-const COMPLETED_GAME_PREDICATE = "status != ? AND completed_at IS NOT NULL AND completed_at < ?";
 const COMPLETED_GAME_SUBQUERY = `
   SELECT game_address FROM game_tracking
   WHERE ${COMPLETED_GAME_PREDICATE}
@@ -307,13 +308,6 @@ export class OracleDatabase {
     }, errorMessage);
   }
 
-  private runInTransaction<T>(operation: () => T, errorMessage: string): T {
-    return this.executeDbOperation(() => {
-      const transaction = this.db.transaction(operation);
-      return transaction();
-    }, errorMessage);
-  }
-
   private runDelete(
     sql: string,
     errorMessage: string,
@@ -323,6 +317,13 @@ export class OracleDatabase {
       const stmt = this.getPreparedStatement(sql);
       const result = stmt.run(...params);
       return typeof result?.changes === "number" ? result.changes : 0;
+    }, errorMessage);
+  }
+
+  private runInTransaction<T>(operation: () => T, errorMessage: string): T {
+    return this.executeDbOperation(() => {
+      const transaction = this.db.transaction(operation);
+      return transaction();
     }, errorMessage);
   }
 
@@ -650,10 +651,9 @@ export class OracleDatabase {
       return { deletedSecrets: 0, deletedGames: 0, deletedPlayers: 0 };
     }
 
-    try {
-      const cutoffTime = Date.now() - hoursOld * 60 * 60 * 1000;
+    const cutoffTime = Date.now() - hoursOld * 60 * 60 * 1000;
 
-      // Clean up old secret keys that have already been used or whose game is finished.
+    const cleanupWork = () => {
       const deletedSecrets = this.runDelete(
         `DELETE FROM secret_keys
          WHERE created_at < ?
@@ -678,7 +678,6 @@ export class OracleDatabase {
         cutoffTime
       );
 
-      // Clean up old game tracking records (completed/cancelled games older than cutoff)
       const deletedGames = this.runDelete(
         DELETE_COMPLETED_GAMES_SQL,
         "Failed to delete old game tracking rows",
@@ -697,6 +696,10 @@ export class OracleDatabase {
       );
 
       return deletedCounts;
+    };
+
+    try {
+      return this.runInTransaction(cleanupWork, "Failed to cleanup old records");
     } catch (error) {
       logger.failure("Failed to cleanup old records:", error);
       return { deletedSecrets: 0, deletedGames: 0, deletedPlayers: 0 };
