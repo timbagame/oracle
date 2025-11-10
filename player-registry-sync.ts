@@ -257,13 +257,6 @@ export class PlayerRegistrySync {
       options.maxSignatures !== undefined && Number.isFinite(options.maxSignatures)
         ? Math.max(0, Math.floor(options.maxSignatures))
         : undefined;
-    const expectedSignatureHint =
-      options.expectedTickets !== undefined &&
-      Number.isFinite(options.expectedTickets) &&
-      options.expectedTickets > 0
-        ? Math.max(0, Math.floor(options.expectedTickets))
-        : undefined;
-
     const collected: anchor.web3.ConfirmedSignatureInfo[] = [];
     let before: string | undefined;
 
@@ -274,10 +267,6 @@ export class PlayerRegistrySync {
 
       const remainingByMax =
         finiteMaxSignatures !== undefined ? Math.max(0, finiteMaxSignatures - collected.length) : undefined;
-      const remainingByHint =
-        expectedSignatureHint !== undefined
-          ? Math.max(0, expectedSignatureHint - collected.length)
-          : undefined;
 
       if (remainingByMax === 0) {
         break;
@@ -286,10 +275,6 @@ export class PlayerRegistrySync {
       let limit = this.batchSize;
       if (remainingByMax !== undefined) {
         limit = Math.min(limit, Math.max(1, remainingByMax));
-      }
-
-      if (remainingByHint !== undefined && remainingByHint > 0) {
-        limit = Math.min(limit, Math.max(1, remainingByHint));
       }
 
       const page = await this.options.connection.getSignaturesForAddress(gamePda, {

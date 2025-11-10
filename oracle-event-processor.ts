@@ -42,17 +42,15 @@ export class OracleEventProcessor {
   public clearRetryTimeout: (timer: ReturnType<typeof setTimeout>) => void;
 
   constructor(private readonly options: OracleEventProcessorOptions) {
-    this.scheduleRetryTimeout =
-      options.setTimeoutFn ?? ((callback, delay) => setTimeout(callback, delay));
-    this.clearRetryTimeout =
-      options.clearTimeoutFn ?? ((timer) => clearTimeout(timer));
+    this.scheduleRetryTimeout = options.setTimeoutFn ?? setTimeout;
+    this.clearRetryTimeout = options.clearTimeoutFn ?? ((timer) => clearTimeout(timer));
     this.registrySyncRetryDelayMs =
       options.registrySyncRetryDelayMs ?? DEFAULT_REGISTRY_SYNC_RETRY_DELAY_MS;
     if (options.syncPlayerRegistry) {
       this.registrySyncScheduler = new RegistrySyncScheduler(
         options.syncPlayerRegistry,
         this.registrySyncRetryDelayMs,
-        (...args) => this.scheduleRetryTimeout(...args),
+        (callback, delay) => this.scheduleRetryTimeout(callback, delay),
         (timer) => this.clearRetryTimeout(timer),
       );
     }
@@ -385,8 +383,8 @@ class RegistrySyncScheduler {
   constructor(
     private readonly syncFn: (options: RegistrySyncScheduleOptions) => Promise<boolean>,
     private readonly retryDelayMs: number,
-    private readonly setTimer: typeof setTimeout,
-    private readonly clearTimer: typeof clearTimeout,
+    private readonly setTimer: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>,
+    private readonly clearTimer: (timer: ReturnType<typeof setTimeout>) => void,
   ) {}
 
   public schedule(options: RegistrySyncScheduleOptions): void {
@@ -454,7 +452,18 @@ class RegistrySyncScheduler {
         }
 
         if (!success) {
-          entry.retryPending = next;
+          let pending = next;
+          if (entry.queue.length > 0) {
+            for (const queued of entry.queue) {
+              pending = this.mergeScheduleOptions(pending, queued);
+            }
+          }
+
+          if (entry.retryPending) {
+            pending = this.mergeScheduleOptions(entry.retryPending, pending);
+          }
+
+          entry.retryPending = pending;
           entry.queue.length = 0;
           return;
         }
@@ -484,7 +493,7 @@ class RegistrySyncScheduler {
     entry.timer = this.setTimer(() => {
       entry.timer = undefined;
       if (entry.retryPending) {
-        entry.queue.push(entry.retryPending);
+        entry.queue.push({ ...entry.retryPending });
         entry.retryPending = undefined;
       }
 
