@@ -56,6 +56,10 @@ export class OracleEventProcessor {
     }
   }
 
+  public clearRegistrySyncs(): void {
+    this.registrySyncScheduler?.clearAll();
+  }
+
   private async runEventMutation(
     eventType: string,
     handler: () => void | Promise<void>,
@@ -487,6 +491,15 @@ class RegistrySyncScheduler {
 
   public hasPendingEntry(gameAddress: string): boolean {
     return this.entries.has(gameAddress);
+  }
+
+  public clearAll(): void {
+    for (const entry of this.entries.values()) {
+      if (entry.timer !== undefined) {
+        this.clearTimer(entry.timer);
+      }
+    }
+    this.entries.clear();
   }
 }
 

@@ -251,6 +251,44 @@ describe("PlayerRegistrySync", () => {
     expect(players).toBeNull();
   });
 
+  it("never requests zero signatures when expectedTickets is specified", async () => {
+    const gamePda = Keypair.generate().publicKey;
+    const player = Keypair.generate().publicKey;
+    const requestedLimits: number[] = [];
+
+    const connection = {
+      async getSignaturesForAddress(_address: PublicKey, config?: { limit?: number }) {
+        requestedLimits.push(config?.limit ?? 0);
+        return [{ signature: "sig-1" } as anchor.web3.ConfirmedSignatureInfo];
+      },
+      async getTransaction() {
+        return { meta: { logMessages: ["dummy"] } } as const;
+      },
+    } as unknown as anchor.web3.Connection;
+
+    const sync = createSync(
+      [[
+        {
+          name: "playerJoined",
+          data: {
+            gameKey: gamePda,
+            player,
+            ticketIndex: 0,
+          },
+        },
+      ]],
+      { connection }
+    );
+
+    const players = await sync.fetchPlayersFromChain({
+      gamePda,
+      expectedTickets: 1,
+    });
+
+    expect(players).toEqual([player.toBase58()]);
+    expect(requestedLimits.every((limit) => limit > 0)).toBe(true);
+  });
+
   it("honors maxSignatures limits when paging signatures", async () => {
     const gamePda = Keypair.generate().publicKey;
     const player = Keypair.generate().publicKey;

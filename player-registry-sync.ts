@@ -230,24 +230,38 @@ export class PlayerRegistrySync {
       options.maxSignatures !== undefined && Number.isFinite(options.maxSignatures)
         ? Math.max(0, Math.floor(options.maxSignatures))
         : undefined;
+    const targetSignatures =
+      options.expectedTickets !== undefined &&
+      Number.isFinite(options.expectedTickets) &&
+      options.expectedTickets > 0
+        ? Math.max(0, Math.floor(options.expectedTickets))
+        : undefined;
     const collected: anchor.web3.ConfirmedSignatureInfo[] = [];
     let before: string | undefined;
 
     for (let batch = 0; batch < this.maxBatches; batch++) {
-      if (finiteMaxSignatures !== undefined && collected.length >= finiteMaxSignatures) {
+      if (
+        (finiteMaxSignatures !== undefined && collected.length >= finiteMaxSignatures) ||
+        (targetSignatures !== undefined && collected.length >= targetSignatures)
+      ) {
         break;
       }
 
       const remainingByMax =
         finiteMaxSignatures !== undefined ? Math.max(0, finiteMaxSignatures - collected.length) : undefined;
+      const remainingByTarget =
+        targetSignatures !== undefined ? Math.max(0, targetSignatures - collected.length) : undefined;
 
-      if (remainingByMax === 0) {
+      if (remainingByMax === 0 || remainingByTarget === 0) {
         break;
       }
 
       let limit = this.batchSize;
       if (remainingByMax !== undefined) {
         limit = Math.min(limit, Math.max(1, remainingByMax));
+      }
+      if (remainingByTarget !== undefined) {
+        limit = Math.min(limit, Math.max(1, remainingByTarget));
       }
 
       const page = await this.options.connection.getSignaturesForAddress(gamePda, {
