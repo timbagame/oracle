@@ -241,8 +241,8 @@ export class PlayerRegistrySync {
 
     for (let batch = 0; batch < this.maxBatches; batch++) {
       if (
-        (finiteMaxSignatures !== undefined && collected.length >= finiteMaxSignatures) ||
-        (targetSignatures !== undefined && collected.length >= targetSignatures)
+        finiteMaxSignatures !== undefined &&
+        collected.length >= finiteMaxSignatures
       ) {
         break;
       }
@@ -252,15 +252,11 @@ export class PlayerRegistrySync {
       const remainingByTarget =
         targetSignatures !== undefined ? Math.max(0, targetSignatures - collected.length) : undefined;
 
-      if (remainingByMax === 0 || remainingByTarget === 0) {
-        break;
-      }
-
       let limit = this.batchSize;
       if (remainingByMax !== undefined) {
         limit = Math.min(limit, Math.max(1, remainingByMax));
       }
-      if (remainingByTarget !== undefined) {
+      if (remainingByTarget !== undefined && remainingByTarget > 0) {
         limit = Math.min(limit, Math.max(1, remainingByTarget));
       }
 
