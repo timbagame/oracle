@@ -1,6 +1,16 @@
 import { describe, expect, it } from "bun:test";
 import { RegistrySyncScheduler } from "../oracle-event-processor.ts";
 
+const waitFor = async (predicate: () => boolean, label: string, limit = 1000) => {
+  for (let i = 0; i < limit; i++) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error(`${label} timed out`);
+};
+
 describe("RegistrySyncScheduler", () => {
   it("keeps queued requests when a retry timer is pending", async () => {
     const timerCallbacks: Array<() => void> = [];
@@ -24,15 +34,11 @@ describe("RegistrySyncScheduler", () => {
 
     expect(syncCalls).toEqual(["first"]);
 
-    while (timerCallbacks.length === 0) {
-      await Promise.resolve();
-    }
+    await waitFor(() => timerCallbacks.length > 0, "timer callback");
     const timer = timerCallbacks.shift();
     expect(timer).toBeDefined();
     timer?.();
-    while (syncCalls.length < 3) {
-      await Promise.resolve();
-    }
+    await waitFor(() => syncCalls.length >= 3, "syncCalls");
 
     expect(syncCalls).toEqual(["first", "second", "first"]);
   });
@@ -69,15 +75,11 @@ describe("RegistrySyncScheduler", () => {
     await Promise.resolve();
 
     scheduler.schedule({ gameAddress: "race", trigger: "third" });
-    while (timerCallbacks.length === 0) {
-      await Promise.resolve();
-    }
+    await waitFor(() => timerCallbacks.length > 0, "timer callback");
     const timer = timerCallbacks.shift();
     timer?.();
 
-    while (syncCalls.length < 3) {
-      await Promise.resolve();
-    }
+    await waitFor(() => syncCalls.length >= 3, "syncCalls");
 
     expect(syncCalls).toEqual(["first", "second", "third"]);
   });
