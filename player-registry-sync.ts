@@ -60,6 +60,10 @@ export class PlayerRegistrySync {
     const ticketAssignments = new Map<number, string>();
     let shouldStopProcessing = false;
 
+    type RegistryEvent =
+      | { kind: "join"; ticketIndex: number; playerAddress: string }
+      | { kind: "unjoin"; ticketIndex: number };
+
     const evaluateRegistryState = () => {
       if (expectedTickets === undefined) {
         return false;
@@ -74,9 +78,11 @@ export class PlayerRegistrySync {
       return false;
     };
 
-    const processSignature = async (signatureInfo: anchor.web3.ConfirmedSignatureInfo) => {
+    const processSignature = async (
+      signatureInfo: anchor.web3.ConfirmedSignatureInfo,
+    ): Promise<RegistryEvent[]> => {
       if (shouldStopProcessing) {
-        return;
+        return [];
       }
 
       let transaction: anchor.web3.TransactionResponse | null;
@@ -88,19 +94,16 @@ export class PlayerRegistrySync {
         logger.warning(
           `Failed to fetch transaction ${signatureInfo.signature}: ${error instanceof Error ? error.message : String(error)}`,
         );
-        return;
+        return [];
       }
 
       const logs = transaction?.meta?.logMessages;
       if (!logs?.length) {
-        return;
+        return [];
       }
 
+      const events: RegistryEvent[] = [];
       for (const event of parser.parseLogs(logs)) {
-        if (shouldStopProcessing) {
-          break;
-        }
-
         if (!event || typeof event !== "object") {
           continue;
         }
@@ -133,8 +136,7 @@ export class PlayerRegistrySync {
         }
 
         if (name === "playerUnjoined") {
-          ticketAssignments.delete(ticketIndex);
-          evaluateRegistryState();
+          events.push({ kind: "unjoin", ticketIndex });
           continue;
         }
 
@@ -148,29 +150,77 @@ export class PlayerRegistrySync {
           continue;
         }
 
-        ticketAssignments.set(ticketIndex, playerKey.toBase58());
+        events.push({ kind: "join", ticketIndex, playerAddress: playerKey.toBase58() });
+      }
+
+      return events;
+    };
+
+    const active = new Set<Promise<void>>();
+    const pendingResults = new Map<number, RegistryEvent[]>();
+    let nextIndexToApply = 0;
+
+    const applyEventsSequentially = (events: RegistryEvent[]) => {
+      if (shouldStopProcessing) {
+        return;
+      }
+
+      for (const event of events) {
+        if (shouldStopProcessing) {
+          break;
+        }
+
+        if (event.kind === "unjoin") {
+          ticketAssignments.delete(event.ticketIndex);
+          evaluateRegistryState();
+          continue;
+        }
+
+        ticketAssignments.set(event.ticketIndex, event.playerAddress);
         if (evaluateRegistryState()) {
           break;
         }
       }
     };
 
-    const active = new Set<Promise<void>>();
+    const tryApplyPending = () => {
+      while (!shouldStopProcessing && pendingResults.has(nextIndexToApply)) {
+        const events = pendingResults.get(nextIndexToApply) ?? [];
+        pendingResults.delete(nextIndexToApply);
+        applyEventsSequentially(events);
+        nextIndexToApply += 1;
+      }
 
-    const enqueue = (signatureInfo: anchor.web3.ConfirmedSignatureInfo) => {
-      const task = processSignature(signatureInfo).finally(() => {
-        active.delete(task);
-      });
+      if (shouldStopProcessing) {
+        while (pendingResults.has(nextIndexToApply)) {
+          pendingResults.delete(nextIndexToApply);
+          nextIndexToApply += 1;
+        }
+      }
+    };
+
+    const enqueue = (
+      signatureInfo: anchor.web3.ConfirmedSignatureInfo,
+      index: number,
+    ) => {
+      const task = processSignature(signatureInfo)
+        .then((events) => {
+          pendingResults.set(index, events);
+          tryApplyPending();
+        })
+        .finally(() => {
+          active.delete(task);
+        });
       active.add(task);
       return task;
     };
 
-    for (const signatureInfo of signatures) {
+    for (const [index, signatureInfo] of signatures.entries()) {
       if (shouldStopProcessing) {
         break;
       }
 
-      enqueue(signatureInfo);
+      enqueue(signatureInfo, index);
 
       if (active.size >= this.transactionConcurrency) {
         await Promise.race(active);
@@ -180,6 +230,8 @@ export class PlayerRegistrySync {
     if (active.size > 0) {
       await Promise.all(active);
     }
+
+    tryApplyPending();
 
     if (ticketAssignments.size === 0) {
       return null;
