@@ -96,6 +96,45 @@ function createManager(overrides: {
   };
 }
 
+describe("GameCompletionManager registry prefetch cleanup", () => {
+  it("resets the prefetched player schedule when a desync occurs", async () => {
+    const { manager } = createManager();
+    const spy = spyOn(manager, "resetRegistryPrefetchSchedule");
+
+    const gamePda = Keypair.generate().publicKey;
+    const context: GameOnChainContext = {
+      gamePda,
+      randomHashBuffer: Buffer.alloc(32),
+      secretData: { secretKey: "", randomHash: "" },
+    };
+
+    const gameAccount = {
+      creator: Keypair.generate().publicKey,
+      tokenMint: Keypair.generate().publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      timeout: BigInt(60),
+      createdAt: BigInt(0),
+      lastSlot: BigInt(1),
+      ticketsCount: BigInt(2),
+      maxTickets: BigInt(2),
+      minTickets: BigInt(2),
+    } as TimbaGameAccount;
+
+    const readiness: GameReadinessSnapshot = {
+      ready: true,
+      evaluatedAt: 0,
+      gameAccount,
+    };
+
+    await expect(
+      (manager as any).ensurePlayersInSync("bad-game", context, readiness, 2),
+    ).resolves.toMatchObject({ error: expect.anything() });
+
+    expect(spy).toHaveBeenCalledWith("bad-game");
+    spy.mockRestore();
+  });
+});
+
 describe("GameCompletionManager.evaluateGameReadiness", () => {
   it("treats block time equal to the timeout boundary as expired when minimum tickets are met", async () => {
     const { manager } = createManager();

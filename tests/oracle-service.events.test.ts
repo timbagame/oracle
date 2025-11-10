@@ -234,7 +234,7 @@ describe("OracleService event handling", () => {
     deferred.resolve(true);
     await Promise.all([first, second]);
 
-    expect(syncCalls).toHaveLength(1);
+    expect(syncCalls).toHaveLength(2);
   });
 
   it("retries player registry sync when a pending request arrives during a failed attempt", async () => {
@@ -360,7 +360,9 @@ describe("OracleService event handling", () => {
 
     expect(syncCalls).toHaveLength(3);
     expect(timers).toHaveLength(0);
-    expect((processor as any).registrySyncPending.size).toBe(0);
+    expect(
+      (processor as any).registrySyncScheduler?.hasPendingEntry(gameAddress),
+    ).toBe(false);
   });
 
   it("ignores player events with missing data", async () => {

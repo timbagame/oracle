@@ -8,13 +8,13 @@ import { getEnvironmentMode, isTestEnvironment } from "./env.ts";
 import { getConfig, DEFAULT_ORACLE_PORT } from "./config.ts";
 import type { CompletionStats } from "./oracle-service.types.ts";
 import { logger } from "./logger.ts";
+import { normalizeGameType } from "./game-type.ts";
 
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
 const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = 5000;
 const IS_TEST_ENV = isTestEnvironment();
 const INTERNAL_SERVER_ERROR_MESSAGE = "Internal server error";
 const GAME_TYPE_FIELD = "gameType";
-const MAX_GAME_TYPE_LENGTH = 128;
 
 // CORS headers configuration
 const CORS_HEADERS = {
@@ -235,19 +235,19 @@ export function buildHandlers(oracle: OracleApi) {
           }
 
           const provided = body ? body[GAME_TYPE_FIELD] : undefined;
-          if (typeof provided === "string") {
-            const trimmed = provided.trim();
-            if (trimmed.length > 0) {
-              if (trimmed.length > MAX_GAME_TYPE_LENGTH) {
-                return createErrorResponse(
-                  `gameType must be at most ${MAX_GAME_TYPE_LENGTH} characters`,
-                  400,
-                );
-              }
-              gameType = trimmed;
+          if (provided !== undefined) {
+            if (typeof provided !== "string") {
+              return createErrorResponse("gameType must be a string", 400);
             }
-          } else if (provided !== undefined) {
-            return createErrorResponse("gameType must be a string", 400);
+
+            const normalized = normalizeGameType(provided);
+            if (normalized.error) {
+              return createErrorResponse(normalized.error, 400);
+            }
+
+            if (normalized.value) {
+              gameType = normalized.value;
+            }
           }
         }
 

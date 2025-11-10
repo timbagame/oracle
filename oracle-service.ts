@@ -141,6 +141,8 @@ export class OracleService {
       config: EVENT_HANDLER_CONFIG,
       clearTokenProgramCache: () => this.completion.clearTokenProgramCache(),
       syncPlayerRegistry: (options) => this.syncPlayerRegistry(options),
+      onGameFinalized: (gameAddress) =>
+        this.completion.resetRegistryPrefetchSchedule(gameAddress),
     });
   }
 
@@ -185,6 +187,7 @@ export class OracleService {
               await this.eventProcessor.startListening();
               logger.info(`Re-subscribed event listeners on ${endpoint}`);
             } catch (error) {
+              this.eventProcessor.clearRegistrySyncs();
               logger.failure(
                 `Failed to restart event listeners after switching to ${endpoint}:`,
                 error,

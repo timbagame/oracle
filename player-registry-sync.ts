@@ -46,7 +46,10 @@ export class PlayerRegistrySync {
 
   public async fetchPlayersFromChain(params: FetchRegistryParams): Promise<string[] | null> {
     const { gamePda, expectedTickets } = params;
-    const signatures = await this.collectSignatures(gamePda, params.maxSignatures);
+    const signatures = await this.collectSignatures(gamePda, {
+      maxSignatures: params.maxSignatures,
+      expectedTickets: params.expectedTickets,
+    });
 
     if (signatures.length === 0) {
       return null;
@@ -58,28 +61,15 @@ export class PlayerRegistrySync {
     const parser = this.createEventParser(program.programId, coder);
 
     const ticketAssignments = new Map<number, string>();
-    let shouldStopProcessing = false;
+    let sawUnjoinEvent = false;
 
     type RegistryEvent =
       | { kind: "join"; ticketIndex: number; playerAddress: string }
       | { kind: "unjoin"; ticketIndex: number };
 
-    const isRegistrySatisfied = () => {
-      if (expectedTickets === undefined) {
-        return false;
-      }
-
-      const { stats } = summarizeTicketAssignments(ticketAssignments);
-      const analysis = analyzeRegistryState(stats, expectedTickets);
-      return !analysis.needsReconciliation;
-    };
-
     const processSignature = async (
       signatureInfo: anchor.web3.ConfirmedSignatureInfo,
     ): Promise<RegistryEvent[]> => {
-      if (shouldStopProcessing) {
-        return [];
-      }
 
       let transaction: anchor.web3.TransactionResponse | null;
       try {
@@ -157,38 +147,27 @@ export class PlayerRegistrySync {
     let nextIndexToApply = 0;
 
     const applyEventsSequentially = (events: RegistryEvent[]) => {
-      if (shouldStopProcessing) {
-        return;
-      }
 
       for (const event of events) {
         if (event.kind === "unjoin") {
           ticketAssignments.delete(event.ticketIndex);
+          sawUnjoinEvent = true;
           continue;
         }
 
         ticketAssignments.set(event.ticketIndex, event.playerAddress);
       }
 
-      if (isRegistrySatisfied()) {
-        shouldStopProcessing = true;
-      }
     };
 
     const tryApplyPending = () => {
-      while (!shouldStopProcessing && pendingResults.has(nextIndexToApply)) {
+      while (pendingResults.has(nextIndexToApply)) {
         const events = pendingResults.get(nextIndexToApply) ?? [];
         pendingResults.delete(nextIndexToApply);
         applyEventsSequentially(events);
         nextIndexToApply += 1;
       }
 
-      if (shouldStopProcessing) {
-        while (pendingResults.has(nextIndexToApply)) {
-          pendingResults.delete(nextIndexToApply);
-          nextIndexToApply += 1;
-        }
-      }
     };
 
     const enqueue = (
@@ -208,9 +187,6 @@ export class PlayerRegistrySync {
     };
 
     for (const [index, signatureInfo] of signatures.entries()) {
-      if (shouldStopProcessing) {
-        break;
-      }
 
       enqueue(signatureInfo, index);
 
@@ -239,24 +215,50 @@ export class PlayerRegistrySync {
       return null;
     }
 
-    if (!analysis.expectedMatches) {
+    if (!analysis.expectedMatches && !sawUnjoinEvent) {
       return null;
     }
 
     return orderedEntries.map(([, address]) => address);
   }
 
-  private async collectSignatures(gamePda: PublicKey, maxSignatures?: number) {
+  private async collectSignatures(
+    gamePda: PublicKey,
+    options: { maxSignatures?: number; expectedTickets?: number } = {},
+  ) {
+    const finiteMaxSignatures =
+      options.maxSignatures !== undefined && Number.isFinite(options.maxSignatures)
+        ? Math.max(0, Math.floor(options.maxSignatures))
+        : undefined;
+    const targetSignatures =
+      options.expectedTickets !== undefined &&
+      Number.isFinite(options.expectedTickets) &&
+      options.expectedTickets > 0
+        ? Math.max(0, Math.floor(options.expectedTickets))
+        : undefined;
     const collected: anchor.web3.ConfirmedSignatureInfo[] = [];
     let before: string | undefined;
 
     for (let batch = 0; batch < this.maxBatches; batch++) {
-      if (maxSignatures !== undefined && collected.length >= maxSignatures) {
+      if (
+        finiteMaxSignatures !== undefined &&
+        collected.length >= finiteMaxSignatures
+      ) {
         break;
       }
 
-      const remaining = maxSignatures ? Math.max(1, maxSignatures - collected.length) : this.batchSize;
-      const limit = Math.min(this.batchSize, remaining);
+      const remainingByMax =
+        finiteMaxSignatures !== undefined ? Math.max(0, finiteMaxSignatures - collected.length) : undefined;
+      const remainingByTarget =
+        targetSignatures !== undefined ? Math.max(0, targetSignatures - collected.length) : undefined;
+
+      let limit = this.batchSize;
+      if (remainingByMax !== undefined) {
+        limit = Math.min(limit, Math.max(1, remainingByMax));
+      }
+      if (remainingByTarget !== undefined && remainingByTarget > 0) {
+        limit = Math.min(limit, Math.max(1, remainingByTarget));
+      }
 
       const page = await this.options.connection.getSignaturesForAddress(gamePda, {
         before,
