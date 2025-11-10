@@ -34,6 +34,20 @@ describe("index router", () => {
     expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
   });
 
+  test("OPTIONS handlers expose the full documented CORS headers", async () => {
+    const response = await context.router(
+      buildRequest("/generate-hash", { method: "OPTIONS" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(response.headers.get("Access-Control-Allow-Methods")).toBe(
+      "GET, POST, OPTIONS",
+    );
+    expect(response.headers.get("Access-Control-Allow-Headers")).toBe("Content-Type");
+    expect(response.headers.get("Content-Type")).toBe("application/json");
+  });
+
   test("GET /health returns JSON", async () => {
     const { response, json } = await executeJsonRequest(context.router, "/health", {
       method: "GET",

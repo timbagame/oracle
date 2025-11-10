@@ -85,4 +85,32 @@ describe("RpcEndpointManager", () => {
       },
     ]);
   });
+
+  test("propagates fatal RPC failures without switching endpoints", async () => {
+    class FatalConnection {
+      public constructor(
+        public readonly rpcEndpoint: string,
+        public readonly commitment: string,
+      ) {}
+
+      public async getBlockHeight(): Promise<number> {
+        const error = new Error("HTTP 400");
+        (error as { code?: number }).code = 400;
+        throw error;
+      }
+    }
+
+    const endpoints = ["https://rpc-a", "https://rpc-b"];
+    const connectionFactory = (
+      endpoint: string,
+      commitment: string,
+    ) => new FatalConnection(endpoint, commitment) as unknown as anchor.web3.Connection;
+
+    const manager = new RpcEndpointManager(endpoints, { connectionFactory });
+
+    await expect(manager.getConnection().getBlockHeight()).rejects.toThrow(
+      "HTTP 400",
+    );
+    expect(manager.getActiveEndpoint()).toBe(endpoints[0]);
+  });
 });

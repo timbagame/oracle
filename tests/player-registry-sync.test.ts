@@ -122,6 +122,40 @@ describe("PlayerRegistrySync", () => {
     expect(players).toBeNull();
   });
 
+  it("rejects registries that contain duplicate ticket indexes", async () => {
+    const gamePda = Keypair.generate().publicKey;
+    const playerOne = Keypair.generate().publicKey;
+    const playerTwo = Keypair.generate().publicKey;
+
+    const events: EventData[] = [
+      {
+        name: "playerJoined",
+        data: {
+          gameKey: gamePda,
+          player: playerOne,
+          ticketIndex: 0,
+        },
+      },
+      {
+        name: "playerJoined",
+        data: {
+          gameKey: gamePda,
+          player: playerTwo,
+          ticketIndex: 0,
+        },
+      },
+    ];
+
+    const sync = createSync([events]);
+
+    const players = await sync.fetchPlayersFromChain({
+      gamePda,
+      expectedTickets: 2,
+    });
+
+    expect(players).toBeNull();
+  });
+
   it("ignores negative ticket indexes in parsed events", async () => {
     const gamePda = Keypair.generate().publicKey;
     const player = Keypair.generate().publicKey;

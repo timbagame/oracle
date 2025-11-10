@@ -81,3 +81,64 @@ describe("ScanLoopRunner abort handling", () => {
     }
   });
 });
+
+describe("ScanLoopRunner run-loop waiting", () => {
+  it("skips inter-cycle delays when waitForPendingOnly is true and stats report nothing to retry", async () => {
+    const db = {
+      getPendingGames: () => [],
+      markGameCompleted: () => {},
+      touchGameCheck: () => {},
+    } as unknown as OracleDatabase;
+
+    const metrics: OracleMetrics = {
+      recordCompletion: () => {},
+      recordScanCycle: () => {},
+      recordCleanupSweep: () => {},
+    };
+
+    const completion: ScanLoopRunnerOptions["completion"] = {
+      resolveContextAndReadiness: async () => ({
+        status: "ready",
+        context: {} as any,
+        readiness: { ready: true, gameAccount: {} } as any,
+        prefetchScheduled: false,
+      }),
+      attemptGameCompletion: async () => {
+        return { success: true };
+      },
+      consumeReadiness: () => undefined,
+      getBlockchainTime: async () => 123,
+    };
+
+    const runner = new ScanLoopRunner({
+      db,
+      metrics,
+      completion,
+      interGameDelayMs: 0,
+      maxCompletionAttempts: 5,
+      cleanupOldRecords: () => {},
+    });
+
+    const scanSpy = spyOn(runner, "scanAndCompleteActiveGames").mockResolvedValue({
+      completed: 0,
+      errors: 0,
+      notReady: 0,
+    });
+
+    const delaySpy = spyOn(delayModule, "delay").mockImplementation(async () => {});
+
+    try {
+      await runner.runScanLoop({
+        waitBetweenCyclesMs: 10,
+        waitForPendingOnly: true,
+        shouldContinue: (_stats, cycle) => cycle < 2,
+      });
+
+      expect(scanSpy).toHaveBeenCalledTimes(2);
+      expect(delaySpy).not.toHaveBeenCalled();
+    } finally {
+      scanSpy.mockRestore();
+      delaySpy.mockRestore();
+    }
+  });
+});
