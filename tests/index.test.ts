@@ -72,6 +72,32 @@ describe("API handlers", () => {
     expect(receivedGameType).toBe("giveaway");
   });
 
+  it("rejects non-string gameType inputs", async () => {
+    let generateCalled = false;
+    const { handleGenerateHash } = buildHandlers(
+      createBasicOracle({
+        generateGameSecrets: () => {
+          generateCalled = true;
+          return { randomHash: "ignored", gameAddress: "ignored" };
+        },
+      })
+    );
+
+    const res = await handleGenerateHash(
+      new Request("http://localhost/generate-hash", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ gameType: 123 }),
+      })
+    );
+
+    expect(res.status).toBe(400);
+    const data = (await res.json()) as { success: boolean; error?: string };
+    expect(data.success).toBe(false);
+    expect(data.error).toContain("gameType");
+    expect(generateCalled).toBe(false);
+  });
+
   it("provides stats", async () => {
     const { handleStats } = buildHandlers(createBasicOracle());
     const res = await handleStats(new Request("http://localhost/stats", { method: "GET" }));

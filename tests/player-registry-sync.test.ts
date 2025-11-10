@@ -22,7 +22,9 @@ function createSync(
     idl: {},
   } as const;
 
-  const signatures = [{ signature: "sig-1" }] as Array<anchor.web3.ConfirmedSignatureInfo>;
+  const signatures = eventsPerTransaction.map(
+    (_, index) => ({ signature: `sig-${index + 1}` } as anchor.web3.ConfirmedSignatureInfo),
+  );
   let signatureCalls = 0;
   let parseIndex = 0;
 
@@ -154,6 +156,50 @@ describe("PlayerRegistrySync", () => {
     });
 
     expect(players).toBeNull();
+  });
+
+  it("applies playerUnjoined events after the registry initially looks satisfied", async () => {
+    const gamePda = Keypair.generate().publicKey;
+    const playerOne = Keypair.generate().publicKey;
+    const playerTwo = Keypair.generate().publicKey;
+
+    const firstSignatureEvents: EventData[] = [
+      {
+        name: "playerJoined",
+        data: {
+          gameKey: gamePda,
+          player: playerOne,
+          ticketIndex: 0,
+        },
+      },
+      {
+        name: "playerJoined",
+        data: {
+          gameKey: gamePda,
+          player: playerTwo,
+          ticketIndex: 1,
+        },
+      },
+    ];
+
+    const secondSignatureEvents: EventData[] = [
+      {
+        name: "playerUnjoined",
+        data: {
+          gameKey: gamePda,
+          ticketIndex: 0,
+        },
+      },
+    ];
+
+    const sync = createSync([firstSignatureEvents, secondSignatureEvents]);
+
+    const players = await sync.fetchPlayersFromChain({
+      gamePda,
+      expectedTickets: 2,
+    });
+
+    expect(players).toEqual([playerTwo.toBase58()]);
   });
 
   it("ignores negative ticket indexes in parsed events", async () => {

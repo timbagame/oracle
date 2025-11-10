@@ -61,28 +61,15 @@ export class PlayerRegistrySync {
     const parser = this.createEventParser(program.programId, coder);
 
     const ticketAssignments = new Map<number, string>();
-    let shouldStopProcessing = false;
+    let sawUnjoinEvent = false;
 
     type RegistryEvent =
       | { kind: "join"; ticketIndex: number; playerAddress: string }
       | { kind: "unjoin"; ticketIndex: number };
 
-    const isRegistrySatisfied = () => {
-      if (expectedTickets === undefined) {
-        return false;
-      }
-
-      const { stats } = summarizeTicketAssignments(ticketAssignments);
-      const analysis = analyzeRegistryState(stats, expectedTickets);
-      return !analysis.needsReconciliation;
-    };
-
     const processSignature = async (
       signatureInfo: anchor.web3.ConfirmedSignatureInfo,
     ): Promise<RegistryEvent[]> => {
-      if (shouldStopProcessing) {
-        return [];
-      }
 
       let transaction: anchor.web3.TransactionResponse | null;
       try {
@@ -160,38 +147,27 @@ export class PlayerRegistrySync {
     let nextIndexToApply = 0;
 
     const applyEventsSequentially = (events: RegistryEvent[]) => {
-      if (shouldStopProcessing) {
-        return;
-      }
 
       for (const event of events) {
         if (event.kind === "unjoin") {
           ticketAssignments.delete(event.ticketIndex);
+          sawUnjoinEvent = true;
           continue;
         }
 
         ticketAssignments.set(event.ticketIndex, event.playerAddress);
       }
 
-      if (isRegistrySatisfied()) {
-        shouldStopProcessing = true;
-      }
     };
 
     const tryApplyPending = () => {
-      while (!shouldStopProcessing && pendingResults.has(nextIndexToApply)) {
+      while (pendingResults.has(nextIndexToApply)) {
         const events = pendingResults.get(nextIndexToApply) ?? [];
         pendingResults.delete(nextIndexToApply);
         applyEventsSequentially(events);
         nextIndexToApply += 1;
       }
 
-      if (shouldStopProcessing) {
-        while (pendingResults.has(nextIndexToApply)) {
-          pendingResults.delete(nextIndexToApply);
-          nextIndexToApply += 1;
-        }
-      }
     };
 
     const enqueue = (
@@ -211,9 +187,6 @@ export class PlayerRegistrySync {
     };
 
     for (const [index, signatureInfo] of signatures.entries()) {
-      if (shouldStopProcessing) {
-        break;
-      }
 
       enqueue(signatureInfo, index);
 
@@ -242,7 +215,7 @@ export class PlayerRegistrySync {
       return null;
     }
 
-    if (!analysis.expectedMatches) {
+    if (!analysis.expectedMatches && !sawUnjoinEvent) {
       return null;
     }
 
