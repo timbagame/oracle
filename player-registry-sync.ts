@@ -64,18 +64,14 @@ export class PlayerRegistrySync {
       | { kind: "join"; ticketIndex: number; playerAddress: string }
       | { kind: "unjoin"; ticketIndex: number };
 
-    const evaluateRegistryState = () => {
+    const isRegistrySatisfied = () => {
       if (expectedTickets === undefined) {
         return false;
       }
 
       const { stats } = summarizeTicketAssignments(ticketAssignments);
       const analysis = analyzeRegistryState(stats, expectedTickets);
-      if (!analysis.needsReconciliation) {
-        shouldStopProcessing = true;
-        return true;
-      }
-      return false;
+      return !analysis.needsReconciliation;
     };
 
     const processSignature = async (
@@ -166,20 +162,16 @@ export class PlayerRegistrySync {
       }
 
       for (const event of events) {
-        if (shouldStopProcessing) {
-          break;
-        }
-
         if (event.kind === "unjoin") {
           ticketAssignments.delete(event.ticketIndex);
-          evaluateRegistryState();
           continue;
         }
 
         ticketAssignments.set(event.ticketIndex, event.playerAddress);
-        if (evaluateRegistryState()) {
-          break;
-        }
+      }
+
+      if (isRegistrySatisfied()) {
+        shouldStopProcessing = true;
       }
     };
 
