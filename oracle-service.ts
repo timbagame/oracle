@@ -9,6 +9,7 @@ import { OracleEventProcessor, EVENT_HANDLER_CONFIG } from "./oracle-event-proce
 import { GameCompletionManager } from "./oracle-completion-manager.ts";
 import { ScanLoopRunner } from "./oracle-scan-runner.ts";
 import { logger } from "./logger.ts";
+import { createRebateAwareFetch } from "./helius-rebate-fetch.ts";
 import { RpcEndpointManager } from "./rpc-endpoints.ts";
 import {
   type AttemptGameCompletionOptions,
@@ -101,6 +102,10 @@ export class OracleService {
   }
 
   private initRpcEndpointManager(): RpcEndpointManager {
+    const rebateAwareFetch = createRebateAwareFetch(
+      globalThis.fetch,
+      process.env["HELIUS_REBATE_ADDRESS"],
+    );
     return new RpcEndpointManager(this.config.solanaNetworks, {
       commitment: "confirmed",
       logger: {
@@ -108,6 +113,11 @@ export class OracleService {
         warn: (...args: unknown[]) => logger.warn(...args),
         error: (...args: unknown[]) => logger.error(...args),
       },
+      connectionFactory: (endpoint, commitment) =>
+        new anchor.web3.Connection(endpoint, {
+          commitment,
+          fetch: rebateAwareFetch,
+        }),
     });
   }
 

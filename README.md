@@ -97,6 +97,10 @@ ORACLE_PORT=3001
 # configured keypair file is missing. This is automatically enabled during tests
 # and CI runs to avoid checking sensitive keys into the repository.
 # USE_FAKE_KEYPAIR=true
+
+# Optional: specify a SOL address to collect Helius post-trade rebates when
+# the oracle submits transactions through a Helius mainnet RPC endpoint.
+HELIUS_REBATE_ADDRESS=
 ```
 
 ## 📋 Usage Examples

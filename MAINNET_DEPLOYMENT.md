@@ -22,6 +22,7 @@ Edit `.env` with production values:
 SOLANA_NETWORK=["https://api.mainnet-beta.solana.com","https://rpc-backup.example.com"]
 ORACLE_PORT=3001                # optional
 ORACLE_KEYPAIR_PATH=./admin-keypair.json
+HELIUS_REBATE_ADDRESS=<SOL-address>  # Optional: receive Helius post-trade rebates when using a Helius mainnet RPC endpoint
 ```
 
 `SOLANA_NETWORK` accepts JSON arrays or comma-delimited strings; the oracle automatically advances through the ordered list when encountering retryable RPC errors.

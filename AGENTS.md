@@ -31,6 +31,6 @@
 - PRs: clear description, motivation, and testing notes; link issues; include commands to verify (e.g., `bunx tsc`, `bun start`, `curl /health`). Keep PRs small and reviewable.
 
 ## Security & Configuration Tips
-- Required env: `SOLANA_NETWORK` (JSON array or comma-separated RPC list), optional `ORACLE_PORT`. Use `env.example` as reference.
+- Required env: `SOLANA_NETWORK` (JSON array or comma-separated RPC list), optional `ORACLE_PORT`, optional `HELIUS_REBATE_ADDRESS` to opt into rebates when sending transactions through a Helius mainnet endpoint. Use `env.example` as reference.
 - Secrets: place `admin-keypair.json` at repo root; never commit `.env`, keypairs, or `*.sqlite` (already ignored).
 - Local DB: `oracle.sqlite` is for development/runtime; delete/regenerate as needed.

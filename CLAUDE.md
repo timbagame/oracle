@@ -67,6 +67,7 @@ Required environment variables in `.env`:
 ```bash
 SOLANA_NETWORK=["https://api.devnet.solana.com","https://rpc-backup.example.com"]  # Required (ordered list for fallback)
 ORACLE_PORT=3001                              # Optional (default: 3001)
+HELIUS_REBATE_ADDRESS=YourSolAddress          # Optional (mainnet only; opt-in for Helius rebate payouts)
 ```
 
 Required files:
