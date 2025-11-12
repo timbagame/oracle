@@ -27,6 +27,14 @@ type ActiveEndpointChangeListener = (
 ) => void | Promise<void>;
 
 export const DEFAULT_MAINNET_ENDPOINT = "https://api.mainnet-beta.solana.com";
+
+export function normalizeRpcEndpoint(endpoint: string): string {
+  const trimmed = endpoint.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
 const DEFAULT_COMMITMENT: Commitment = "confirmed";
 const TRANSIENT_ERROR_TOKENS = [
   "429",
@@ -98,9 +106,9 @@ export class RpcEndpointManager {
       throw new Error("At least one RPC endpoint is required");
     }
 
-    this.endpoints = Array.from(new Set(endpoints.map((url) => url.trim()))).filter(
-      (url) => url.length > 0,
-    );
+    this.endpoints = Array.from(
+      new Set(endpoints.map((url) => normalizeRpcEndpoint(url))),
+    ).filter((url) => url.length > 0);
 
     if (this.endpoints.length === 0) {
       throw new Error("SOLANA_NETWORK did not resolve to any RPC endpoints");
@@ -325,7 +333,7 @@ export function parseRpcEndpointList(
   const unique: string[] = [];
   const seen = new Set<string>();
   for (const endpoint of endpoints) {
-    const normalized = endpoint.trim();
+    const normalized = normalizeRpcEndpoint(endpoint);
     if (!normalized) {
       continue;
     }

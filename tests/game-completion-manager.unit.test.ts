@@ -13,12 +13,28 @@ import type {
 import { logger } from "../logger.ts";
 import type { TimbaGameAccount } from "../types/timba.ts";
 
+function createGameAccountStub(overrides: Partial<TimbaGameAccount> = {}): TimbaGameAccount {
+  return {
+    creator: overrides.creator ?? Keypair.generate().publicKey,
+    tokenMint: overrides.tokenMint ?? Keypair.generate().publicKey,
+    tokenProgram: overrides.tokenProgram ?? TOKEN_PROGRAM_ID,
+    ticketsCount: overrides.ticketsCount ?? BigInt(1),
+    maxTickets: overrides.maxTickets ?? BigInt(1),
+    minTickets: overrides.minTickets ?? BigInt(1),
+    lastSlot: overrides.lastSlot ?? BigInt(1),
+    timeout: overrides.timeout ?? BigInt(1),
+    createdAt: overrides.createdAt ?? BigInt(1),
+    ...overrides,
+  };
+}
+
 function createManager(overrides: {
   accountInfo?: (pubkey: PublicKey) => Promise<{ owner: PublicKey | null } | null>;
   programId?: PublicKey;
   secretKeyLength?: number;
   metrics?: Partial<OracleMetrics>;
   recoverPlayers?: GameCompletionManagerOptions["recoverPlayerRegistry"];
+  registryPrefetchCooldownMs?: number;
 } = {}) {
   const secretStore = new Map<string, { secretKey: string; randomHash: string }>();
   const players = new Map<string, string[]>();
@@ -85,6 +101,7 @@ function createManager(overrides: {
     markGameDesynced: (address: string) => {
       desyncedGames.add(address);
     },
+    registryPrefetchCooldownMs: overrides.registryPrefetchCooldownMs,
   });
 
   return {
@@ -135,6 +152,38 @@ describe("GameCompletionManager registry prefetch cleanup", () => {
 
     expect(spy).toHaveBeenCalledWith("bad-game");
     spy.mockRestore();
+  });
+
+  it("enforces a minimum registry prefetch cooldown even when configured zero", async () => {
+    const { manager } = createManager({
+      registryPrefetchCooldownMs: 0,
+      recoverPlayers: async () => [Keypair.generate().publicKey.toBase58()],
+    });
+
+    const context: GameOnChainContext = {
+      gamePda: Keypair.generate().publicKey,
+      secretData: { secretKey: "a".repeat(64), randomHash: "b".repeat(64) },
+      randomHashBuffer: Buffer.from("b".repeat(64), "hex"),
+    };
+    const readiness: GameReadinessSnapshot = {
+      ready: true,
+      gameAccount: createGameAccountStub({
+        ticketsCount: 1,
+        maxTickets: 1,
+        minTickets: 1,
+        lastSlot: 1,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      }),
+    };
+
+    const nowSpy = spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      await (manager as any).prefetchPlayerRegistry("cooldown-game", context, readiness);
+      const schedule = (manager as any).registryPrefetchSchedule.get("cooldown-game");
+      expect(schedule).toBe(2_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
 

@@ -46,6 +46,7 @@ export interface GameCompletionManagerOptions extends CoreOracleDependencies {
     reason: string;
   }) => Promise<string[] | null>;
   markGameDesynced?: (gameAddress: string) => void;
+  registryPrefetchCooldownMs?: number;
 }
 
 type CompletionCallbacks = {
@@ -56,11 +57,14 @@ type CompletionCallbacks = {
 
 export class GameCompletionManager {
   private readonly attemptedRegistryRecovery = new Set<string>();
-  private readonly registryPrefetchCooldownMs = 60_000;
+  private readonly registryPrefetchCooldownMs: number;
   private readonly registryPrefetchSchedule = new Map<string, number>();
   private readonly inFlightCompletions = new Set<string>();
 
-  constructor(private readonly options: GameCompletionManagerOptions) {}
+  constructor(private readonly options: GameCompletionManagerOptions) {
+    const configured = options.registryPrefetchCooldownMs ?? 60_000;
+    this.registryPrefetchCooldownMs = Math.max(1_000, configured);
+  }
 
   public async isGameReadyForCompletion(gamePda: PublicKey): Promise<boolean> {
     const normalized = ensurePublicKey(gamePda);

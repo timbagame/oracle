@@ -113,4 +113,14 @@ describe("RpcEndpointManager", () => {
     );
     expect(manager.getActiveEndpoint()).toBe(endpoints[0]!);
   });
+
+  test("normalizes endpoints before deduplication", () => {
+    const endpoints = ["https://rpc", "https://rpc/"];
+    const connectionFactory = (endpoint: string, commitment: string) =>
+      new FakeConnection(endpoint, commitment, false) as unknown as anchor.web3.Connection;
+
+    const manager = new RpcEndpointManager(endpoints, { connectionFactory });
+
+    expect(manager.getAllEndpoints()).toEqual(["https://rpc"]);
+  });
 });
