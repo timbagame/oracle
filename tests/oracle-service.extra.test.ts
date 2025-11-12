@@ -1268,6 +1268,46 @@ describe("OracleService internals", () => {
     expect(snapshot?.completion_attempts).toBe(0);
   });
 
+  it("requeueGame reopens finalized games and reactivates secrets", () => {
+    const service = OracleService.getInstance();
+    const db = OracleDatabase.getInstance();
+    resetPendingGames(db, { service });
+
+    const gameAddr = "requeue-finalized-reopen";
+    seedTrackedGame(db, {
+      address: gameAddr,
+      secret: "11".repeat(32),
+      randomHash: "22".repeat(32),
+    });
+
+    db.finalizeCompletedGame(gameAddr);
+
+    const sqlite = (db as any).db as {
+      prepare: (
+        sql: string,
+      ) => {
+        get: (
+          ...args: unknown[]
+        ) => { status: string; completion_attempts: number; completed_at: number | null } | undefined;
+      };
+    };
+
+    expect(db.getSecretKey(gameAddr)).toBeNull();
+
+    const result = service.requeueGame(gameAddr);
+    expect(result).toEqual({ success: true });
+
+    expect(db.getSecretKey(gameAddr)).not.toBeNull();
+
+    const snapshot = sqlite
+      .prepare("SELECT status, completion_attempts, completed_at FROM game_tracking WHERE game_address = ?")
+      .get(gameAddr);
+
+    expect(snapshot?.status).toBe("pending");
+    expect(snapshot?.completion_attempts).toBe(0);
+    expect(snapshot?.completed_at).toBeNull();
+  });
+
   it("requeueGame succeeds for fresh pending games with zero attempts", () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();

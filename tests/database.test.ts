@@ -141,7 +141,11 @@ describe("OracleDatabase", () => {
     const sqlite = (db as any).db as {
       prepare: (
         sql: string,
-      ) => { get: (...args: unknown[]) => { status: string; completion_attempts: number } | undefined };
+      ) => {
+        get: (
+          ...args: unknown[]
+        ) => { status: string; completion_attempts: number; completed_at?: number | null } | undefined;
+      };
     };
 
     const pending = "requeue-pending";
@@ -176,6 +180,15 @@ describe("OracleDatabase", () => {
       success: false,
       reason: "finalized",
     });
+
+    expect(db.resetCompletionAttempts(finalized, { allowFinalized: true })).toEqual({ success: true });
+
+    snapshot = sqlite
+      .prepare("SELECT status, completion_attempts, completed_at FROM game_tracking WHERE game_address = ?")
+      .get(finalized);
+    expect(snapshot?.status).toBe("pending");
+    expect(snapshot?.completion_attempts).toBe(0);
+    expect(snapshot?.completed_at).toBeNull();
 
     expect(db.resetCompletionAttempts("missing-game")).toEqual({
       success: false,

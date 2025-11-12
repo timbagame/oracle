@@ -426,8 +426,15 @@ export class OracleService {
       return { success: false, reason: "not-found" };
     }
 
-    if (status !== "pending" && status !== "desynced") {
+    const isPendingState = status === "pending" || status === "desynced";
+    const isFinalizedState = status === "completed" || status === "cancelled";
+
+    if (!isPendingState && !isFinalizedState) {
       return { success: false, reason: "finalized" };
+    }
+
+    if (isFinalizedState) {
+      this.db.reactivateSecretKey(normalized);
     }
 
     const secret = this.db.getSecretKey(normalized);
@@ -435,7 +442,9 @@ export class OracleService {
       return { success: false, reason: "missing-secret" };
     }
 
-    const resetResult = this.db.resetCompletionAttempts(normalized);
+    const resetResult = this.db.resetCompletionAttempts(normalized, {
+      allowFinalized: isFinalizedState,
+    });
     if (!resetResult.success) {
       return { success: false, reason: this.mapResetFailure(resetResult) };
     }

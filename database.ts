@@ -10,6 +10,7 @@ const SQL_STATEMENTS = Object.freeze({
   insertSecretKey:
     "INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)",
   markSecretKeyUsed: "UPDATE secret_keys SET used = TRUE WHERE game_address = ?",
+  reactivateSecretKey: "UPDATE secret_keys SET used = FALSE WHERE game_address = ?",
   deleteSecretKey: "DELETE FROM secret_keys WHERE game_address = ?",
   upsertGameTracking:
     "INSERT OR REPLACE INTO game_tracking (game_address, status, game_type, last_checked) VALUES (?, ?, ?, ?)",
@@ -20,7 +21,7 @@ const SQL_STATEMENTS = Object.freeze({
     "UPDATE game_tracking SET completion_attempts = completion_attempts + 1, last_checked = ? WHERE game_address = ?",
   touchPendingGame: "UPDATE game_tracking SET last_checked = ? WHERE game_address = ?",
   resetCompletionAttempts:
-    "UPDATE game_tracking SET status = ?, completion_attempts = 0, last_checked = ? WHERE game_address = ?",
+    "UPDATE game_tracking SET status = ?, completion_attempts = 0, completed_at = NULL, last_checked = ? WHERE game_address = ?",
   upsertGamePlayer:
     "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)",
   deleteGamePlayerByTicket:
@@ -399,6 +400,15 @@ export class OracleDatabase {
     );
   }
 
+  public reactivateSecretKey(gameAddress: string): boolean {
+    const result = this.runStatement(
+      SQL_STATEMENTS.reactivateSecretKey,
+      "Failed to reactivate secret key",
+      gameAddress,
+    );
+    return typeof result?.changes === "number" && result.changes > 0;
+  }
+
   // Game tracking
   public trackGame(
     gameAddress: string,
@@ -518,7 +528,11 @@ export class OracleDatabase {
     );
   }
 
-  public resetCompletionAttempts(gameAddress: string): ResetCompletionAttemptsResult {
+  public resetCompletionAttempts(
+    gameAddress: string,
+    options: { allowFinalized?: boolean } = {},
+  ): ResetCompletionAttemptsResult {
+    const allowFinalized = options.allowFinalized === true;
     const statusRecord = this.queryOne<{ status: string }>(
       SQL_QUERIES.selectGameStatus,
       "Failed to lookup existing game status",
@@ -530,7 +544,11 @@ export class OracleDatabase {
       return { success: false, reason: "not-found" };
     }
 
-    if (statusRecord.status !== DEFAULT_STATUS && statusRecord.status !== "desynced") {
+    const status = statusRecord.status;
+    const isPendingState = status === DEFAULT_STATUS || status === "desynced";
+    const isFinalizedState = status === "completed" || status === "cancelled";
+
+    if (!isPendingState && !(allowFinalized && isFinalizedState)) {
       return { success: false, reason: "finalized" };
     }
 
