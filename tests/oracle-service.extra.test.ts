@@ -28,6 +28,9 @@ import * as delayModule from "../delay.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 import { createProgramStub } from "./helpers/program-stub.ts";
 
+const TEST_INITIAL_BLOCKHASH = "11111111111111111111111111111111";
+const TEST_LATEST_BLOCKHASH = "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi";
+
 let OracleService: typeof import("../oracle-service.ts").OracleService;
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
 let cleanup: () => void;
@@ -113,14 +116,25 @@ const makeNotReadyResolution = (
   overrides: Parameters<typeof makeReadinessResolution>[1] = {},
 ): ReadinessResolution => makeReadinessResolution("not-ready", overrides);
 
+const createNoopInstruction = () =>
+  new anchor.web3.TransactionInstruction({
+    keys: [],
+    programId: anchor.web3.SystemProgram.programId,
+    data: Buffer.alloc(0),
+  });
+
 async function runExecuteGameCompletionScenario({
   tokenProgram,
   mintOwner,
   accountInfoImpl,
+  transactionFactory,
 }: {
   tokenProgram?: PublicKey | string | null;
   mintOwner?: PublicKey;
   accountInfoImpl?: (pubkey: PublicKey) => Promise<{ owner: PublicKey | null } | null>;
+  transactionFactory?: (context: { adminKeypair: anchor.web3.Keypair }) => Promise<
+    anchor.web3.Transaction | anchor.web3.VersionedTransaction
+  >;
 } = {}) {
   const service = OracleService.createWith(OracleDatabase.getInstance());
   const originalProgram = (service as any).program;
@@ -138,6 +152,7 @@ async function runExecuteGameCompletionScenario({
     confirmed?: { signature: string; blockhash?: string; lastValidBlockHeight?: number } | string;
     latestBlockhashCommitment?: string;
     sendOptions?: anchor.web3.SendOptions;
+    transactionUsed?: anchor.web3.Transaction | anchor.web3.VersionedTransaction;
   } = {};
   let directProgram: PublicKey | null = null;
 
@@ -164,7 +179,7 @@ async function runExecuteGameCompletionScenario({
     getAccountInfo,
     getLatestBlockhash: async (commitment?: string) => {
       calls.latestBlockhashCommitment = commitment;
-      return { blockhash: "test-bh", lastValidBlockHeight: 999 };
+      return { blockhash: TEST_LATEST_BLOCKHASH, lastValidBlockHeight: 999 };
     },
     sendRawTransaction: async (_raw: Buffer, options?: anchor.web3.SendOptions) => {
       calls.sendOptions = options;
@@ -176,6 +191,14 @@ async function runExecuteGameCompletionScenario({
   };
 
   (service as any).connection = mockConnection;
+
+  const defaultTransactionFactory = async ({ adminKeypair }: { adminKeypair: anchor.web3.Keypair }) => {
+    const tx = new anchor.web3.Transaction();
+    tx.add(createNoopInstruction());
+    tx.feePayer = adminKeypair.publicKey;
+    tx.recentBlockhash = TEST_INITIAL_BLOCKHASH;
+    return tx;
+  };
 
   const programStub = createProgramStub({
     programId,
@@ -191,7 +214,13 @@ async function runExecuteGameCompletionScenario({
                 signers: (signers: any[]) => {
                   calls.signers = signers;
                   return {
-                    transaction: async () => new anchor.web3.Transaction(),
+                    transaction: async () => {
+                      const factory = transactionFactory
+                        ?? defaultTransactionFactory;
+                      const tx = await factory({ adminKeypair });
+                      calls.transactionUsed = tx;
+                      return tx;
+                    },
                   };
                 },
               };
@@ -2045,9 +2074,28 @@ describe("OracleService internals", () => {
     expect(result.calls.signers).toEqual([result.adminKeypair]);
     expect(result.calls.confirmed).toMatchObject({
       signature: "tx-abc",
-      blockhash: "test-bh",
+      blockhash: TEST_LATEST_BLOCKHASH,
       lastValidBlockHeight: 999,
     });
+  });
+
+  it("executeGameCompletion sends versioned transactions via sendRawTransaction", async () => {
+    const result = await runExecuteGameCompletionScenario({
+      transactionFactory: async ({ adminKeypair }) => {
+        const message = new anchor.web3.TransactionMessage({
+          payerKey: adminKeypair.publicKey,
+          recentBlockhash: TEST_INITIAL_BLOCKHASH,
+          instructions: [createNoopInstruction()],
+        }).compileToV0Message();
+        return new anchor.web3.VersionedTransaction(message);
+      },
+    });
+
+    expect(result.tx).toBe("tx-abc");
+    expect(result.calls.transactionUsed).toBeInstanceOf(anchor.web3.VersionedTransaction);
+    if (result.calls.transactionUsed instanceof anchor.web3.VersionedTransaction) {
+      expect(result.calls.transactionUsed.message.recentBlockhash).toBe(TEST_LATEST_BLOCKHASH);
+    }
   });
 
   it("executeGameCompletion derives Token-2022 accounts when provided", async () => {
@@ -2144,5 +2192,23 @@ describe("OracleService internals", () => {
 
     await confirmTransaction(mockConnection, "sig-2", { blockhash: "provided", lastValidBlockHeight: 99 });
     expect(calls[1]).toEqual({ signature: "sig-2", blockhash: "provided", lastValidBlockHeight: 99 });
+  });
+
+  it("confirmTransaction uses provided blockhash when getLatestBlockhash is unavailable", async () => {
+    const { confirmTransaction } = await import("../solana-utils.ts");
+    const calls: any[] = [];
+
+    const mockConnection = {
+      confirmTransaction: async (params: any) => {
+        calls.push(params);
+      },
+    } as any;
+
+    await confirmTransaction(mockConnection, "sig-3", {
+      blockhash: "external",
+      lastValidBlockHeight: 13,
+    });
+
+    expect(calls[0]).toEqual({ signature: "sig-3", blockhash: "external", lastValidBlockHeight: 13 });
   });
 });
