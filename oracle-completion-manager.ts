@@ -1,5 +1,10 @@
 import * as anchor from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
+import {
+  PublicKey,
+  TransactionExpiredBlockheightExceededError,
+  TransactionExpiredTimeoutError,
+  type BlockhashWithExpiryBlockHeight,
+} from "@solana/web3.js";
 import { createHash } from "crypto";
 import {
   type AttemptGameCompletionOptions,
@@ -896,21 +901,7 @@ export class GameCompletionManager {
       })
       .signers([this.options.adminKeypair]);
 
-    const transaction = await completionBuilder.transaction();
     const connection = this.options.getConnection();
-    const latestBlockhash = await connection.getLatestBlockhash(blockhashCommitment);
-
-    let rawTransaction: Buffer;
-    if (transaction instanceof anchor.web3.VersionedTransaction) {
-      transaction.message.recentBlockhash = latestBlockhash.blockhash;
-      transaction.sign([this.options.adminKeypair]);
-      rawTransaction = transaction.serialize();
-    } else {
-      transaction.feePayer = transaction.feePayer ?? this.options.adminKeypair.publicKey;
-      transaction.recentBlockhash = latestBlockhash.blockhash;
-      transaction.partialSign(this.options.adminKeypair);
-      rawTransaction = transaction.serialize();
-    }
 
     const sendOptions: anchor.web3.SendOptions = {};
     if (confirmOpts.skipPreflight !== undefined) {
@@ -926,9 +917,49 @@ export class GameCompletionManager {
       sendOptions.minContextSlot = confirmOpts.minContextSlot;
     }
 
-    const txHash = await connection.sendRawTransaction(rawTransaction, sendOptions);
-    await this.options.confirmTransaction(txHash, latestBlockhash);
-    return txHash;
+    const signTransaction = async (
+      latestBlockhash: BlockhashWithExpiryBlockHeight,
+    ): Promise<Buffer> => {
+      const tx = await completionBuilder.transaction();
+      if (tx instanceof anchor.web3.VersionedTransaction) {
+        tx.message.recentBlockhash = latestBlockhash.blockhash;
+        tx.sign([this.options.adminKeypair]);
+        return tx.serialize();
+      }
+
+      tx.feePayer = tx.feePayer ?? this.options.adminKeypair.publicKey;
+      tx.recentBlockhash = latestBlockhash.blockhash;
+      tx.partialSign(this.options.adminKeypair);
+      return tx.serialize();
+    };
+
+    const sendWithBlockhash = async (
+      latestBlockhash: BlockhashWithExpiryBlockHeight,
+    ): Promise<string> => {
+      const rawTransaction = await signTransaction(latestBlockhash);
+      const signature = await connection.sendRawTransaction(rawTransaction, sendOptions);
+      await this.options.confirmTransaction(signature, latestBlockhash);
+      return signature;
+    };
+
+    const shouldRetryAfterExpiry = (error: unknown): boolean => {
+      if (error instanceof TransactionExpiredBlockheightExceededError) {
+        return true;
+      }
+      return error instanceof TransactionExpiredTimeoutError;
+    };
+
+    let latestBlockhash = await connection.getLatestBlockhash(blockhashCommitment);
+    try {
+      return await sendWithBlockhash(latestBlockhash);
+    } catch (error) {
+      if (!shouldRetryAfterExpiry(error)) {
+        throw error;
+      }
+
+      latestBlockhash = await connection.getLatestBlockhash(blockhashCommitment);
+      return await sendWithBlockhash(latestBlockhash);
+    }
   }
 
   public async resolveTokenProgram(

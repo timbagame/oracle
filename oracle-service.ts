@@ -434,11 +434,16 @@ export class OracleService {
       return { success: false, reason: "finalized" };
     }
 
-    if (isFinalizedState) {
-      this.db.reactivateSecretKey(normalized);
+    let secret = this.db.getSecretKey(normalized);
+    let reactivatedSecret = false;
+
+    if (!secret) {
+      reactivatedSecret = this.db.reactivateSecretKey(normalized) || reactivatedSecret;
+      if (reactivatedSecret) {
+        secret = this.db.getSecretKey(normalized);
+      }
     }
 
-    const secret = this.db.getSecretKey(normalized);
     if (!secret) {
       return { success: false, reason: "missing-secret" };
     }
@@ -447,6 +452,9 @@ export class OracleService {
       allowFinalized: isFinalizedState,
     });
     if (!resetResult.success) {
+      if (reactivatedSecret) {
+        this.db.markSecretKeyUsed(normalized);
+      }
       return { success: false, reason: this.mapResetFailure(resetResult) };
     }
 

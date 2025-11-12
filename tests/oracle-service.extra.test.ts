@@ -3,7 +3,11 @@ import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import { createTestEnv } from "./helpers/create-test-env.ts";
 import * as anchor from "@coral-xyz/anchor";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import {
+  Keypair,
+  PublicKey,
+  TransactionExpiredBlockheightExceededError,
+} from "@solana/web3.js";
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
@@ -30,6 +34,7 @@ import { createProgramStub } from "./helpers/program-stub.ts";
 
 const TEST_INITIAL_BLOCKHASH = "11111111111111111111111111111111";
 const TEST_LATEST_BLOCKHASH = "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi";
+const TEST_REFRESHED_BLOCKHASH = "CwE3n9sBfQ9P4srbmANLT7E2x5Yucs5cjox96D65gis9";
 
 let OracleService: typeof import("../oracle-service.ts").OracleService;
 let OracleDatabase: typeof import("../database.ts").OracleDatabase;
@@ -83,6 +88,17 @@ function createReadyContext(overrides: {
   } as const;
 }
 
+type ConnectionOverrides = {
+  getLatestBlockhash?: (
+    commitment?: string,
+  ) => Promise<{ blockhash: string; lastValidBlockHeight: number }>;
+  sendRawTransaction?: (
+    raw: Buffer,
+    options?: anchor.web3.SendOptions,
+  ) => Promise<string>;
+  confirmTransaction?: (params: any) => Promise<void>;
+};
+
 function makeReadinessResolution(
   status: "ready" | "not-ready",
   overrides: {
@@ -128,6 +144,7 @@ async function runExecuteGameCompletionScenario({
   mintOwner,
   accountInfoImpl,
   transactionFactory,
+  connectionOverrides,
 }: {
   tokenProgram?: PublicKey | string | null;
   mintOwner?: PublicKey;
@@ -135,6 +152,7 @@ async function runExecuteGameCompletionScenario({
   transactionFactory?: (context: { adminKeypair: anchor.web3.Keypair }) => Promise<
     anchor.web3.Transaction | anchor.web3.VersionedTransaction
   >;
+  connectionOverrides?: ConnectionOverrides;
 } = {}) {
   const service = OracleService.createWith(OracleDatabase.getInstance());
   const originalProgram = (service as any).program;
@@ -153,7 +171,14 @@ async function runExecuteGameCompletionScenario({
     latestBlockhashCommitment?: string;
     sendOptions?: anchor.web3.SendOptions;
     transactionUsed?: anchor.web3.Transaction | anchor.web3.VersionedTransaction;
-  } = {};
+    blockhashFetches: string[];
+    confirmations: Array<{ signature: string; blockhash?: string; lastValidBlockHeight?: number }>;
+    sentSignatures: string[];
+  } = {
+    blockhashFetches: [],
+    confirmations: [],
+    sentSignatures: [],
+  };
   let directProgram: PublicKey | null = null;
 
   if (tokenProgram instanceof PublicKey) {
@@ -175,18 +200,33 @@ async function runExecuteGameCompletionScenario({
     ? accountInfoImpl
     : async () => ({ owner: inferredMintOwner });
 
+  const overrides = connectionOverrides ?? {};
+
   const mockConnection = {
     getAccountInfo,
     getLatestBlockhash: async (commitment?: string) => {
       calls.latestBlockhashCommitment = commitment;
-      return { blockhash: TEST_LATEST_BLOCKHASH, lastValidBlockHeight: 999 };
+      const resolved = overrides.getLatestBlockhash
+        ? await overrides.getLatestBlockhash(commitment)
+        : { blockhash: TEST_LATEST_BLOCKHASH, lastValidBlockHeight: 999 };
+      calls.blockhashFetches.push(resolved.blockhash);
+      return resolved;
     },
     sendRawTransaction: async (_raw: Buffer, options?: anchor.web3.SendOptions) => {
       calls.sendOptions = options;
-      return "tx-abc";
+      const signature = overrides.sendRawTransaction
+        ? await overrides.sendRawTransaction(_raw, options)
+        : "tx-abc";
+      calls.sentSignatures.push(signature);
+      return signature;
     },
     confirmTransaction: async (params: any) => {
-      calls.confirmed = typeof params === "string" ? { signature: params } : params;
+      const record = typeof params === "string" ? { signature: params } : params;
+      calls.confirmations.push(record);
+      calls.confirmed = record;
+      if (overrides.confirmTransaction) {
+        await overrides.confirmTransaction(params);
+      }
     },
   };
 
@@ -1351,6 +1391,33 @@ describe("OracleService internals", () => {
     expect(snapshot?.completed_at).toBeNull();
   });
 
+  it("requeueGame reverts secret reactivation when reset fails", () => {
+    const service = OracleService.getInstance();
+    const db = OracleDatabase.getInstance();
+    resetPendingGames(db, { service });
+
+    const gameAddr = "requeue-reactivation-revert";
+    seedTrackedGame(db, {
+      address: gameAddr,
+      secret: "33".repeat(32),
+      randomHash: "44".repeat(32),
+    });
+
+    db.markSecretKeyUsed(gameAddr);
+    const resetSpy = spyOn(db, "resetCompletionAttempts").mockReturnValue({
+      success: false,
+      reason: "unchanged",
+    });
+
+    try {
+      const result = service.requeueGame(gameAddr);
+      expect(result).toEqual({ success: false, reason: "unchanged" });
+      expect(db.getSecretKey(gameAddr)).toBeNull();
+    } finally {
+      resetSpy.mockRestore();
+    }
+  });
+
   it("requeueGame succeeds for fresh pending games with zero attempts", () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();
@@ -1690,6 +1757,92 @@ describe("OracleService internals", () => {
       completion.resolveContextAndReadiness = originalResolve;
       completion.executeGameCompletion = originalExecute;
       (service as any).program = originalProgram;
+    }
+  });
+
+  it("completeGame keeps games pending when confirmation fails after broadcast", async () => {
+    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const db = OracleDatabase.getInstance();
+    const gameAddr = "confirm-failure-game";
+    resetPendingGames(db, { service });
+    seedTrackedGame(db, {
+      service,
+      address: gameAddr,
+      secret: "a".repeat(64),
+      randomHash: "b".repeat(64),
+      players: [
+        { address: Keypair.generate().publicKey.toBase58(), ticketIndex: 0 },
+      ],
+    });
+
+    const completion = service.completionManager;
+    const originalResolve = completion.resolveContextAndReadiness;
+    const originalProgram = (service as any).program;
+    const originalConnection = (service as any).connection;
+
+    const ready = createReadyContext({
+      gameAccount: createGameAccountStub({
+        ticketsCount: 1,
+        maxTickets: 1,
+        minTickets: 1,
+        lastSlot: 1,
+      }),
+    });
+
+    completion.resolveContextAndReadiness = async () =>
+      makeReadyResolution({
+        context: ready.context,
+        readiness: ready.readiness,
+      });
+
+    (service as any).program = createProgramStub({
+      overrides: {
+        provider: { opts: {} },
+        methods: {
+          completeGame: () => ({
+            accountsPartial: (_accs: any) => {
+              return {
+                signers: () => ({
+                  transaction: async () => {
+                    const tx = new anchor.web3.Transaction();
+                    tx.add(createNoopInstruction());
+                    return tx;
+                  },
+                }),
+              };
+            },
+          }),
+        },
+      },
+    });
+
+    const mockConnection = {
+      getAccountInfo: async () => ({ owner: TOKEN_PROGRAM_ID }),
+      getLatestBlockhash: async () => ({ blockhash: TEST_LATEST_BLOCKHASH, lastValidBlockHeight: 99 }),
+      sendRawTransaction: async () => "tx-confirm-fail",
+      confirmTransaction: async () => {
+        throw new Error("confirm-fail");
+      },
+    } as unknown as anchor.web3.Connection;
+
+    (service as any).connection = mockConnection;
+
+    const finalizeSpy = spyOn(db, "finalizeCompletedGame").mockImplementation(() => undefined);
+
+    try {
+      const result = await service.completeGame(gameAddr);
+      expect(result.success).toBe(false);
+      expect(String(result.error || "")).toContain("confirm-fail");
+      const status = db.getGameStatus(gameAddr);
+      expect(status).toBe("pending");
+      const pending = db.getPendingGames().find((g) => g.game_address === gameAddr);
+      expect(pending?.completion_attempts).toBe(1);
+      expect(finalizeSpy).not.toHaveBeenCalled();
+    } finally {
+      completion.resolveContextAndReadiness = originalResolve;
+      (service as any).program = originalProgram;
+      (service as any).connection = originalConnection;
+      finalizeSpy.mockRestore();
     }
   });
 
@@ -2096,6 +2249,37 @@ describe("OracleService internals", () => {
     if (result.calls.transactionUsed instanceof anchor.web3.VersionedTransaction) {
       expect(result.calls.transactionUsed.message.recentBlockhash).toBe(TEST_LATEST_BLOCKHASH);
     }
+  });
+
+  it("executeGameCompletion retries with a refreshed blockhash when confirmation expires", async () => {
+    let fetchCount = 0;
+    let confirmCalls = 0;
+    const result = await runExecuteGameCompletionScenario({
+      connectionOverrides: {
+        getLatestBlockhash: async () => {
+          fetchCount += 1;
+          return fetchCount === 1
+            ? { blockhash: TEST_LATEST_BLOCKHASH, lastValidBlockHeight: 100 }
+            : { blockhash: TEST_REFRESHED_BLOCKHASH, lastValidBlockHeight: 500 };
+        },
+        sendRawTransaction: async () => `tx-${fetchCount}`,
+        confirmTransaction: async () => {
+          confirmCalls += 1;
+          if (confirmCalls === 1) {
+            throw new TransactionExpiredBlockheightExceededError(`tx-${confirmCalls}`);
+          }
+        },
+      },
+    });
+
+    expect(result.tx).toBe("tx-2");
+    expect(result.calls.blockhashFetches).toEqual([
+      TEST_LATEST_BLOCKHASH,
+      TEST_REFRESHED_BLOCKHASH,
+    ]);
+    expect(result.calls.sentSignatures).toEqual(["tx-1", "tx-2"]);
+    expect(result.calls.confirmations).toHaveLength(2);
+    expect(result.calls.confirmations[1]?.blockhash).toBe(TEST_REFRESHED_BLOCKHASH);
   });
 
   it("executeGameCompletion derives Token-2022 accounts when provided", async () => {
