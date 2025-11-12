@@ -71,10 +71,14 @@ export class PlayerRegistrySync {
       signatureInfo: anchor.web3.ConfirmedSignatureInfo,
     ): Promise<RegistryEvent[]> => {
 
-      let transaction: anchor.web3.TransactionResponse | null;
+      let transaction:
+        | anchor.web3.TransactionResponse
+        | anchor.web3.VersionedTransactionResponse
+        | null;
       try {
         transaction = await this.options.connection.getTransaction(signatureInfo.signature, {
           commitment: "confirmed",
+          maxSupportedTransactionVersion: 0,
         });
       } catch (error) {
         logger.warning(

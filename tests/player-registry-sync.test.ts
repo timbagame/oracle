@@ -334,7 +334,7 @@ describe("PlayerRegistrySync", () => {
     expect(requestedLimits).toEqual([1]);
   });
 
-  it("processes versioned transactions without forcing legacy-only lookups", async () => {
+  it("requests versioned transactions when fetching registry events", async () => {
     const gamePda = Keypair.generate().publicKey;
     const player = Keypair.generate().publicKey;
 
@@ -374,6 +374,6 @@ describe("PlayerRegistrySync", () => {
     });
 
     expect(players).toEqual([player.toBase58()]);
-    expect(receivedMaxVersion).toBeUndefined();
+    expect(receivedMaxVersion).toBe(0);
   });
 });
