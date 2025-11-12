@@ -1,5 +1,5 @@
 import * as anchor from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, type BlockhashWithExpiryBlockHeight } from "@solana/web3.js";
 
 type PublicKeyRecord = {
   toBase58?: () => string;
@@ -168,7 +168,8 @@ export function resolveNumericLike(value: unknown): number | undefined {
  */
 export async function confirmTransaction(
   connection: anchor.web3.Connection,
-  signature: string
+  signature: string,
+  latestBlockhash?: BlockhashWithExpiryBlockHeight,
 ): Promise<void> {
   const conn = connection as anchor.web3.Connection & {
     confirmTransaction?: (...args: any[]) => unknown;
@@ -176,20 +177,22 @@ export async function confirmTransaction(
   };
 
   // Modern confirmation (preferred)
-  if (
-    typeof conn.getLatestBlockhash === "function" &&
-    typeof conn.confirmTransaction === "function"
-  ) {
-    const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash();
-    const result = conn.confirmTransaction({
-      signature,
-      blockhash,
-      lastValidBlockHeight,
-    });
-    if (result && typeof (result as PromiseLike<unknown>).then === "function") {
-      await result;
+  if (typeof conn.confirmTransaction === "function") {
+    const resolvedBlockhash = latestBlockhash
+      ?? (typeof conn.getLatestBlockhash === "function" ? await conn.getLatestBlockhash() : null);
+
+    if (resolvedBlockhash) {
+      const { blockhash, lastValidBlockHeight } = resolvedBlockhash;
+      const result = conn.confirmTransaction({
+        signature,
+        blockhash,
+        lastValidBlockHeight,
+      });
+      if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+        await result;
+      }
+      return;
     }
-    return;
   }
 
   // Legacy confirmation fallback

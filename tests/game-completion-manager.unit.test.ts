@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as anchor from "@coral-xyz/anchor";
 import { GameCompletionManager } from "../oracle-completion-manager.ts";
 import type { GameCompletionManagerOptions } from "../oracle-completion-manager.ts";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey, type BlockhashWithExpiryBlockHeight } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import type { OracleMetrics } from "../metrics.ts";
 import type {
@@ -48,16 +48,19 @@ function createManager(overrides: {
     getAccountInfo: overrides.accountInfo ?? (async () => ({ owner: TOKEN_PROGRAM_ID })),
     getSlot: async () => 100,
     getBlockTime: async () => 1_700_000_000,
+    getLatestBlockhash: async () => ({ blockhash: "test-bh", lastValidBlockHeight: 999 }),
+    sendRawTransaction: async () => "tx",
   } as const;
 
   const program = {
     account: { game: { fetch: async () => ({}) } },
     programId: overrides.programId ?? Keypair.generate().publicKey,
+    provider: { opts: {} },
     methods: {
       completeGame: () => ({
         accountsPartial: () => ({
           signers: () => ({
-            rpc: async () => "tx",
+            transaction: async () => new anchor.web3.Transaction(),
           }),
         }),
       }),
@@ -77,7 +80,7 @@ function createManager(overrides: {
     tokenProgramCache,
     secretKeyLength: overrides.secretKeyLength ?? 32,
     noSecretKeyMessage: "missing",
-    confirmTransaction: async () => {},
+    confirmTransaction: async (_sig?: string, _latest?: BlockhashWithExpiryBlockHeight) => {},
     recoverPlayerRegistry: overrides.recoverPlayers,
     markGameDesynced: (address: string) => {
       desyncedGames.add(address);

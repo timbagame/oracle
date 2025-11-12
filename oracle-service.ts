@@ -122,7 +122,8 @@ export class OracleService {
       tokenProgramCache: this.tokenProgramCache,
       secretKeyLength: SECRET_KEY_LENGTH,
       noSecretKeyMessage: NO_SECRET_KEY_MESSAGE,
-      confirmTransaction: (signature) => confirmTransaction(this.connection, signature),
+      confirmTransaction: (signature, latestBlockhash) =>
+        confirmTransaction(this.connection, signature, latestBlockhash),
       recoverPlayerRegistry: async ({ context, expectedTickets }) =>
         this.registrySync.fetchPlayersFromChain({
           gamePda: context.gamePda,

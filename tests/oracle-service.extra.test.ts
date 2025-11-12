@@ -132,7 +132,13 @@ async function runExecuteGameCompletionScenario({
   const tokenMint = Keypair.generate().publicKey;
   const randomHashBuffer = Buffer.alloc(32, 1);
   const secretKeyBuffer = Buffer.alloc(32, 2);
-  const calls: { accounts?: any; signers?: any[]; confirmed?: string } = {};
+  const calls: {
+    accounts?: any;
+    signers?: any[];
+    confirmed?: { signature: string; blockhash?: string; lastValidBlockHeight?: number } | string;
+    latestBlockhashCommitment?: string;
+    sendOptions?: anchor.web3.SendOptions;
+  } = {};
   let directProgram: PublicKey | null = null;
 
   if (tokenProgram instanceof PublicKey) {
@@ -156,9 +162,16 @@ async function runExecuteGameCompletionScenario({
 
   const mockConnection = {
     getAccountInfo,
-    getLatestBlockhash: async () => ({ blockhash: "test-bh", lastValidBlockHeight: 999 }),
+    getLatestBlockhash: async (commitment?: string) => {
+      calls.latestBlockhashCommitment = commitment;
+      return { blockhash: "test-bh", lastValidBlockHeight: 999 };
+    },
+    sendRawTransaction: async (_raw: Buffer, options?: anchor.web3.SendOptions) => {
+      calls.sendOptions = options;
+      return "tx-abc";
+    },
     confirmTransaction: async (params: any) => {
-      calls.confirmed = typeof params === "string" ? params : params.signature;
+      calls.confirmed = typeof params === "string" ? { signature: params } : params;
     },
   };
 
@@ -167,6 +180,7 @@ async function runExecuteGameCompletionScenario({
   const programStub = createProgramStub({
     programId,
     overrides: {
+      provider: { opts: {} },
       methods: {
         completeGame: (_rand: number[], _secret: number[], winnerIndex: number) => {
           expect(winnerIndex).toBe(5);
@@ -177,7 +191,7 @@ async function runExecuteGameCompletionScenario({
                 signers: (signers: any[]) => {
                   calls.signers = signers;
                   return {
-                    rpc: async () => "tx-abc",
+                    transaction: async () => new anchor.web3.Transaction(),
                   };
                 },
               };
@@ -2029,7 +2043,11 @@ describe("OracleService internals", () => {
       anchor.web3.SystemProgram.programId.toBase58(),
     );
     expect(result.calls.signers).toEqual([result.adminKeypair]);
-    expect(result.calls.confirmed).toBe("tx-abc");
+    expect(result.calls.confirmed).toMatchObject({
+      signature: "tx-abc",
+      blockhash: "test-bh",
+      lastValidBlockHeight: 999,
+    });
   });
 
   it("executeGameCompletion derives Token-2022 accounts when provided", async () => {
@@ -2123,5 +2141,8 @@ describe("OracleService internals", () => {
 
     await confirmTransaction(mockConnection, "sig-1");
     expect(calls[0]).toEqual({ signature: "sig-1", blockhash: "bh", lastValidBlockHeight: 42 });
+
+    await confirmTransaction(mockConnection, "sig-2", { blockhash: "provided", lastValidBlockHeight: 99 });
+    expect(calls[1]).toEqual({ signature: "sig-2", blockhash: "provided", lastValidBlockHeight: 99 });
   });
 });

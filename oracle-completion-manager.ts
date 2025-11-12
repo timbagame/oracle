@@ -29,7 +29,10 @@ export interface GameCompletionManagerOptions extends CoreOracleDependencies {
   tokenProgramCache: Map<string, PublicKey>;
   secretKeyLength: number;
   noSecretKeyMessage: string;
-  confirmTransaction: (signature: string) => Promise<void>;
+  confirmTransaction: (
+    signature: string,
+    latestBlockhash?: anchor.web3.BlockhashWithExpiryBlockHeight,
+  ) => Promise<void>;
   recoverPlayerRegistry?: (options: {
     gameAddress: string;
     context: GameOnChainContext;
@@ -874,7 +877,12 @@ export class GameCompletionManager {
     } as const;
 
     const program = this.options.getProgram();
-    const txHash = await program.methods
+    const provider = program.provider as anchor.AnchorProvider | undefined;
+    const confirmOpts = provider?.opts ?? {};
+    const blockhashCommitment =
+      confirmOpts.preflightCommitment ?? confirmOpts.commitment ?? "confirmed";
+
+    const completionBuilder = program.methods
       .completeGame([...randomHashBuffer], [...secretKeyBuffer], winnerIndex)
       .accountsPartial({
         game: gamePda,
@@ -886,10 +894,40 @@ export class GameCompletionManager {
         systemProgram: anchor.web3.SystemProgram.programId,
         winnerTokenAccount,
       })
-      .signers([this.options.adminKeypair])
-      .rpc();
+      .signers([this.options.adminKeypair]);
 
-    await this.options.confirmTransaction(txHash);
+    const transaction = await completionBuilder.transaction();
+    const connection = this.options.getConnection();
+    const latestBlockhash = await connection.getLatestBlockhash(blockhashCommitment);
+
+    let rawTransaction: Buffer;
+    if (transaction instanceof anchor.web3.VersionedTransaction) {
+      transaction.message.recentBlockhash = latestBlockhash.blockhash;
+      transaction.sign([this.options.adminKeypair]);
+      rawTransaction = transaction.serialize();
+    } else {
+      transaction.feePayer = transaction.feePayer ?? this.options.adminKeypair.publicKey;
+      transaction.recentBlockhash = latestBlockhash.blockhash;
+      transaction.partialSign(this.options.adminKeypair);
+      rawTransaction = transaction.serialize();
+    }
+
+    const sendOptions: anchor.web3.SendOptions = {};
+    if (confirmOpts.skipPreflight !== undefined) {
+      sendOptions.skipPreflight = confirmOpts.skipPreflight;
+    }
+    if (confirmOpts.preflightCommitment ?? confirmOpts.commitment) {
+      sendOptions.preflightCommitment = confirmOpts.preflightCommitment ?? confirmOpts.commitment;
+    }
+    if (confirmOpts.maxRetries !== undefined) {
+      sendOptions.maxRetries = confirmOpts.maxRetries;
+    }
+    if (confirmOpts.minContextSlot !== undefined) {
+      sendOptions.minContextSlot = confirmOpts.minContextSlot;
+    }
+
+    const txHash = await connection.sendRawTransaction(rawTransaction, sendOptions);
+    await this.options.confirmTransaction(txHash, latestBlockhash);
     return txHash;
   }
 

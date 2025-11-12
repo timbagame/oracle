@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey, type BlockhashWithExpiryBlockHeight } from "@solana/web3.js";
 import { coercePublicKey } from "../solana-utils.ts";
 import { OracleEventProcessor } from "../oracle-event-processor.ts";
 import type { OracleDatabase } from "../database.ts";
@@ -669,7 +669,7 @@ function createService(db: OracleDatabaseStub, programStub: ProgramStub): Oracle
     getSlot: async () => 0,
     getBlockTime: async () => Math.floor(Date.now() / 1000),
     getLatestBlockhash: async () => ({ blockhash: "", lastValidBlockHeight: 0 }),
-    confirmTransaction: async () => {},
+    confirmTransaction: async (_sig?: string, _latest?: BlockhashWithExpiryBlockHeight) => {},
     getAccountInfo: async () => null,
   };
 
