@@ -1,6 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import {
   PublicKey,
+  SendTransactionError,
   TransactionExpiredBlockheightExceededError,
   TransactionExpiredTimeoutError,
   type BlockhashWithExpiryBlockHeight,
@@ -946,11 +947,32 @@ export class GameCompletionManager {
       return signature;
     };
 
+    const blockhashNotFoundPattern = /blockhash not found/i;
+
+    const isBlockhashExpirySendError = (error: unknown): boolean => {
+      if (!(error instanceof SendTransactionError)) {
+        return false;
+      }
+
+      const transactionError = error.transactionError;
+      const segments = [
+        error.message,
+        transactionError?.message,
+        ...(error.logs ?? []),
+        ...(transactionError?.logs ?? []),
+      ].filter((segment): segment is string => typeof segment === "string" && segment.length > 0);
+
+      return segments.some((segment) => blockhashNotFoundPattern.test(segment));
+    };
+
     const shouldRetryAfterExpiry = (error: unknown): boolean => {
       if (error instanceof TransactionExpiredBlockheightExceededError) {
         return true;
       }
-      return error instanceof TransactionExpiredTimeoutError;
+      if (error instanceof TransactionExpiredTimeoutError) {
+        return true;
+      }
+      return isBlockhashExpirySendError(error);
     };
 
     let latestBlockhash = await connection.getLatestBlockhash(blockhashCommitment);
