@@ -957,9 +957,9 @@ export class GameCompletionManager {
       const transactionError = error.transactionError;
       const segments = [
         error.message,
-        transactionError.message,
+        transactionError?.message,
         ...(error.logs ?? []),
-        ...(transactionError.logs ?? []),
+        ...(transactionError?.logs ?? []),
       ].filter((segment): segment is string => typeof segment === "string" && segment.length > 0);
 
       return segments.some((segment) => blockhashNotFoundPattern.test(segment));
