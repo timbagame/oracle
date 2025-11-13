@@ -6,6 +6,7 @@ import * as anchor from "@coral-xyz/anchor";
 import {
   Keypair,
   PublicKey,
+  SendTransactionError,
   TransactionExpiredBlockheightExceededError,
 } from "@solana/web3.js";
 import * as crypto from "crypto";
@@ -2280,6 +2281,43 @@ describe("OracleService internals", () => {
     expect(result.calls.sentSignatures).toEqual(["tx-1", "tx-2"]);
     expect(result.calls.confirmations).toHaveLength(2);
     expect(result.calls.confirmations[1]?.blockhash).toBe(TEST_REFRESHED_BLOCKHASH);
+  });
+
+  it("executeGameCompletion retries when sendRawTransaction reports a missing blockhash", async () => {
+    let fetchCount = 0;
+    let sendCount = 0;
+    const blockhashError = new SendTransactionError({
+      action: "simulate",
+      signature: "",
+      transactionMessage: "Transaction simulation failed: Blockhash not found",
+    });
+
+    const result = await runExecuteGameCompletionScenario({
+      connectionOverrides: {
+        getLatestBlockhash: async () => {
+          fetchCount += 1;
+          return fetchCount === 1
+            ? { blockhash: TEST_LATEST_BLOCKHASH, lastValidBlockHeight: 100 }
+            : { blockhash: TEST_REFRESHED_BLOCKHASH, lastValidBlockHeight: 500 };
+        },
+        sendRawTransaction: async () => {
+          sendCount += 1;
+          if (sendCount === 1) {
+            throw blockhashError;
+          }
+          return `tx-${sendCount}`;
+        },
+      },
+    });
+
+    expect(result.tx).toBe("tx-2");
+    expect(result.calls.blockhashFetches).toEqual([
+      TEST_LATEST_BLOCKHASH,
+      TEST_REFRESHED_BLOCKHASH,
+    ]);
+    expect(result.calls.sentSignatures).toEqual(["tx-2"]);
+    expect(result.calls.confirmations).toHaveLength(1);
+    expect(result.calls.confirmations[0]?.blockhash).toBe(TEST_REFRESHED_BLOCKHASH);
   });
 
   it("executeGameCompletion derives Token-2022 accounts when provided", async () => {
