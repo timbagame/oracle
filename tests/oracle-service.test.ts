@@ -7,6 +7,9 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import * as delayModule from "../delay.ts";
 import type { TimbaGameAccount } from "../types/timba.ts";
 
+type OracleServiceClass = typeof import("../oracle-service.ts").OracleService;
+type OracleDatabaseClass = typeof import("../database.ts").OracleDatabase;
+
 function createGameAccountStub(
   overrides: Partial<TimbaGameAccount> = {}
 ): TimbaGameAccount {
@@ -41,8 +44,8 @@ const makeReadyResolution = () => {
   };
 };
 
-let OracleService: typeof import("../oracle-service.ts").OracleService;
-let OracleDatabase: typeof import("../database.ts").OracleDatabase;
+let OracleService: OracleServiceClass;
+let OracleDatabase: OracleDatabaseClass;
 let cleanup: () => void;
 
 beforeAll(async () => {
