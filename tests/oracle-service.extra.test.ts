@@ -36,8 +36,8 @@ import * as delayModule from "../delay.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 import { createProgramStub } from "./helpers/program-stub.ts";
 
-type OracleServiceClass = typeof import("../oracle-service.ts").OracleService;
-type OracleDatabaseClass = typeof import("../database.ts").OracleDatabase;
+type OracleServiceInstance = import("../oracle-service.ts").OracleService;
+type OracleDatabaseInstance = import("../database.ts").OracleDatabase;
 
 const TEST_INITIAL_BLOCKHASH = "11111111111111111111111111111111";
 const TEST_LATEST_BLOCKHASH = "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi";
@@ -335,7 +335,7 @@ describe("OracleService internals", () => {
     });
     const warningSpy = spyOn(logger, "warning").mockImplementation(() => {});
 
-    let service: OracleServiceClass | undefined;
+    let service: OracleServiceInstance | undefined;
 
     try {
       service = OracleService.createWith(OracleDatabase.getInstance());
@@ -702,7 +702,7 @@ describe("OracleService internals", () => {
       db: {
         getPendingGames: () => [],
         markGameCompleted: () => {},
-        } as unknown as OracleDatabaseClass,
+        } as unknown as OracleDatabaseInstance,
       metrics: new OracleMetricsRecorder(),
       completion: {
         resolveContextAndReadiness: async () => makeReadyResolution(),
