@@ -172,14 +172,14 @@ export class RpcEndpointManager {
     const previousEndpoint = this.endpoints[previousIndex] ?? this.endpoints[0]!;
     const endpoint = this.endpoints[index] ?? this.endpoints[0]!;
 
+    this.activeIndex = index;
+
     await this.notifyEndpointChange({
       endpoint,
       index,
       previousEndpoint,
       previousIndex,
     });
-
-    this.activeIndex = index;
     this.logger?.info?.(
       `Switched Solana RPC endpoint to ${endpoint} (commitment=${this.commitment})`,
     );

@@ -82,8 +82,6 @@ describe("RegistrySyncScheduler", () => {
 
     await waitFor(() => syncCalls.length >= 3, "syncCalls");
 
-    expect(syncCalls).toContain("second");
-    expect(syncCalls).toContain("third");
-    expect(syncCalls.filter((value) => value === "first").length).toBeGreaterThanOrEqual(2);
+    expect(syncCalls).toEqual(["first", "first", "third"]);
   });
 });
