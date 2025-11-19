@@ -1,7 +1,9 @@
+import { OracleDatabase } from "../../database.ts";
+import { OracleService } from "../../oracle-service.ts";
 import { createTestEnv } from "./create-test-env.ts";
 
-export type OracleServiceClass = typeof import("../../oracle-service.ts").OracleService;
-export type OracleDatabaseClass = typeof import("../../database.ts").OracleDatabase;
+export type OracleServiceClass = typeof OracleService;
+export type OracleDatabaseClass = typeof OracleDatabase;
 
 export async function setupOracleServiceEnv(prefix: string): Promise<{
   OracleService: OracleServiceClass;
@@ -11,8 +13,8 @@ export async function setupOracleServiceEnv(prefix: string): Promise<{
   const env = await createTestEnv({
     prefix,
     singletons: {
-      OracleService: async () => (await import("../../oracle-service.ts")).OracleService,
-      OracleDatabase: async () => (await import("../../database.ts")).OracleDatabase,
+      OracleService: async () => OracleService,
+      OracleDatabase: async () => OracleDatabase,
     },
   });
 

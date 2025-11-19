@@ -23,6 +23,9 @@ import { OracleMetricsRecorder } from "../metrics.ts";
 import { ScanLoopRunner } from "../oracle-scan-runner.ts";
 import { logger } from "../logger.ts";
 import { resetConfigForTesting } from "../config.ts";
+import { OracleService } from "../oracle-service.ts";
+import { OracleDatabase } from "../database.ts";
+import { confirmTransaction } from "../solana-utils.ts";
 import type { TimbaGameAccount } from "../types/timba.ts";
 import type {
   GameOnChainContext,
@@ -37,12 +40,10 @@ const TEST_INITIAL_BLOCKHASH = "11111111111111111111111111111111";
 const TEST_LATEST_BLOCKHASH = "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi";
 const TEST_REFRESHED_BLOCKHASH = "CwE3n9sBfQ9P4srbmANLT7E2x5Yucs5cjox96D65gis9";
 
-let OracleService: typeof import("../oracle-service.ts").OracleService;
-let OracleDatabase: typeof import("../database.ts").OracleDatabase;
 let cleanup: () => void;
 
 beforeAll(async () => {
-  ({ OracleService, OracleDatabase, cleanup } = await setupOracleServiceEnv(
+  ({ cleanup } = await setupOracleServiceEnv(
     "oracle-service-extra-test",
   ));
 });
@@ -363,13 +364,13 @@ describe("OracleService internals", () => {
         ORACLE_KEYPAIR_PATH: keypairPath,
       },
       singletons: {
-        OracleService: async () => (await import("../oracle-service.ts")).OracleService,
+        OracleService: async () => OracleService,
       },
     });
 
     try {
-      const { OracleService } = env.singletons;
-      expect(() => OracleService.getInstance()).toThrow(
+      const { OracleService: OracleServiceSingleton } = env.singletons;
+      expect(() => OracleServiceSingleton.getInstance()).toThrow(
         /byte values outside the 0-255 range/,
       );
     } finally {
@@ -2399,7 +2400,6 @@ describe("OracleService internals", () => {
   });
 
   it("confirmTransaction forwards latest blockhash params", async () => {
-    const { confirmTransaction } = await import("../solana-utils.ts");
     const calls: any[] = [];
 
     const mockConnection = {
@@ -2417,7 +2417,6 @@ describe("OracleService internals", () => {
   });
 
   it("confirmTransaction uses provided blockhash when getLatestBlockhash is unavailable", async () => {
-    const { confirmTransaction } = await import("../solana-utils.ts");
     const calls: any[] = [];
 
     const mockConnection = {
