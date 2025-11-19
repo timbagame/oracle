@@ -31,9 +31,6 @@ type HttpMethod = "GET" | "POST";
  * Provides endpoints for requesting random hashes, monitoring, and managing games
  */
 
-const CONFIG = getConfig();
-const PORT = CONFIG.oraclePort ?? DEFAULT_ORACLE_PORT;
-
 let server: ReturnType<typeof Bun.serve> | undefined;
 let backgroundLoop: Promise<void> | undefined;
 let backgroundAbortController: AbortController | undefined;
@@ -501,6 +498,9 @@ export function buildFetchRouter(handlers: ReturnType<typeof buildHandlers>) {
 
 // Main server
 if (!IS_TEST_ENV) {
+  const config = getConfig();
+  const port = config.oraclePort ?? DEFAULT_ORACLE_PORT;
+
   const realOracle = OracleService.getInstance();
   const oracleApi: OracleApi = {
     generateGameSecrets: (options) => realOracle.generateGameSecrets(options),
@@ -514,11 +514,11 @@ if (!IS_TEST_ENV) {
   const handlers = buildHandlers(oracleApi);
   const fetchRouter = buildFetchRouter(handlers);
   server = Bun.serve({
-    port: PORT,
+    port,
     fetch: fetchRouter,
   });
 
-  logger.info(`🔮 Oracle API running on http://localhost:${PORT}`);
+  logger.info(`🔮 Oracle API running on http://localhost:${port}`);
 
   const startBackgroundTasks = () => {
     if (backgroundAbortController) {
