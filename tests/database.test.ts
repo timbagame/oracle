@@ -1,9 +1,9 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from "bun:test";
 import { spyOn } from "bun:test";
 import { rmSync } from "fs";
+import { OracleDatabase } from "../database.ts";
 import { createTestEnv } from "./helpers/create-test-env.ts";
 
-let OracleDatabase: typeof import("../database.ts").OracleDatabase;
 let testEnv: Awaited<ReturnType<typeof createTestEnv>>;
 
 const resetDatabase = () => {
@@ -24,11 +24,10 @@ beforeAll(async () => {
   const env = await createTestEnv({
     prefix: "oracle-database-test",
     singletons: {
-      OracleDatabase: async () => (await import("../database.ts")).OracleDatabase,
+      OracleDatabase: async () => OracleDatabase,
     },
   });
   testEnv = env;
-  ({ OracleDatabase } = env.singletons);
   resetDatabase();
 });
 

@@ -1,13 +1,14 @@
+import * as indexModule from "../../index.ts";
 import type { FakeOracleOptions } from "./fake-oracle.ts";
 import { createBasicOracle } from "./fake-oracle.ts";
 import { createTestEnv } from "./create-test-env.ts";
 
 const DEFAULT_TEST_BASE_URL = "http://localhost:3001";
 
-type IndexModule = typeof import("../../index.ts");
-type Router = ReturnType<IndexModule["buildFetchRouter"]>;
-type Handlers = ReturnType<IndexModule["buildHandlers"]>;
-type RouteMetadata = typeof import("../../index.ts").ROUTE_METADATA;
+type IndexModule = typeof indexModule;
+type Router = ReturnType<typeof indexModule.buildFetchRouter>;
+type Handlers = ReturnType<typeof indexModule.buildHandlers>;
+type RouteMetadata = typeof indexModule.ROUTE_METADATA;
 
 export interface IndexRouterTestContext {
   testEnv: Awaited<ReturnType<typeof createTestEnv>>;
@@ -28,7 +29,7 @@ export async function createIndexRouterTestContext(
   oracleOptions: FakeOracleOptions = {},
 ): Promise<IndexRouterTestContext> {
   const testEnv = await createTestEnv({ prefix });
-  const module = await import("../../index.ts");
+  const module = indexModule;
   const handlers = module.buildHandlers(createBasicOracle(oracleOptions));
   const router = module.buildFetchRouter(handlers);
   return {
@@ -44,7 +45,7 @@ export async function createIndexLifecycleContext(
   prefix: string,
 ): Promise<IndexLifecycleContext> {
   const testEnv = await createTestEnv({ prefix });
-  const module = await import("../../index.ts");
+  const module = indexModule;
   return {
     testEnv,
     initialize: module.initialize,

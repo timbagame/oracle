@@ -1,6 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { createScanRunnerFixture } from "./helpers/scan-runner-fixtures.ts";
 import { createTestEnv } from "./helpers/create-test-env.ts";
+import { OracleDatabase } from "../database.ts";
 import { ScanLoopRunner, type ScanLoopRunnerOptions } from "../oracle-scan-runner.ts";
 import type { OracleMetrics } from "../metrics.ts";
 
@@ -37,7 +38,7 @@ describe("ScanLoopRunner completion attempt boundary", () => {
     const env = await createTestEnv({
       prefix: "scan-runner-max",
       singletons: {
-        OracleDatabase: async () => (await import("../database.ts")).OracleDatabase,
+        OracleDatabase: async () => OracleDatabase,
       },
     });
 
