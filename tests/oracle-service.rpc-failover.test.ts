@@ -78,4 +78,54 @@ describe("OracleService RPC failover listener", () => {
     stopSpy.mockRestore();
     startSpy.mockRestore();
   });
+
+  it("propagates restart failures and clears pending syncs on every retry", async () => {
+    const service = OracleServiceClass.getInstance();
+    const previousEventProcessor = (service as any).eventProcessor;
+    const previousManager = (service as any).rpcEndpointManager;
+
+    const eventProcessor = {
+      isListening: () => true,
+      stopListening: async () => {},
+      startListening: async () => {
+        throw new Error("boom");
+      },
+      clearRegistrySyncs: () => {},
+    };
+
+    const stopSpy = spyOn(eventProcessor, "stopListening").mockResolvedValue(
+      undefined,
+    );
+    const startSpy = spyOn(eventProcessor, "startListening").mockRejectedValue(
+      new Error("boom"),
+    );
+    const clearSpy = spyOn(eventProcessor, "clearRegistrySyncs").mockReturnValue(
+      undefined,
+    );
+
+    (service as any).eventProcessor = eventProcessor;
+
+    const manager = new TestRpcEndpointManager();
+    (service as any).rpcEndpointManager = manager;
+
+    try {
+      (service as any).registerRpcEndpointFailoverListener();
+
+      await expect(
+        manager.trigger({
+          endpoint: "https://rpc-b",
+          previousEndpoint: "https://rpc-a",
+          index: 1,
+          previousIndex: 0,
+        }),
+      ).rejects.toThrow("boom");
+
+      expect(stopSpy).toHaveBeenCalledTimes(3);
+      expect(startSpy).toHaveBeenCalledTimes(3);
+      expect(clearSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      (service as any).eventProcessor = previousEventProcessor;
+      (service as any).rpcEndpointManager = previousManager;
+    }
+  });
 });

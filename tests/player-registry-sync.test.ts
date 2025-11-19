@@ -8,12 +8,16 @@ type EventData = {
   data: Record<string, unknown>;
 };
 
+type SyncOverrides = {
+  connection?: anchor.web3.Connection;
+  eventParserFactory?: PlayerRegistrySyncOptions["eventParserFactory"];
+} & Partial<
+    Omit<PlayerRegistrySyncOptions, "connection" | "program" | "eventParserFactory">
+  >;
+
 function createSync(
   eventsPerTransaction: Array<EventData[]>,
-  overrides: {
-    connection?: anchor.web3.Connection;
-    eventParserFactory?: PlayerRegistrySyncOptions["eventParserFactory"];
-  } = {},
+  overrides: SyncOverrides = {},
 ): PlayerRegistrySync {
   const programId = Keypair.generate().publicKey;
   const program = {
@@ -28,8 +32,14 @@ function createSync(
   let signatureCalls = 0;
   let parseIndex = 0;
 
+  const {
+    connection: overrideConnection,
+    eventParserFactory: overrideParser,
+    ...restOverrides
+  } = overrides;
+
   const connection =
-    overrides.connection ??
+    overrideConnection ??
     ({
       async getSignaturesForAddress(_address: PublicKey) {
         return signatureCalls++ === 0 ? signatures : [];
@@ -40,7 +50,7 @@ function createSync(
     } as unknown as anchor.web3.Connection);
 
   const eventParserFactory =
-    overrides.eventParserFactory ??
+    overrideParser ??
     (() => ({
       parseLogs: () => eventsPerTransaction[parseIndex++] ?? [],
     }));
@@ -49,6 +59,7 @@ function createSync(
     connection,
     program: program as unknown as anchor.Program<any>,
     eventParserFactory,
+    ...restOverrides,
   });
 }
 
@@ -375,5 +386,157 @@ describe("PlayerRegistrySync", () => {
 
     expect(players).toEqual([player.toBase58()]);
     expect(receivedMaxVersion).toBe(0);
+  });
+
+  it("refetches missing transactions when batch responses contain null entries", async () => {
+    const gamePda = Keypair.generate().publicKey;
+    const playerOne = Keypair.generate().publicKey;
+    const playerTwo = Keypair.generate().publicKey;
+
+    const events: Array<EventData[]> = [
+      [
+        {
+          name: "playerJoined",
+          data: {
+            gameKey: gamePda,
+            player: playerOne,
+            ticketIndex: 0,
+          },
+        },
+      ],
+      [
+        {
+          name: "playerJoined",
+          data: {
+            gameKey: gamePda,
+            player: playerTwo,
+            ticketIndex: 1,
+          },
+        },
+      ],
+    ];
+
+    const signatureInfos: anchor.web3.ConfirmedSignatureInfo[] = [
+      { signature: "sig-a" } as anchor.web3.ConfirmedSignatureInfo,
+      { signature: "sig-b" } as anchor.web3.ConfirmedSignatureInfo,
+    ];
+    const missingSignature = signatureInfos[1]!.signature;
+
+    let signaturePageCalls = 0;
+    const perSignatureFetches: string[] = [];
+    const batchedRequests: Array<string[]> = [];
+
+    const connection = {
+      async getSignaturesForAddress() {
+        return signaturePageCalls++ === 0 ? signatureInfos : [];
+      },
+      async getTransactions(signatures: string[]) {
+        batchedRequests.push(signatures);
+        return signatures.map((signature) =>
+          signature === missingSignature
+            ? null
+            : ({ meta: { logMessages: [`batched:${signature}`] } } as anchor.web3.TransactionResponse),
+        );
+      },
+      async getTransaction(signature: string) {
+        perSignatureFetches.push(signature);
+        return {
+          meta: { logMessages: [`single:${signature}`] },
+        } as anchor.web3.TransactionResponse;
+      },
+    } as unknown as anchor.web3.Connection;
+
+    const sync = createSync(events, {
+      connection,
+      transactionBatchSize: 2,
+    });
+
+    const players = await sync.fetchPlayersFromChain({
+      gamePda,
+      expectedTickets: 2,
+    });
+
+    expect(players).toEqual([playerOne.toBase58(), playerTwo.toBase58()]);
+    expect(perSignatureFetches).toEqual([missingSignature]);
+    expect(batchedRequests).toHaveLength(1);
+  });
+
+  it("applies chunk results sequentially even when completion order differs", async () => {
+    const gamePda = Keypair.generate().publicKey;
+    const playerOne = Keypair.generate().publicKey;
+    const playerTwo = Keypair.generate().publicKey;
+
+    const events: Array<EventData[]> = [
+      [
+        {
+          name: "playerJoined",
+          data: {
+            gameKey: gamePda,
+            player: playerOne,
+            ticketIndex: 0,
+          },
+        },
+      ],
+      [
+        {
+          name: "playerUnjoined",
+          data: {
+            gameKey: gamePda,
+            ticketIndex: 0,
+          },
+        },
+      ],
+      [
+        {
+          name: "playerJoined",
+          data: {
+            gameKey: gamePda,
+            player: playerTwo,
+            ticketIndex: 0,
+          },
+        },
+      ],
+    ];
+
+    const signatureInfos: anchor.web3.ConfirmedSignatureInfo[] = [
+      { signature: "sig-0" } as anchor.web3.ConfirmedSignatureInfo,
+      { signature: "sig-1" } as anchor.web3.ConfirmedSignatureInfo,
+      { signature: "sig-2" } as anchor.web3.ConfirmedSignatureInfo,
+    ];
+
+    let signaturePageCalls = 0;
+
+    const connection = {
+      async getSignaturesForAddress() {
+        return signaturePageCalls++ === 0 ? signatureInfos : [];
+      },
+      async getTransactions(signatures: string[]) {
+        const isFirstChunk = signatures.includes("sig-0");
+        const responses = signatures.map(
+          () => ({ meta: { logMessages: ["chunk"] } } as anchor.web3.TransactionResponse),
+        );
+        const delay = isFirstChunk ? 25 : 5;
+
+        return new Promise<typeof responses>((resolve) => {
+          setTimeout(() => resolve(responses), delay);
+        });
+      },
+      async getTransaction(signature: string) {
+        throw new Error(`unexpected per-signature fetch ${signature}`);
+      },
+    } as unknown as anchor.web3.Connection;
+
+    const sync = createSync(events, {
+      connection,
+      transactionBatchSize: 2,
+      transactionConcurrency: 2,
+    });
+
+    const players = await sync.fetchPlayersFromChain({
+      gamePda,
+      expectedTickets: 1,
+    });
+
+    expect(players).toEqual([playerTwo.toBase58()]);
   });
 });

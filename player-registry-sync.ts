@@ -210,10 +210,29 @@ export class PlayerRegistrySync {
         return;
       }
 
+      const perSignatureFetches: Promise<void>[] = [];
       for (let offset = 0; offset < chunkInfos.length; offset += 1) {
         const response = transactions[offset] ?? null;
-        const events = response ? parseEventsFromLogs(response.meta?.logMessages) : [];
-        recordEvents(startIndex + offset, events);
+        if (response) {
+          const events = parseEventsFromLogs(response.meta?.logMessages);
+          recordEvents(startIndex + offset, events);
+          continue;
+        }
+
+        const info = chunkInfos[offset];
+        if (!info) {
+          continue;
+        }
+        perSignatureFetches.push(
+          (async () => {
+            const events = await fetchSingleSignature(info);
+            recordEvents(startIndex + offset, events);
+          })(),
+        );
+      }
+
+      if (perSignatureFetches.length > 0) {
+        await Promise.all(perSignatureFetches);
       }
     };
 
