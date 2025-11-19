@@ -11,8 +11,9 @@ import {
 } from "./helpers/program-stub.ts";
 
 type OracleServiceType = import("../oracle-service.ts").OracleService;
+type OracleServiceClass = typeof import("../oracle-service.ts").OracleService;
 
-let OracleServiceClass: typeof import("../oracle-service.ts").OracleService;
+let OracleServiceClass: OracleServiceClass;
 let cleanup: () => void;
 
 beforeAll(async () => {

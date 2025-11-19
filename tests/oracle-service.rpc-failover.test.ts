@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 import type { ActiveEndpointChange } from "../rpc-endpoints.ts";
 
+type OracleServiceClass = typeof import("../oracle-service.ts").OracleService;
+
 class TestRpcEndpointManager {
   private readonly listeners = new Set<
     (change: ActiveEndpointChange) => void | Promise<void>
@@ -29,7 +31,7 @@ class TestRpcEndpointManager {
 }
 
 describe("OracleService RPC failover listener", () => {
-  let OracleServiceClass: typeof import("../oracle-service.ts").OracleService;
+  let OracleServiceClass: OracleServiceClass;
   let cleanup: () => void;
 
   beforeAll(async () => {
