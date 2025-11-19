@@ -1,4 +1,5 @@
-FROM oven/bun:latest
+ARG BUN_VERSION=1.1.21
+FROM oven/bun:${BUN_VERSION}
 
 WORKDIR /app
 

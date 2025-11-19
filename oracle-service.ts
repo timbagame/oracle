@@ -165,7 +165,7 @@ export class OracleService {
   }
 
   private registerRpcEndpointFailoverListener(): void {
-    this.rpcEndpointManager.onActiveEndpointChange(({ endpoint, previousEndpoint }) => {
+    this.rpcEndpointManager.onActiveEndpointChange(async ({ endpoint, previousEndpoint }) => {
       if (!this.eventProcessor.isListening()) {
         return;
       }
@@ -174,30 +174,55 @@ export class OracleService {
         `RPC endpoint changed from ${previousEndpoint} to ${endpoint}; restarting event listeners.`,
       );
 
-      return (async (): Promise<void> => {
-        try {
-          await this.eventProcessor.stopListening();
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          logger.warn(`Failed to stop event listeners before RPC restart: ${message}`);
+      await this.restartEventListenersWithRetries(endpoint);
+    });
+  }
+
+  private async restartEventListenersWithRetries(endpoint: string): Promise<void> {
+    const maxAttempts = 3;
+    const baseDelayMs = 250;
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await this.stopEventListenersSafely();
+
+      try {
+        await this.eventProcessor.startListening();
+        logger.info(`Re-subscribed event listeners on ${endpoint}`);
+        return;
+      } catch (error) {
+        lastError = error;
+        this.eventProcessor.clearRegistrySyncs();
+        const message = error instanceof Error ? error.message : String(error);
+
+        if (attempt < maxAttempts - 1) {
+          const delayMs = baseDelayMs * (attempt + 1);
+          logger.warning(
+            `Failed to restart event listeners on ${endpoint} (attempt ${attempt + 1}/${maxAttempts}): ${message}. Retrying in ${delayMs}ms.`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
         }
 
-        setTimeout(() => {
-          void (async () => {
-            try {
-              await this.eventProcessor.startListening();
-              logger.info(`Re-subscribed event listeners on ${endpoint}`);
-            } catch (error) {
-              this.eventProcessor.clearRegistrySyncs();
-              logger.failure(
-                `Failed to restart event listeners after switching to ${endpoint}:`,
-                error,
-              );
-            }
-          })();
-        }, 0);
-      })();
-    });
+        logger.failure(
+          `Failed to restart event listeners after switching to ${endpoint}: ${message}`,
+        );
+      }
+    }
+
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+    throw new Error(String(lastError ?? "Unknown restart failure"));
+  }
+
+  private async stopEventListenersSafely(): Promise<void> {
+    try {
+      await this.eventProcessor.stopListening();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`Failed to stop event listeners before RPC restart: ${message}`);
+    }
   }
 
   private loadAdminKeypair(): anchor.web3.Keypair {

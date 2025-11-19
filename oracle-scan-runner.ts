@@ -106,7 +106,23 @@ export class ScanLoopRunner {
         }
 
         if (readinessResolution.status === "missing-context") {
-          this.options.db.markGameCompleted(game.game_address);
+          stats.errors += 1;
+          const secret = this.options.db.getSecretKey(game.game_address);
+          const errorReason = secret ? "missing-game-account" : "missing-secret";
+          const logMessage = secret
+            ? `⚠️  Game ${game.game_address} lost its on-chain account while still tracked; marking as desynced.`
+            : `❌ Game ${game.game_address} is missing its secret key; marking as desynced.`;
+          if (secret) {
+            logger.warning(logMessage);
+          } else {
+            logger.failure(logMessage);
+          }
+          this.options.db.markGameDesynced(game.game_address);
+          this.options.metrics.recordCompletion({
+            gameAddress: game.game_address,
+            outcome: "error",
+            error: errorReason,
+          });
           continue;
         }
 
@@ -142,8 +158,8 @@ export class ScanLoopRunner {
           await delayHelper(this.options.interGameDelayMs, { signal });
         }
       } catch (error) {
-    stats.errors++;
-    logger.error(`❌ Error completing game ${game.game_address}:`, error);
+        stats.errors++;
+        logger.error(`❌ Error completing game ${game.game_address}:`, error);
         this.options.metrics.recordCompletion({
           gameAddress: game.game_address,
           outcome: "error",

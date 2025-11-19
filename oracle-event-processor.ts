@@ -398,12 +398,23 @@ class RegistrySyncScheduler {
       running: false,
       timerPending: false,
     };
-    if (entry.running || entry.queue.length > 0 || entry.timerPending) {
-      entry.queue.push({ ...options });
+    const normalized = { ...options };
+
+    if (entry.retryPending && entry.timerPending) {
+      entry.retryPending = this.mergeScheduleOptions(entry.retryPending, normalized);
       this.entries.set(options.gameAddress, entry);
       return;
     }
-    entry.queue.push({ ...options });
+
+    if (entry.queue.length > 0) {
+      const lastIndex = entry.queue.length - 1;
+      entry.queue[lastIndex] = this.mergeScheduleOptions(
+        entry.queue[lastIndex]!,
+        normalized,
+      );
+    } else {
+      entry.queue.push(normalized);
+    }
 
     if (!entry.running && entry.timer === undefined && !entry.timerPending) {
       void this.processQueue(options.gameAddress, entry);

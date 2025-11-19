@@ -1512,7 +1512,7 @@ describe("OracleService internals", () => {
     }
   });
 
-  it("scanAndCompleteActiveGames clears tracked games lacking secrets", async () => {
+  it("scanAndCompleteActiveGames marks games lacking secrets as desynced", async () => {
     const service = OracleService.getInstance();
     const db = OracleDatabase.getInstance();
 
@@ -1521,21 +1521,21 @@ describe("OracleService internals", () => {
     const orphanGame = "orphaned-game";
     db.trackGame(orphanGame);
 
-    const originalMarkCompleted = db.markGameCompleted.bind(db);
+    const originalMarkDesynced = db.markGameDesynced.bind(db);
     const marked: string[] = [];
-    (db as any).markGameCompleted = (address: string) => {
+    (db as any).markGameDesynced = (address: string) => {
       marked.push(address);
-      originalMarkCompleted(address);
+      originalMarkDesynced(address);
     };
 
     try {
       const stats = await service.scanRunner.scanAndCompleteActiveGames();
-      expect(stats).toEqual(createEmptyCompletionStats());
+      expect(stats).toEqual({ completed: 0, errors: 1, notReady: 0 });
       expect(marked).toContain(orphanGame);
       const remaining = db.getPendingGames().map((entry) => entry.game_address);
       expect(remaining).not.toContain(orphanGame);
     } finally {
-      (db as any).markGameCompleted = originalMarkCompleted;
+      (db as any).markGameDesynced = originalMarkDesynced;
     }
   });
 
