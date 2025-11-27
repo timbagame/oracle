@@ -1,4 +1,5 @@
 import * as anchor from "@coral-xyz/anchor";
+import { createHash } from "crypto";
 import { PublicKey, type BlockhashWithExpiryBlockHeight } from "@solana/web3.js";
 
 type PublicKeyRecord = {
@@ -205,4 +206,100 @@ export async function confirmTransaction(
   }
 
   throw new Error("Connection does not support transaction confirmation");
+}
+
+export async function resolveTokenProgram(
+  connection: anchor.web3.Connection,
+  tokenMint: PublicKey,
+  tokenProgram?: PublicKeyLike,
+  tokenProgramCache?: Map<string, PublicKey>,
+): Promise<PublicKey> {
+  const cacheKey = tokenMint.toBase58();
+
+  // Try direct program ID first
+  if (tokenProgram) {
+    const directProgram = coercePublicKey(tokenProgram);
+    if (directProgram && !directProgram.equals(PublicKey.default)) {
+      if (tokenProgramCache) {
+        tokenProgramCache.set(cacheKey, directProgram);
+      }
+      return directProgram;
+    }
+  }
+
+  // Check cache
+  if (tokenProgramCache) {
+    const cached = tokenProgramCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+
+  // Fetch from chain
+  try {
+    const mintAccount = await connection.getAccountInfo(tokenMint);
+    const owner = mintAccount?.owner;
+
+    const resolved = matchTokenProgramOwner(owner, tokenMint);
+    if (tokenProgramCache) {
+      tokenProgramCache.set(cacheKey, resolved);
+    }
+    return resolved;
+  } catch (error) {
+    throw new Error(
+      `Unable to resolve token program for mint ${tokenMint.toBase58()}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error instanceof Error ? error : undefined },
+    );
+  }
+}
+
+function matchTokenProgramOwner(
+  owner: PublicKey | undefined,
+  tokenMint: PublicKey,
+): PublicKey {
+  // Import these dynamically or assume they are available globally if we want to avoid circular deps or extra imports
+  // For now, we'll use string comparison or passed-in constants if needed, but standard SPL token IDs are constant.
+  // Better to import them at top level if possible, but let's check imports.
+  // We need to add imports for TOKEN_PROGRAM_ID and TOKEN_2022_PROGRAM_ID to this file.
+  // Actually, let's just use the known public keys to avoid adding spl-token dependency if not already there,
+  // but the project likely has it. Let's check imports first.
+  // The original file didn't have spl-token imports. I should add them.
+
+  const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+  const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+
+  if (owner?.equals(TOKEN_2022_PROGRAM_ID)) {
+    return TOKEN_2022_PROGRAM_ID;
+  }
+
+  if (owner?.equals(TOKEN_PROGRAM_ID)) {
+    return TOKEN_PROGRAM_ID;
+  }
+
+  throw new Error(
+    owner
+      ? `Unsupported token program owner ${owner.toBase58()}`
+      : `Mint ${tokenMint.toBase58()} is missing an owner`,
+  );
+}
+
+export function generateUnbiasedRandom(
+  seed: Buffer,
+  max: bigint,
+): bigint {
+  const maxU64 = 0xffff_ffff_ffff_ffffn;
+  const maxValid = maxU64 - (maxU64 % max);
+
+  const entropyHash = createHash("sha256").update(seed).digest();
+
+  for (let startPos = 0; startPos <= entropyHash.length - 8; startPos++) {
+    const randomU64 = entropyHash.readBigUInt64LE(startPos);
+    if (randomU64 < maxValid) {
+      return randomU64 % max;
+    }
+  }
+
+  throw new Error(
+    "Unable to generate unbiased random number from provided seed",
+  );
 }

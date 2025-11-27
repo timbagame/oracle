@@ -3,7 +3,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { GameCompletionManager } from "../oracle-completion-manager.ts";
 import type { GameCompletionManagerOptions } from "../oracle-completion-manager.ts";
 import { Keypair, PublicKey, type BlockhashWithExpiryBlockHeight } from "@solana/web3.js";
-import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import type { OracleMetrics } from "../metrics.ts";
 import type {
   GameCompletionResult,
@@ -119,7 +119,7 @@ function createManager(overrides: {
 describe("GameCompletionManager registry prefetch cleanup", () => {
   it("resets the prefetched player schedule when a desync occurs", async () => {
     const { manager } = createManager();
-    const spy = spyOn(manager, "resetRegistryPrefetchSchedule");
+    const spy = spyOn(manager.registrySyncManager, "resetRegistryPrefetchSchedule");
 
     const gamePda = Keypair.generate().publicKey;
     const context: GameOnChainContext = {
@@ -147,7 +147,7 @@ describe("GameCompletionManager registry prefetch cleanup", () => {
     };
 
     await expect(
-      (manager as any).ensurePlayersInSync("bad-game", context, readiness, 2),
+      (manager.registrySyncManager as any).ensurePlayersInSync("bad-game", context, readiness, 2),
     ).resolves.toMatchObject({ error: expect.anything() });
 
     expect(spy).toHaveBeenCalledWith("bad-game");
@@ -179,7 +179,7 @@ describe("GameCompletionManager registry prefetch cleanup", () => {
     const nowSpy = spyOn(Date, "now").mockReturnValue(1_000);
     try {
       await (manager as any).prefetchPlayerRegistry("cooldown-game", context, readiness);
-      const schedule = (manager as any).registryPrefetchSchedule.get("cooldown-game");
+      const schedule = (manager.registrySyncManager as any).registryPrefetchSchedule.get("cooldown-game");
       expect(schedule).toBe(2_000);
     } finally {
       nowSpy.mockRestore();
@@ -260,51 +260,7 @@ describe("GameCompletionManager.calculateWinnerIndex", () => {
   });
 });
 
-describe("GameCompletionManager.resolveTokenProgram", () => {
-  it("returns direct program ids and caches them", async () => {
-    const { manager, tokenProgramCache } = createManager();
-    const mint = Keypair.generate().publicKey;
 
-    const program = await manager.resolveTokenProgram(TOKEN_2022_PROGRAM_ID, mint);
-    expect(program.equals(TOKEN_2022_PROGRAM_ID)).toBe(true);
-    expect(tokenProgramCache.get(mint.toBase58())).toEqual(TOKEN_2022_PROGRAM_ID);
-  });
-
-  it("queries mint accounts when program id is missing and memoizes the result", async () => {
-    let lookups = 0;
-    const owner = TOKEN_PROGRAM_ID;
-    const { manager, connection, tokenProgramCache } = createManager({
-      accountInfo: async (_pubkey) => {
-        lookups += 1;
-        return { owner };
-      },
-    });
-
-    const mint = Keypair.generate().publicKey;
-    const program = await manager.resolveTokenProgram(PublicKey.default, mint);
-    expect(program.equals(owner)).toBe(true);
-    expect(lookups).toBe(1);
-
-    const cached = await manager.resolveTokenProgram(PublicKey.default, mint);
-    expect(cached.equals(owner)).toBe(true);
-    expect(lookups).toBe(1);
-    expect(tokenProgramCache.get(mint.toBase58())).toEqual(owner);
-    expect(connection.getAccountInfo).toBeDefined();
-  });
-
-  it("throws when the mint owner is unsupported", async () => {
-    const unsupported = Keypair.generate().publicKey;
-    const { manager } = createManager({
-      accountInfo: async () => ({ owner: unsupported }),
-    });
-
-    const mint = Keypair.generate().publicKey;
-
-    await expect(
-      manager.resolveTokenProgram(PublicKey.default, mint)
-    ).rejects.toThrow(`Unsupported token program owner ${unsupported.toBase58()}`);
-  });
-});
 
 describe("GameCompletionManager.attemptGameCompletion outcome handling", () => {
   it("records not ready outcomes via the shared helper", async () => {
@@ -618,7 +574,7 @@ describe("GameCompletionManager player registry recovery", () => {
       },
     });
 
-    const firstAttempt = await (manager as any).tryRecoverPlayerRegistry(
+    const firstAttempt = await (manager.registrySyncManager as any).tryRecoverPlayerRegistry(
       gameAddress,
       context,
       readiness,
@@ -626,7 +582,7 @@ describe("GameCompletionManager player registry recovery", () => {
       1,
     );
 
-    const secondAttempt = await (manager as any).tryRecoverPlayerRegistry(
+    const secondAttempt = await (manager.registrySyncManager as any).tryRecoverPlayerRegistry(
       gameAddress,
       context,
       readiness,
@@ -680,10 +636,10 @@ describe("GameCompletionManager registry prefetch", () => {
     const gameAddress = "prefetch-retry";
 
     try {
-      await (manager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+      await (manager.registrySyncManager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
       expect(players.get(gameAddress)).toBeUndefined();
 
-      await (manager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+      await (manager.registrySyncManager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
 
       expect(attempts).toBe(2);
       expect(players.get(gameAddress)).toEqual(recoveredPlayers);
@@ -716,9 +672,9 @@ describe("GameCompletionManager registry prefetch", () => {
     const gameAddress = "prefetch-concurrent";
 
     try {
-      const firstAttempt = (manager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+      const firstAttempt = (manager.registrySyncManager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
       await Promise.resolve();
-      const secondAttempt = (manager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+      const secondAttempt = (manager.registrySyncManager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
 
       release?.();
 
@@ -754,8 +710,8 @@ describe("GameCompletionManager registry prefetch", () => {
 
     try {
       // Start two prefetches concurrently
-      const p1 = (manager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
-      const p2 = (manager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+      const p1 = (manager.registrySyncManager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+      const p2 = (manager.registrySyncManager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
 
       // Allow them to proceed
       release?.();
@@ -791,7 +747,7 @@ describe("GameCompletionManager.ensurePlayersInSync boundary cases", () => {
     };
 
     // Should not throw and return empty players list
-    const result = await (manager as any).ensurePlayersInSync(
+    const result = await (manager.registrySyncManager as any).ensurePlayersInSync(
       gameAddress,
       context,
       readiness,

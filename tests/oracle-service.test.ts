@@ -6,6 +6,7 @@ import { Keypair, PublicKey } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import * as delayModule from "../delay.ts";
 import type { TimbaGameAccount } from "../types/timba.ts";
+import { resolveTokenProgram } from "../solana-utils.ts";
 
 type OracleServiceClass = typeof import("../oracle-service.ts").OracleService;
 type OracleDatabaseClass = typeof import("../database.ts").OracleDatabase;
@@ -461,14 +462,14 @@ describe("OracleService", () => {
     };
 
     // 3. Verify cache is used initially (returns poison)
-    const cached = await service.completionManager.resolveTokenProgram(undefined, mint);
+    const cached = await resolveTokenProgram(connection, mint, undefined, service.tokenProgramCache);
     expect(cached.toBase58()).toBe(wrongProgram.toBase58());
 
     // 4. Simulate invalidation (manually, as we would in error handler)
     service.tokenProgramCache.delete(mint.toBase58());
 
     // 5. Verify it fetches correct program now
-    const resolved = await service.completionManager.resolveTokenProgram(undefined, mint);
+    const resolved = await resolveTokenProgram(connection, mint, undefined, service.tokenProgramCache);
     expect(resolved.toBase58()).toBe(correctProgram.toBase58());
 
     // Restore
