@@ -32,8 +32,6 @@ describe("OracleService event handling", () => {
     const service = createService(db, programStub);
 
     await service.startEventListening();
-    console.log("DEBUG: OracleServiceClass defined?", !!OracleServiceClass);
-    console.log("DEBUG: EVENT_HANDLER_CONFIG defined?", !!OracleServiceClass?.EVENT_HANDLER_CONFIG);
     expect(programStub.addCalls.map((call) => call.event)).toEqual(
       OracleServiceClass.EVENT_HANDLER_CONFIG.map(
         (definition) => definition.event
