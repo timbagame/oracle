@@ -358,11 +358,7 @@ export class GameCompletionManager {
 
     const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
 
-    // Use new calculateWinnerIndex logic (which uses generateUnbiasedRandom)
-    // Wait, I should probably keep calculateWinnerIndex here but make it use generateUnbiasedRandom
-    // or just inline the logic using generateUnbiasedRandom.
-    // The original calculateWinnerIndex had some specific buffer concatenation logic.
-    // Let's implement calculateWinnerIndex using generateUnbiasedRandom.
+    // Calculate winner index using unbiased random generation
 
     const winnerIndex = this.calculateWinnerIndex(
       secretKeyBuffer,
@@ -708,15 +704,7 @@ export class GameCompletionManager {
         return tx.serialize();
       },
       () => {
-        // Invalidate token program cache on error (B-005)
-        // We can't access tokenMint easily here without passing it or parsing it.
-        // But we can clear the whole cache or just rely on the fact that we might not need to be so granular.
-        // Or we can pass a callback.
-        // The original code invalidated specific token mint.
-        // "this.options.tokenProgramCache.delete(tokenMint.toBase58());"
-        // I should probably expose this capability or just clear the cache.
-        // For now, let's clear the cache if we can't identify the mint, or just accept that we might not invalidate it perfectly.
-        // Actually, args.gameAccount.tokenMint is available here.
+        // Invalidate token program cache on error
         const tokenMint = ensurePublicKey(args.gameAccount.tokenMint);
         this.options.tokenProgramCache.delete(tokenMint.toBase58());
       }
@@ -775,9 +763,7 @@ export class GameCompletionManager {
     return pda;
   }
 
-  // F-001: Expose resetRegistryPrefetchSchedule for external use if needed,
-  // but it's now handled by RegistrySyncManager.
-  // We can delegate if we want to keep the API compatible.
+  // Delegate resetRegistryPrefetchSchedule to RegistrySyncManager
   public resetRegistryPrefetchSchedule(gameAddress: string): void {
     this.registrySyncManager.resetRegistryPrefetchSchedule(gameAddress);
   }

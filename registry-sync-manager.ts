@@ -28,7 +28,7 @@ export class RegistrySyncManager {
   private readonly prefetchingGames = new Map<string, Promise<void>>();
   private readonly attemptedRegistryRecovery = new Set<string>();
 
-  // F-004: Cache for registry analysis results
+  // Cache for registry analysis results
   private readonly registryAnalysisCache = new Map<string, {
     count: number;
     expected: number;
@@ -56,7 +56,7 @@ export class RegistrySyncManager {
 
     const hasPlayers = players.length > 0;
 
-    // F-004: Use cached analysis if available and valid
+    // Use cached analysis if available and valid
     const initialAnalysis = this.getCachedOrAnalyze(gameAddress, players, expectedEntries);
 
     const hasDuplicatePlayers = players.length > 0 && new Set(players).size !== players.length;

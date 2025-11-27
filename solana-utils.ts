@@ -257,13 +257,7 @@ function matchTokenProgramOwner(
   owner: PublicKey | undefined,
   tokenMint: PublicKey,
 ): PublicKey {
-  // Import these dynamically or assume they are available globally if we want to avoid circular deps or extra imports
-  // For now, we'll use string comparison or passed-in constants if needed, but standard SPL token IDs are constant.
-  // Better to import them at top level if possible, but let's check imports.
-  // We need to add imports for TOKEN_PROGRAM_ID and TOKEN_2022_PROGRAM_ID to this file.
-  // Actually, let's just use the known public keys to avoid adding spl-token dependency if not already there,
-  // but the project likely has it. Let's check imports first.
-  // The original file didn't have spl-token imports. I should add them.
+  // Match against known token program IDs
 
   const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
   const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
