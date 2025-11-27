@@ -147,7 +147,13 @@ describe("GameCompletionManager registry prefetch cleanup", () => {
     };
 
     await expect(
-      (manager.registrySyncManager as any).ensurePlayersInSync("bad-game", context, readiness, 2),
+      (manager.registrySyncManager as any).ensurePlayersInSync(
+        "bad-game",
+        context,
+        readiness,
+        2,
+        () => ({ success: false, error: "desync" })
+      ),
     ).resolves.toMatchObject({ error: expect.anything() });
 
     expect(spy).toHaveBeenCalledWith("bad-game");
@@ -178,7 +184,7 @@ describe("GameCompletionManager registry prefetch cleanup", () => {
 
     const nowSpy = spyOn(Date, "now").mockReturnValue(1_000);
     try {
-      await (manager as any).prefetchPlayerRegistry("cooldown-game", context, readiness);
+      await (manager.registrySyncManager as any).prefetchPlayerRegistry("cooldown-game", context, readiness);
       const schedule = (manager.registrySyncManager as any).registryPrefetchSchedule.get("cooldown-game");
       expect(schedule).toBe(2_000);
     } finally {
@@ -479,18 +485,19 @@ describe("GameCompletionManager player registry recovery", () => {
     },
   };
 
-  it("rebuilds the local registry before resolving winners", async () => {
-    const recoverInvocations: Array<{ expectedTickets: number }> = [];
+  it("recovers from a partial registry mismatch using the recovery callback", async () => {
     const existingPlayer = Keypair.generate().publicKey.toBase58();
     const recoveredPlayers = [existingPlayer, Keypair.generate().publicKey.toBase58()];
+    let recoverInvocations: any[] = [];
+
     const { manager, players, secretStore, desyncedGames } = createManager({
-      recoverPlayers: async (options) => {
-        recoverInvocations.push({ expectedTickets: options.expectedTickets });
+      recoverPlayers: async (opts) => {
+        recoverInvocations.push(opts);
         return recoveredPlayers;
       },
     });
 
-    const gameAddress = "registry-recover";
+    const gameAddress = "partial-registry";
     secretStore.set(gameAddress, { secretKey: secretHex, randomHash: randomHex });
     players.set(gameAddress, [existingPlayer]);
 
@@ -501,8 +508,8 @@ describe("GameCompletionManager player registry recovery", () => {
     );
 
     expect("error" in result).toBe(false);
-  expect(recoverInvocations).toEqual([{ expectedTickets: 2 }]);
-  expect(players.get(gameAddress)).toEqual(recoveredPlayers);
+    expect(recoverInvocations[0]).toMatchObject({ expectedTickets: 2 });
+    expect(players.get(gameAddress)).toEqual(recoveredPlayers);
     expect(desyncedGames.size).toBe(0);
   });
 
