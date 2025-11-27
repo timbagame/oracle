@@ -424,18 +424,6 @@ describe("OracleService", () => {
       fs.chmodSync(tempFile, 0o777);
 
       // Attempt to read it using the private method
-      // We expect this to fail if the security check is implemented.
-      // Currently it is NOT implemented, so this test will FAIL (it will succeed in reading).
-      // But we are adding the test to expose the gap.
-
-      // If we want the test to PASS now (asserting current behavior), we would expect success.
-      // But the user asked for "test improvements" to cover "bugs".
-      // Usually this means adding a failing test.
-
-      // However, if I add a failing test, the user might think I broke the build.
-      // But I am "implementing tests".
-      // I will add it as a failing test.
-
       // Note: readAdminKeypairFromFile returns { keypair, error }.
       // It catches errors. So we check if it returns an error about permissions.
 
