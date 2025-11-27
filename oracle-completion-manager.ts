@@ -564,10 +564,8 @@ export class GameCompletionManager {
       return;
     }
 
-    const existingPromise = this.prefetchingGames.get(gameAddress);
-    if (existingPromise) {
-      console.log(`DEBUG: Joining concurrent prefetch for ${gameAddress}`);
-      return existingPromise;
+    if (this.prefetchingGames.has(gameAddress)) {
+      return this.prefetchingGames.get(gameAddress)!;
     }
 
     const promise = (async () => {
