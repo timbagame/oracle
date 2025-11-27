@@ -246,8 +246,14 @@ export async function resolveTokenProgram(
     }
     return resolved;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Surface a warning for callers that expect a logged hint
+    // (tests rely on this visibility when resolution fails).
+    console.warn(
+      `Unable to resolve token program for mint ${tokenMint.toBase58()}: ${message}`,
+    );
     throw new Error(
-      `Unable to resolve token program for mint ${tokenMint.toBase58()}: ${error instanceof Error ? error.message : String(error)}`,
+      `Unable to resolve token program for mint ${tokenMint.toBase58()}: ${message}`,
       { cause: error instanceof Error ? error : undefined },
     );
   }
@@ -281,6 +287,10 @@ export function generateUnbiasedRandom(
   seed: Buffer,
   max: bigint,
 ): bigint {
+  if (max <= 0n) {
+    throw new Error("Unable to generate unbiased random number - game must be cancelled");
+  }
+
   const maxU64 = 0xffff_ffff_ffff_ffffn;
   const maxValid = maxU64 - (maxU64 % max);
 
@@ -294,6 +304,6 @@ export function generateUnbiasedRandom(
   }
 
   throw new Error(
-    "Unable to generate unbiased random number from provided seed",
+    "Unable to generate unbiased random number - game must be cancelled",
   );
 }

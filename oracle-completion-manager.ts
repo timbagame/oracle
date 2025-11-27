@@ -57,9 +57,10 @@ export class GameCompletionManager {
 
   constructor(private readonly options: GameCompletionManagerOptions) {
     this.transactionBuilder = new GameCompletionTransactionBuilder({
-      program: options.getProgram(),
+      getProgram: () => options.getProgram(),
       adminKeypair: options.adminKeypair,
       tokenProgramCache: options.tokenProgramCache,
+      getConnection: () => options.getConnection() as unknown as anchor.web3.Connection,
     });
 
     this.registrySyncManager = new RegistrySyncManager({
@@ -70,9 +71,9 @@ export class GameCompletionManager {
     });
 
     this.transactionSubmitter = new TransactionSubmitter({
-      connection: options.getConnection() as unknown as Connection,
+      getConnection: () => options.getConnection() as unknown as Connection,
       confirmTransaction: options.confirmTransaction,
-      confirmOpts: (options.getProgram().provider as anchor.AnchorProvider).opts,
+      confirmOpts: (options.getProgram().provider as anchor.AnchorProvider | undefined)?.opts,
     });
   }
 
@@ -634,15 +635,16 @@ export class GameCompletionManager {
       return { ready: false, gameAccount: null };
     }
 
-  const evaluatedAt = blockTime ?? (await this.getBlockchainTime());
-  const expiresAt = Number(gameAccount.createdAt) + Number(gameAccount.timeout);
-  const isExpired = evaluatedAt >= expiresAt;
+    const evaluatedAt = blockTime ?? (await this.getBlockchainTime());
+    const expiresAt = Number(gameAccount.createdAt) + Number(gameAccount.timeout);
+    const isExpired = evaluatedAt >= expiresAt;
     const ticketsCount = Number(gameAccount.ticketsCount);
-    const isFull = ticketsCount >= Number(gameAccount.maxTickets);
-    const hasMinTickets = ticketsCount >= Number(gameAccount.minTickets);
+    const hasTickets = ticketsCount > 0;
+    const isFull = hasTickets && ticketsCount >= Number(gameAccount.maxTickets);
+    const hasMinTickets = hasTickets && ticketsCount >= Number(gameAccount.minTickets);
 
     return {
-      ready: isFull || (isExpired && hasMinTickets),
+      ready: hasTickets && (isFull || (isExpired && hasMinTickets)),
       gameAccount,
       evaluatedAt,
     };

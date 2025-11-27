@@ -193,6 +193,31 @@ describe("GameCompletionManager registry prefetch cleanup", () => {
   });
 });
 
+describe("GameCompletionManager readiness evaluation", () => {
+  it("does not mark games with zero tickets as ready even if expired and minTickets is zero", async () => {
+    const gameAccount = createGameAccountStub({
+      ticketsCount: BigInt(0),
+      maxTickets: BigInt(5),
+      minTickets: BigInt(0),
+      timeout: BigInt(10),
+      createdAt: BigInt(0),
+    });
+
+    const { manager } = createManager({
+      programId: Keypair.generate().publicKey,
+    });
+
+    const fetchSpy = spyOn(manager as any, "fetchGameAccount").mockResolvedValue(gameAccount);
+
+    const gamePda = Keypair.generate().publicKey;
+    const readiness = await manager.evaluateGameReadiness(gamePda, gamePda.toBase58());
+
+    expect(readiness.ready).toBe(false);
+
+    fetchSpy.mockRestore();
+  });
+});
+
 describe("GameCompletionManager.evaluateGameReadiness", () => {
   it("treats block time equal to the timeout boundary as expired when minimum tickets are met", async () => {
     const { manager } = createManager();
@@ -734,8 +759,8 @@ describe("GameCompletionManager registry prefetch", () => {
 });
 
 describe("GameCompletionManager.ensurePlayersInSync boundary cases", () => {
-  // B-001: ensurePlayersInSync handles 0 expected tickets
-  it("handles 0 expected tickets gracefully without error", async () => {
+  // B-001: ensurePlayersInSync rejects 0 expected tickets
+  it("returns a fatal error when expected tickets is zero", async () => {
     const { manager } = createManager();
     const gameAddress = "zero-tickets-game";
 
@@ -753,14 +778,14 @@ describe("GameCompletionManager.ensurePlayersInSync boundary cases", () => {
       } as TimbaGameAccount,
     };
 
-    // Should not throw and return empty players list
     const result = await (manager.registrySyncManager as any).ensurePlayersInSync(
       gameAddress,
       context,
       readiness,
-      0
+      0,
+      () => ({ success: false, error: "fatal" })
     );
 
-    expect(result).toEqual({ players: [] });
+    expect(result).toHaveProperty("error");
   });
 });

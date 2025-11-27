@@ -10,7 +10,7 @@ import {
 import { logger } from "./logger.ts";
 
 export interface TransactionSubmitterOptions {
-  connection: Connection;
+  getConnection: () => Connection;
   confirmTransaction: (
     signature: string,
     latestBlockhash?: BlockhashWithExpiryBlockHeight,
@@ -25,7 +25,8 @@ export class TransactionSubmitter {
     signTransaction: (latestBlockhash: BlockhashWithExpiryBlockHeight) => Promise<Buffer>,
     onRetry?: (error: unknown) => void
   ): Promise<string> {
-    const { connection, confirmOpts } = this.options;
+    const connection = this.options.getConnection();
+    const { confirmOpts } = this.options;
     const blockhashCommitment =
       confirmOpts?.preflightCommitment ?? confirmOpts?.commitment ?? "confirmed";
 

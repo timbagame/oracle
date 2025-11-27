@@ -87,7 +87,11 @@ export class OracleEventProcessor {
       }
     });
     this.processingQueues.set(gameAddress, next);
-    return next;
+    return next.finally(() => {
+      if (this.processingQueues.get(gameAddress) === next) {
+        this.processingQueues.delete(gameAddress);
+      }
+    });
   }
 
   public async startListening(): Promise<void> {
@@ -124,19 +128,17 @@ export class OracleEventProcessor {
     const listenerIds: number[] = [];
 
     try {
-      await Promise.all(
-        this.options.config.map(async (handlerConfig) => {
-          const listenerId = await this.options.getProgram().addEventListener(
-            handlerConfig.event,
-            handlerConfig.createHandler({
-              handlePlayerEvent: (action, evt) => this.handlePlayerEvent(action, evt),
-              handleGameInitialized: (evt) => this.handleGameInitialized(evt),
-              handleGameStatusChange: (status, evt) => this.handleGameStatusChange(status, evt),
-            }),
-          );
-          listenerIds.push(listenerId);
-        }),
-      );
+      for (const handlerConfig of this.options.config) {
+        const listenerId = await this.options.getProgram().addEventListener(
+          handlerConfig.event,
+          handlerConfig.createHandler({
+            handlePlayerEvent: (action, evt) => this.handlePlayerEvent(action, evt),
+            handleGameInitialized: (evt) => this.handleGameInitialized(evt),
+            handleGameStatusChange: (status, evt) => this.handleGameStatusChange(status, evt),
+          }),
+        );
+        listenerIds.push(listenerId);
+      }
       return listenerIds;
     } catch (error) {
       const program = this.options.getProgram();
@@ -236,17 +238,21 @@ export class OracleEventProcessor {
 
     const { gameAddress } = eventData;
 
-    // Execute synchronously as these don't have race conditions with player events
-    if (status === "completed") {
-      this.options.db.markGameCompleted(gameAddress);
-      this.options.onGameFinalized?.(gameAddress);
-      return;
-    }
+    try {
+      // Execute synchronously as these don't have race conditions with player events
+      if (status === "completed") {
+        this.options.db.markGameCompleted(gameAddress);
+        this.options.onGameFinalized?.(gameAddress);
+        return;
+      }
 
-    this.options.db.markGameClosed(gameAddress);
-    this.options.db.clearStalePlayersForGame(gameAddress);
-    logger.info(`🚫 Game closed: ${gameAddress}`);
-    this.options.onGameFinalized?.(gameAddress);
+      this.options.db.markGameClosed(gameAddress);
+      this.options.db.clearStalePlayersForGame(gameAddress);
+      logger.info(`🚫 Game closed: ${gameAddress}`);
+      this.options.onGameFinalized?.(gameAddress);
+    } catch (error) {
+      logger.failure(`Error in game ${status} event for ${gameAddress}:`, error);
+    }
   }
 
   public handleGameInitialized(event: TimbaGameInitializedEvent): void {
@@ -418,6 +424,7 @@ class RegistrySyncScheduler {
     const entry = this.entries.get(options.gameAddress) ?? {
       queue: [],
       running: false,
+      timerPending: false,
     };
 
     const normalized = this.normalizeOptions(options);
@@ -508,19 +515,12 @@ class RegistrySyncScheduler {
           entry.running = false;
           entry.timerPending = true;
 
-          // Store the failed options as retryPending if not already set
-          if (!entry.retryPending) {
-             entry.retryPending = next;
-          } else {
-             entry.retryPending = this.mergeScheduleOptions(entry.retryPending, next);
-          }
-          this.entries.set(gameAddress, entry);
-
-          this.setTimer(() => {
+          entry.timer = this.setTimer(() => {
             const current = this.entries.get(gameAddress);
             if (!current) return;
 
             current.timerPending = false;
+            current.timer = undefined;
 
             // Move retryPending to queue
             if (current.retryPending) {
@@ -532,14 +532,22 @@ class RegistrySyncScheduler {
             void this.processQueue(gameAddress, current);
           }, this.retryDelayMs);
 
+          // Store the failed options as retryPending if not already set
+          if (!entry.retryPending) {
+             entry.retryPending = next;
+          } else {
+             entry.retryPending = this.mergeScheduleOptions(entry.retryPending, next);
+          }
+          this.entries.set(gameAddress, entry);
+
           return;
         }
 
-        if (entry.timer !== undefined) {
-          this.clearTimer(entry.timer);
-          entry.timer = undefined;
-        }
+      if (entry.timer !== undefined) {
+        this.clearTimer(entry.timer);
+        entry.timer = undefined;
       }
+    }
     } finally {
       entry.running = false;
       if (entry.retryPending) {

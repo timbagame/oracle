@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { resolveTokenProgram } from "../solana-utils.ts";
+import { generateUnbiasedRandom, resolveTokenProgram } from "../solana-utils.ts";
 
 describe("solana-utils.resolveTokenProgram", () => {
   it("returns direct program ids and caches them", async () => {
@@ -49,5 +49,14 @@ describe("solana-utils.resolveTokenProgram", () => {
     await expect(
       resolveTokenProgram(connection, mint)
     ).rejects.toThrow(`Unsupported token program owner ${unsupported.toBase58()}`);
+  });
+});
+
+describe("solana-utils.generateUnbiasedRandom", () => {
+  it("throws when max is zero", () => {
+    const seed = Buffer.alloc(32, 1);
+    expect(() => generateUnbiasedRandom(seed, 0n)).toThrow(
+      "Unable to generate unbiased random number - game must be cancelled",
+    );
   });
 });

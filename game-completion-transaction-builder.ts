@@ -7,9 +7,10 @@ import { ensurePublicKey, resolveTokenProgram } from "./solana-utils.ts";
 import { deriveGameAccounts } from "./oracle-accounts.ts";
 
 export interface GameCompletionTransactionBuilderOptions {
-  program: anchor.Program<Timba>;
+  getProgram: () => anchor.Program<Timba>;
   adminKeypair: anchor.web3.Keypair;
   tokenProgramCache: Map<string, PublicKey>;
+  getConnection: () => anchor.web3.Connection;
 }
 
 export class GameCompletionTransactionBuilder {
@@ -25,19 +26,20 @@ export class GameCompletionTransactionBuilder {
     builder: any; // Using any to avoid deep import issues with Anchor types
     signers: anchor.web3.Keypair[];
   }> {
+    const program = this.options.getProgram();
     const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
 
     const creatorPublicKey = ensurePublicKey(gameAccount.creator);
     const tokenMint = ensurePublicKey(gameAccount.tokenMint);
 
     const tokenProgramId = await resolveTokenProgram(
-      this.options.program.provider.connection,
+      this.options.getConnection(),
       tokenMint,
       gameAccount.tokenProgram,
       this.options.tokenProgramCache
     );
 
-    const programId = ensurePublicKey(this.options.program.programId);
+    const programId = ensurePublicKey(program.programId);
 
     const {
       gamePda,
@@ -63,7 +65,7 @@ export class GameCompletionTransactionBuilder {
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
     } as const;
 
-    const builder = this.options.program.methods
+    const builder = program.methods
       .completeGame([...randomHashBuffer], [...secretKeyBuffer], winnerIndex)
       .accountsPartial({
         game: gamePda,

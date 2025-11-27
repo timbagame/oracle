@@ -48,12 +48,22 @@ export class RegistrySyncManager {
     expectedEntries: number,
     recordFatalFailure: (gameAddress: string, error: string) => GameCompletionResult
   ): Promise<{ players: string[] } | { error: GameCompletionResult }> {
-    let players = this.options.db.getGamePlayers(gameAddress);
-
-    if (expectedEntries === 0) {
-      return { players: [] };
+    if (expectedEntries <= 0) {
+      logger.failure(
+        `Ticket registry mismatch for ${gameAddress}: expected at least 1 entry, found ${expectedEntries}`,
+      );
+      if (this.options.markGameDesynced) {
+        this.options.markGameDesynced(gameAddress);
+      }
+      return {
+        error: recordFatalFailure(
+          gameAddress,
+          "No ticket entries available for completion",
+        ),
+      };
     }
 
+    let players = this.options.db.getGamePlayers(gameAddress);
     const hasPlayers = players.length > 0;
 
     // Use cached analysis if available and valid
