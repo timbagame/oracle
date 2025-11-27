@@ -243,7 +243,6 @@ export class OracleService {
       ? this.describeAdminKeypairError(adminKeypairSource, error)
       : `Failed to load admin keypair from ${adminKeypairSource}`;
 
-    console.log(`DEBUG: Failed to load admin keypair: ${details}`, error);
     this.logAdminKeypairFailure(adminKeypairPath, error);
     throw new Error(details);
   }
