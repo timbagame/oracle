@@ -61,11 +61,14 @@ export class TransactionSubmitter {
     try {
       return await sendWithBlockhash(latestBlockhash);
     } catch (error) {
-      if (onRetry) {
+      const retryable = this.shouldRetryAfterExpiry(error);
+
+      // Only invoke onRetry hooks for expiry-like failures where a retry makes sense.
+      if (retryable && onRetry) {
         onRetry(error);
       }
 
-      if (!this.shouldRetryAfterExpiry(error)) {
+      if (!retryable) {
         throw error;
       }
 

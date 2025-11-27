@@ -435,13 +435,19 @@ class RegistrySyncScheduler {
       return;
     }
 
-    if (entry.running) {
+    // Coalesce with the most recent queued item to avoid redundant syncs under bursty events.
+    if (entry.queue.length > 0) {
+      const lastIndex = entry.queue.length - 1;
+      entry.queue[lastIndex] = this.mergeScheduleOptions(entry.queue[lastIndex]!, normalized);
+    } else {
       entry.queue.push(normalized);
+    }
+
+    if (entry.running) {
       this.entries.set(options.gameAddress, entry);
       return;
     }
 
-    entry.queue.push(normalized);
     this.entries.set(options.gameAddress, entry);
     void this.processQueue(options.gameAddress, entry);
   }
