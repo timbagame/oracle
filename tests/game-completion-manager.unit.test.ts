@@ -724,10 +724,80 @@ describe("GameCompletionManager registry prefetch", () => {
 
       await Promise.allSettled([firstAttempt, secondAttempt]);
 
-      expect(attempts).toBe(2);
-      expect(players.get(gameAddress)).toEqual(recoveredPlayers);
+      expect(attempts).toBe(1);
+      // Since both fail (shared promise), players map should be empty or unchanged
+      expect(players.has(gameAddress)).toBe(false);
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  // B-007: prefetchPlayerRegistry prevents concurrent fetches
+  it("prevents concurrent registry prefetches for the same game", async () => {
+    let attempts = 0;
+    let release: ((value?: unknown) => void) | undefined;
+    const recoveredPlayers = [Keypair.generate().publicKey.toBase58()];
+
+    const { manager } = createManager({
+      recoverPlayers: async () => {
+        attempts++;
+        await new Promise((resolve) => {
+          release = resolve;
+        });
+        return recoveredPlayers;
+      },
+      registryPrefetchCooldownMs: 1000,
+    });
+
+    const nowSpy = spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const gameAddress = "concurrent-prefetch-test";
+
+    try {
+      // Start two prefetches concurrently
+      const p1 = (manager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+      const p2 = (manager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+
+      // Allow them to proceed
+      release?.();
+      await Promise.all([p1, p2]);
+
+      // Expect only ONE attempt because the second should have been blocked
+      // NOTE: This test is expected to FAIL until the bug is fixed.
+      expect(attempts).toBe(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+});
+
+describe("GameCompletionManager.ensurePlayersInSync boundary cases", () => {
+  // B-001: ensurePlayersInSync handles 0 expected tickets
+  it("handles 0 expected tickets gracefully without error", async () => {
+    const { manager } = createManager();
+    const gameAddress = "zero-tickets-game";
+
+    const context: GameOnChainContext = {
+      gamePda: Keypair.generate().publicKey,
+      randomHashBuffer: Buffer.alloc(32),
+      secretData: { secretKey: "", randomHash: "" },
+    };
+
+    const readiness: GameReadinessSnapshot = {
+      ready: true,
+      gameAccount: {
+        ticketsCount: BigInt(0),
+        maxTickets: BigInt(10),
+      } as TimbaGameAccount,
+    };
+
+    // Should not throw and return empty players list
+    const result = await (manager as any).ensurePlayersInSync(
+      gameAddress,
+      context,
+      readiness,
+      0
+    );
+
+    expect(result).toEqual({ players: [] });
   });
 });

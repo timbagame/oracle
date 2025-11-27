@@ -379,6 +379,10 @@ export class GameCompletionManager {
   ): Promise<{ players: string[] } | { error: GameCompletionResult }> {
     let players = this.options.db.getGamePlayers(gameAddress);
 
+    if (expectedEntries === 0) {
+      return { players: [] };
+    }
+
     const hasPlayers = players.length > 0;
     const initialAnalysis = analyzeRegistryState(
       {
@@ -560,32 +564,46 @@ export class GameCompletionManager {
       return;
     }
 
-    const nextWindow = now + this.registryPrefetchCooldownMs;
-    try {
-      const recovered = await recoverFn({
-        gameAddress,
-        context,
-        readiness,
-        expectedTickets,
-        reason: "readiness-check",
-      });
-
-      if (recovered && recovered.length === expectedTickets) {
-        this.options.db.replaceGamePlayers(gameAddress, recovered);
-        logger.info(
-          `♻️  Prefetched ${recovered.length} players for ${gameAddress} during readiness evaluation`,
-        );
-        this.registryPrefetchSchedule.set(gameAddress, nextWindow);
-      }
-    } catch (error) {
-      this.resetRegistryPrefetchSchedule(gameAddress);
-      const message = error instanceof Error ? error.message : String(error);
-      logger.warning(
-        `Unable to prefetch player registry for ${gameAddress}: ${message}`,
-      );
+    const existingPromise = this.prefetchingGames.get(gameAddress);
+    if (existingPromise) {
+      console.log(`DEBUG: Joining concurrent prefetch for ${gameAddress}`);
+      return existingPromise;
     }
 
+    const promise = (async () => {
+      try {
+        const recovered = await recoverFn({
+          gameAddress,
+          context,
+          readiness,
+          expectedTickets,
+          reason: "readiness-check",
+        });
+
+        if (recovered && recovered.length === expectedTickets) {
+          this.options.db.replaceGamePlayers(gameAddress, recovered);
+          logger.info(
+            `♻️  Prefetched ${recovered.length} players for ${gameAddress} during readiness evaluation`,
+          );
+          const nextWindow = now + this.registryPrefetchCooldownMs;
+          this.registryPrefetchSchedule.set(gameAddress, nextWindow);
+        }
+      } catch (error) {
+        this.resetRegistryPrefetchSchedule(gameAddress);
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warning(
+          `Unable to prefetch player registry for ${gameAddress}: ${message}`,
+        );
+      } finally {
+        this.prefetchingGames.delete(gameAddress);
+      }
+    })();
+
+    this.prefetchingGames.set(gameAddress, promise);
+    return promise;
   }
+
+  private readonly prefetchingGames = new Map<string, Promise<void>>();
 
   private deletePrefetchSchedule(gameAddress: string): void {
     this.registryPrefetchSchedule.delete(gameAddress);
@@ -938,11 +956,14 @@ export class GameCompletionManager {
       return tx.serialize();
     };
 
+    let lastSignature: string | undefined;
+
     const sendWithBlockhash = async (
       latestBlockhash: BlockhashWithExpiryBlockHeight,
     ): Promise<string> => {
       const rawTransaction = await signTransaction(latestBlockhash);
       const signature = await connection.sendRawTransaction(rawTransaction, sendOptions);
+      lastSignature = signature;
       await this.options.confirmTransaction(signature, latestBlockhash);
       return signature;
     };
@@ -976,11 +997,32 @@ export class GameCompletionManager {
     };
 
     let latestBlockhash = await connection.getLatestBlockhash(blockhashCommitment);
+
     try {
       return await sendWithBlockhash(latestBlockhash);
     } catch (error) {
+      // B-005: Invalidate token program cache on error
+      // We aggressively invalidate if ANY error occurs during completion,
+      // as it might be due to a program ID change or other staleness.
+      // This is a safe fallback.
+      this.options.tokenProgramCache.delete(tokenMint.toBase58());
+
       if (!shouldRetryAfterExpiry(error)) {
         throw error;
+      }
+
+      // Check if the previous transaction actually landed
+      if (lastSignature) {
+        try {
+           const status = await connection.getSignatureStatus(lastSignature);
+           if (status?.value?.confirmationStatus === 'confirmed' || status?.value?.confirmationStatus === 'finalized') {
+             if (!status.value.err) {
+               return lastSignature;
+             }
+           }
+        } catch (statusError) {
+          logger.warning(`Failed to check status of expired tx ${lastSignature}:`, statusError);
+        }
       }
 
       latestBlockhash = await connection.getLatestBlockhash(blockhashCommitment);

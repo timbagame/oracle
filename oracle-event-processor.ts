@@ -27,6 +27,7 @@ export interface OracleEventProcessorOptions {
   setTimeoutFn?: typeof setTimeout;
   clearTimeoutFn?: typeof clearTimeout;
   registrySyncRetryDelayMs?: number;
+  registrySyncTimeoutMs?: number;
 }
 
 export class OracleEventProcessor {
@@ -52,6 +53,7 @@ export class OracleEventProcessor {
         this.registrySyncRetryDelayMs,
         (callback, delay) => this.scheduleRetryTimeout(callback, delay),
         (timer) => this.clearRetryTimeout(timer),
+        options.registrySyncTimeoutMs,
       );
     }
   }
@@ -60,15 +62,32 @@ export class OracleEventProcessor {
     this.registrySyncScheduler?.clearAll();
   }
 
+  private processingQueues = new Map<string, Promise<void>>();
+
   private async runEventMutation(
     eventType: string,
     handler: () => void | Promise<void>,
+    gameAddress?: string,
   ): Promise<void> {
-    try {
-      await handler();
-    } catch (error) {
-      logger.failure(`Error in ${eventType} event:`, error);
+    if (!gameAddress) {
+      try {
+        await handler();
+      } catch (error) {
+        logger.failure(`Error in ${eventType} event:`, error);
+      }
+      return;
     }
+
+    const previous = this.processingQueues.get(gameAddress) ?? Promise.resolve();
+    const next = previous.then(async () => {
+      try {
+        await handler();
+      } catch (error) {
+        logger.failure(`Error in ${eventType} event for ${gameAddress}:`, error);
+      }
+    });
+    this.processingQueues.set(gameAddress, next);
+    return next;
   }
 
   public async startListening(): Promise<void> {
@@ -105,18 +124,19 @@ export class OracleEventProcessor {
     const listenerIds: number[] = [];
 
     try {
-      const program = this.options.getProgram();
-      for (const { event, createHandler } of this.options.config) {
-        const handler = createHandler({
-          handlePlayerEvent: (action, evt) => this.handlePlayerEvent(action, evt),
-          handleGameInitialized: (evt) => this.handleGameInitialized(evt),
-          handleGameStatusChange: (status, evt) => this.handleGameStatusChange(status, evt),
-        });
-
-        const listenerId = await program.addEventListener(event, handler);
-        listenerIds.push(listenerId);
-      }
-
+      await Promise.all(
+        this.options.config.map(async (handlerConfig) => {
+          const listenerId = await this.options.getProgram().addEventListener(
+            handlerConfig.event,
+            handlerConfig.createHandler({
+              handlePlayerEvent: (action, evt) => this.handlePlayerEvent(action, evt),
+              handleGameInitialized: (evt) => this.handleGameInitialized(evt),
+              handleGameStatusChange: (status, evt) => this.handleGameStatusChange(status, evt),
+            }),
+          );
+          listenerIds.push(listenerId);
+        }),
+      );
       return listenerIds;
     } catch (error) {
       const program = this.options.getProgram();
@@ -196,7 +216,7 @@ export class OracleEventProcessor {
       );
 
       await this.options.tryAutoComplete(event.gameKey, gameAddress, action);
-    });
+    }, gameAddress);
   }
 
   public handleGameStatusChange(
@@ -215,18 +235,18 @@ export class OracleEventProcessor {
     }
 
     const { gameAddress } = eventData;
-    void this.runEventMutation(eventType, async () => {
-      if (status === "completed") {
-        this.options.db.markGameCompleted(gameAddress);
-        this.options.onGameFinalized?.(gameAddress);
-        return;
-      }
 
-      this.options.db.markGameClosed(gameAddress);
-      this.options.db.clearStalePlayersForGame(gameAddress);
-      logger.info(`🚫 Game closed: ${gameAddress}`);
+    // Execute synchronously as these don't have race conditions with player events
+    if (status === "completed") {
+      this.options.db.markGameCompleted(gameAddress);
       this.options.onGameFinalized?.(gameAddress);
-    });
+      return;
+    }
+
+    this.options.db.markGameClosed(gameAddress);
+    this.options.db.clearStalePlayersForGame(gameAddress);
+    logger.info(`🚫 Game closed: ${gameAddress}`);
+    this.options.onGameFinalized?.(gameAddress);
   }
 
   public handleGameInitialized(event: TimbaGameInitializedEvent): void {
@@ -243,26 +263,25 @@ export class OracleEventProcessor {
 
     const { gameAddress } = eventData;
 
-    void this.runEventMutation(eventType, () => {
-      let gameType: string | undefined = undefined;
-      if (event.gameType) {
-        const gameTypeKeys = Object.keys(event.gameType);
-        if (gameTypeKeys.length > 0 && gameTypeKeys[0]) {
-          const normalized = normalizeGameType(gameTypeKeys[0], { allowTruncate: true });
-          if (normalized.value) {
-            if (normalized.truncated) {
-              logger.warn(
-                `⚠️  Truncating game type for ${gameAddress}; received ${normalized.originalLength ?? "more than allowed"} characters`,
-              );
-            }
-            gameType = normalized.value;
+    // Execute synchronously as these don't have race conditions with player events
+    let gameType: string | undefined = undefined;
+    if (event.gameType) {
+      const gameTypeKeys = Object.keys(event.gameType);
+      if (gameTypeKeys.length > 0 && gameTypeKeys[0]) {
+        const normalized = normalizeGameType(gameTypeKeys[0], { allowTruncate: true });
+        if (normalized.value) {
+          if (normalized.truncated) {
+            logger.warn(
+              `⚠️  Truncating game type for ${gameAddress}; received ${normalized.originalLength ?? "more than allowed"} characters`,
+            );
           }
+          gameType = normalized.value;
         }
       }
+    }
 
-      logger.info(`🎮 Game initialized: ${gameAddress}, Type: ${gameType || "unknown"}`);
-      this.options.db.trackGame(gameAddress, gameType, { preserveFinalized: true });
-    });
+    logger.info(`🎮 Game initialized: ${gameAddress}, Type: ${gameType || "unknown"}`);
+    this.options.db.trackGame(gameAddress, gameType, { preserveFinalized: true });
   }
 
   private async evaluateRegistryConsistency(
@@ -276,14 +295,7 @@ export class OracleEventProcessor {
     }
 
     const stats = this.options.db.getPlayerTicketStats(gameAddress);
-    const analysis = analyzeRegistryState(
-      {
-        count: stats.count,
-        maxIndex: stats.maxIndex,
-        minIndex: stats.minIndex,
-      },
-      expectedTickets,
-    );
+    const analysis = analyzeRegistryState(stats, expectedTickets);
 
     if (!analysis.needsReconciliation) {
       return;
@@ -303,7 +315,16 @@ export class OracleEventProcessor {
     trigger: string;
     gameKey?: PublicKeyLike;
   }): void {
-    this.registrySyncScheduler?.schedule(options);
+    if (!this.registrySyncScheduler) {
+      return;
+    }
+
+    this.registrySyncScheduler.schedule({
+      gameAddress: options.gameAddress,
+      expectedTickets: options.expectedTickets,
+      trigger: options.trigger,
+      gameKey: options.gameKey,
+    });
   }
 
   private validateEventData(
@@ -390,15 +411,16 @@ class RegistrySyncScheduler {
     private readonly retryDelayMs: number,
     private readonly setTimer: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>,
     private readonly clearTimer: (timer: ReturnType<typeof setTimeout>) => void,
+    private readonly syncTimeoutMs: number = 30000,
   ) {}
 
   public schedule(options: RegistrySyncScheduleOptions): void {
     const entry = this.entries.get(options.gameAddress) ?? {
       queue: [],
       running: false,
-      timerPending: false,
     };
-    const normalized = { ...options };
+
+    const normalized = this.normalizeOptions(options);
 
     if (entry.retryPending && entry.timerPending) {
       entry.retryPending = this.mergeScheduleOptions(entry.retryPending, normalized);
@@ -406,21 +428,19 @@ class RegistrySyncScheduler {
       return;
     }
 
-    if (entry.queue.length > 0) {
-      const lastIndex = entry.queue.length - 1;
-      entry.queue[lastIndex] = this.mergeScheduleOptions(
-        entry.queue[lastIndex]!,
-        normalized,
-      );
-    } else {
+    if (entry.running) {
       entry.queue.push(normalized);
+      this.entries.set(options.gameAddress, entry);
+      return;
     }
 
-    if (!entry.running && entry.timer === undefined && !entry.timerPending) {
-      void this.processQueue(options.gameAddress, entry);
-    }
-
+    entry.queue.push(normalized);
     this.entries.set(options.gameAddress, entry);
+    void this.processQueue(options.gameAddress, entry);
+  }
+
+  private normalizeOptions(options: RegistrySyncScheduleOptions): RegistrySyncScheduleOptions {
+    return { ...options };
   }
 
   private mergeScheduleOptions(
@@ -449,18 +469,69 @@ class RegistrySyncScheduler {
         let success = false;
 
         try {
-          success = await this.syncFn(next);
-        } catch {
+          if (this.syncTimeoutMs <= 0) {
+            success = await this.syncFn(next);
+          } else {
+            // Add timeout
+            let timerId: ReturnType<typeof setTimeout> | undefined;
+
+            try {
+              success = await Promise.race([
+                this.syncFn(next),
+                new Promise<boolean>((_, reject) => {
+                   timerId = this.setTimer(() => {
+                     reject(new Error("Registry sync timeout"));
+                   }, this.syncTimeoutMs);
+                })
+              ]);
+            } finally {
+              if (timerId !== undefined) {
+                this.clearTimer(timerId);
+              }
+            }
+          }
+        } catch (error) {
+          logger.warn(`Registry sync failed or timed out for ${gameAddress}:`, error);
           success = false;
         }
 
         if (!success) {
-          let pending = next;
-          if (entry.retryPending) {
-            pending = this.mergeScheduleOptions(entry.retryPending, pending);
-          }
+          // Schedule retry
+          // We need to set a timer to retry
+          // But we also need to handle new requests coming in during the delay
+          // So we set retryPending in the entry
 
-          entry.retryPending = pending;
+          // If we already have a timer pending, we don't need another one?
+          // But processQueue is exiting.
+          // So we need to set a timer that will call processQueue again.
+
+          entry.running = false;
+          entry.timerPending = true;
+
+          // Store the failed options as retryPending if not already set
+          if (!entry.retryPending) {
+             entry.retryPending = next;
+          } else {
+             entry.retryPending = this.mergeScheduleOptions(entry.retryPending, next);
+          }
+          this.entries.set(gameAddress, entry);
+
+          this.setTimer(() => {
+            const current = this.entries.get(gameAddress);
+            if (!current) return;
+
+            current.timerPending = false;
+
+            // Move retryPending to queue
+            if (current.retryPending) {
+               current.queue.unshift(current.retryPending);
+               current.retryPending = undefined;
+            }
+
+            this.entries.set(gameAddress, current);
+            void this.processQueue(gameAddress, current);
+          }, this.retryDelayMs);
+
           return;
         }
 
@@ -472,7 +543,10 @@ class RegistrySyncScheduler {
     } finally {
       entry.running = false;
       if (entry.retryPending) {
-        this.scheduleRetryTimer(gameAddress, entry);
+        // The retry logic is now handled inline, so we don't need to call scheduleRetryTimer here.
+        // The timer is set directly in the `if (!success)` block.
+        // If there's a retryPending, it means a timer has already been set to re-process.
+        // So we just return.
         return;
       }
       if (entry.queue.length === 0 && entry.timer === undefined) {
@@ -481,26 +555,6 @@ class RegistrySyncScheduler {
     }
   }
 
-  private scheduleRetryTimer(gameAddress: string, entry: RegistrySyncEntry): void {
-    if (entry.timer !== undefined) {
-      return;
-    }
-
-    entry.timerPending = true;
-    entry.timer = this.setTimer(() => {
-      entry.timer = undefined;
-      entry.timerPending = false;
-      if (entry.retryPending) {
-        const pending = { ...entry.retryPending };
-        entry.retryPending = undefined;
-        entry.queue.unshift(pending);
-      }
-
-      if (!entry.running) {
-        void this.processQueue(gameAddress, entry);
-      }
-    }, this.retryDelayMs);
-  }
 
   public hasPendingEntry(gameAddress: string): boolean {
     return this.entries.has(gameAddress);

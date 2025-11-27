@@ -243,6 +243,7 @@ export class OracleService {
       ? this.describeAdminKeypairError(adminKeypairSource, error)
       : `Failed to load admin keypair from ${adminKeypairSource}`;
 
+    console.log(`DEBUG: Failed to load admin keypair: ${details}`, error);
     this.logAdminKeypairFailure(adminKeypairPath, error);
     throw new Error(details);
   }
@@ -251,6 +252,12 @@ export class OracleService {
     path: string,
   ): { keypair?: anchor.web3.Keypair; error?: unknown } {
     try {
+      const stats = fs.statSync(path);
+      const mode = stats.mode & 0o777;
+      if ((mode & 0o077) !== 0) {
+        throw new Error(`Admin keypair file ${path} has insecure permissions (${mode.toString(8)}). It must be accessible only by the owner (e.g. 600).`);
+      }
+
       const content = fs.readFileSync(path, "utf-8");
       const parsed = JSON.parse(content);
       if (!Array.isArray(parsed)) {
