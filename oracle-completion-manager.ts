@@ -1,12 +1,9 @@
 import * as anchor from "@coral-xyz/anchor";
 import {
   PublicKey,
-  SendTransactionError,
-  TransactionExpiredBlockheightExceededError,
-  TransactionExpiredTimeoutError,
   type BlockhashWithExpiryBlockHeight,
+  Connection,
 } from "@solana/web3.js";
-import { createHash } from "crypto";
 import {
   type AttemptGameCompletionOptions,
   type CoreOracleDependencies,
@@ -16,19 +13,13 @@ import {
   type ReadinessResolution,
 } from "./oracle-service.types.ts";
 import type { TimbaGameAccount } from "./types/timba.ts";
-import { coercePublicKey, ensurePublicKey } from "./solana-utils.ts";
+import { coercePublicKey, ensurePublicKey, generateUnbiasedRandom } from "./solana-utils.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
-import {
-  deriveGameAccounts,
-  GAME_SEED,
-} from "./oracle-accounts.ts";
-import {
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  TOKEN_2022_PROGRAM_ID,
-  TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
+import { GAME_SEED } from "./oracle-accounts.ts";
 import { logger } from "./logger.ts";
-import { analyzeRegistryState } from "./player-registry-utils.ts";
+import { GameCompletionTransactionBuilder } from "./game-completion-transaction-builder.ts";
+import { RegistrySyncManager } from "./registry-sync-manager.ts";
+import { TransactionSubmitter } from "./transaction-submitter.ts";
 
 export interface GameCompletionManagerOptions extends CoreOracleDependencies {
   readinessCache: Map<string, GameReadinessSnapshot>;
@@ -37,7 +28,7 @@ export interface GameCompletionManagerOptions extends CoreOracleDependencies {
   noSecretKeyMessage: string;
   confirmTransaction: (
     signature: string,
-    latestBlockhash?: anchor.web3.BlockhashWithExpiryBlockHeight,
+    latestBlockhash?: BlockhashWithExpiryBlockHeight,
   ) => Promise<void>;
   recoverPlayerRegistry?: (options: {
     gameAddress: string;
@@ -57,14 +48,33 @@ type CompletionCallbacks = {
 };
 
 export class GameCompletionManager {
-  private readonly attemptedRegistryRecovery = new Set<string>();
-  private readonly registryPrefetchCooldownMs: number;
-  private readonly registryPrefetchSchedule = new Map<string, number>();
   private readonly inFlightCompletions = new Set<string>();
 
+  // Services
+  public readonly transactionBuilder: GameCompletionTransactionBuilder;
+  public readonly registrySyncManager: RegistrySyncManager;
+  public readonly transactionSubmitter: TransactionSubmitter;
+
   constructor(private readonly options: GameCompletionManagerOptions) {
-    const configured = options.registryPrefetchCooldownMs ?? 60_000;
-    this.registryPrefetchCooldownMs = Math.max(1_000, configured);
+    this.transactionBuilder = new GameCompletionTransactionBuilder({
+      getProgram: () => options.getProgram(),
+      adminKeypair: options.adminKeypair,
+      tokenProgramCache: options.tokenProgramCache,
+      getConnection: () => options.getConnection() as unknown as anchor.web3.Connection,
+    });
+
+    this.registrySyncManager = new RegistrySyncManager({
+      db: options.db,
+      recoverPlayerRegistry: options.recoverPlayerRegistry,
+      markGameDesynced: options.markGameDesynced,
+      registryPrefetchCooldownMs: options.registryPrefetchCooldownMs,
+    });
+
+    this.transactionSubmitter = new TransactionSubmitter({
+      getConnection: () => options.getConnection() as unknown as Connection,
+      confirmTransaction: options.confirmTransaction,
+      confirmOpts: (options.getProgram().provider as anchor.AnchorProvider | undefined)?.opts,
+    });
   }
 
   public async isGameReadyForCompletion(gamePda: PublicKey): Promise<boolean> {
@@ -331,12 +341,16 @@ export class GameCompletionManager {
     const resolvedGameAccount = gameAccount!;
 
     const expectedEntries = Number(resolvedGameAccount.ticketsCount);
-    const ensuredPlayers = await this.ensurePlayersInSync(
+
+    // Use RegistrySyncManager
+    const ensuredPlayers = await this.registrySyncManager.ensurePlayersInSync(
       gameAddress,
       context,
       readiness,
       expectedEntries,
+      (addr, err) => this.recordFatalCompletionFailure(addr, err)
     );
+
     if ("error" in ensuredPlayers) {
       return { error: ensuredPlayers.error };
     }
@@ -344,6 +358,9 @@ export class GameCompletionManager {
     const players = ensuredPlayers.players;
 
     const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
+
+    // Calculate winner index using unbiased random generation
+
     const winnerIndex = this.calculateWinnerIndex(
       secretKeyBuffer,
       Number(resolvedGameAccount.lastSlot),
@@ -360,7 +377,7 @@ export class GameCompletionManager {
       };
     }
 
-    const winnerAddress = new PublicKey(winnerPlayerAddress);
+    const winnerAddress = new PublicKey(winnerPlayerAddress!);
 
     return {
       gameAccount: resolvedGameAccount,
@@ -369,128 +386,6 @@ export class GameCompletionManager {
       randomHashBuffer,
       secretKeyBuffer,
     };
-  }
-
-  private async ensurePlayersInSync(
-    gameAddress: string,
-    context: GameOnChainContext,
-    readiness: GameReadinessSnapshot,
-    expectedEntries: number,
-  ): Promise<{ players: string[] } | { error: GameCompletionResult }> {
-    let players = this.options.db.getGamePlayers(gameAddress);
-
-    const hasPlayers = players.length > 0;
-    const initialAnalysis = analyzeRegistryState(
-      {
-        count: players.length,
-        maxIndex: players.length === 0 ? null : players.length - 1,
-        minIndex: players.length === 0 ? null : 0,
-      },
-      expectedEntries,
-    );
-    const hasDuplicatePlayers = players.length > 0 && new Set(players).size !== players.length;
-
-    if (!initialAnalysis.needsReconciliation && hasPlayers && !hasDuplicatePlayers) {
-      return { players };
-    }
-
-    const initialCount = players.length;
-    const recovered = await this.tryRecoverPlayerRegistry(
-      gameAddress,
-      context,
-      readiness,
-      expectedEntries,
-      initialCount,
-    );
-
-    if (recovered) {
-      players = recovered;
-    }
-
-    const postRecoveryAnalysis = analyzeRegistryState(
-      {
-        count: players.length,
-        maxIndex: players.length === 0 ? null : players.length - 1,
-        minIndex: players.length === 0 ? null : 0,
-      },
-      expectedEntries,
-    );
-    const postRecoveryDuplicates = players.length > 0 && new Set(players).size !== players.length;
-
-    if (postRecoveryAnalysis.needsReconciliation || postRecoveryDuplicates || players.length === 0) {
-      logger.failure(
-        `Ticket registry mismatch for ${gameAddress}: expected ${expectedEntries}, found ${players.length}`,
-      );
-
-      if (this.options.markGameDesynced) {
-        this.options.markGameDesynced(gameAddress);
-      }
-
-      this.resetRegistryPrefetchSchedule(gameAddress);
-
-      return {
-        error: this.recordFatalCompletionFailure(
-          gameAddress,
-          "Ticket registry out of sync",
-        ),
-      };
-    }
-
-    return { players };
-  }
-
-  private async tryRecoverPlayerRegistry(
-    gameAddress: string,
-    context: GameOnChainContext,
-    readiness: GameReadinessSnapshot,
-    expectedEntries: number,
-    previousCount: number,
-  ): Promise<string[] | null> {
-    const recoverFn = this.options.recoverPlayerRegistry;
-
-    if (!recoverFn) {
-      logger.failure(
-        `Ticket registry mismatch for ${gameAddress}: expected ${expectedEntries}, found ${previousCount}`,
-      );
-      return null;
-    }
-
-    if (this.attemptedRegistryRecovery.has(gameAddress)) {
-      return null;
-    }
-
-    this.attemptedRegistryRecovery.add(gameAddress);
-
-    try {
-      const recovered = await recoverFn({
-        gameAddress,
-        context,
-        readiness,
-        expectedTickets: expectedEntries,
-        reason: "completion",
-      });
-
-      if (recovered && recovered.length === expectedEntries) {
-        this.options.db.replaceGamePlayers(gameAddress, recovered);
-        logger.info(
-          `♻️  Recovered ${recovered.length} player entries for ${gameAddress} before completion`,
-        );
-        return recovered;
-      }
-
-      logger.failure(
-        `Unable to recover player registry for ${gameAddress}; recovered ${recovered?.length ?? 0} of ${expectedEntries} entries`,
-      );
-      return null;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.failure(
-        `Player registry recovery failed for ${gameAddress}: ${message}`,
-      );
-      return null;
-    } finally {
-      this.attemptedRegistryRecovery.delete(gameAddress);
-    }
   }
 
   private recordCompletionFailure(
@@ -527,72 +422,9 @@ export class GameCompletionManager {
   }
 
   private finalizeSuccessfulCompletion(gameAddress: string): void {
-    this.deletePrefetchSchedule(gameAddress);
+    this.registrySyncManager.resetRegistryPrefetchSchedule(gameAddress);
     this.options.db.finalizeCompletedGame(gameAddress);
     this.options.readinessCache.delete(gameAddress);
-  }
-
-  private async prefetchPlayerRegistry(
-    gameAddress: string,
-    context: GameOnChainContext,
-    readiness: GameReadinessSnapshot,
-  ): Promise<void> {
-    const recoverFn = this.options.recoverPlayerRegistry;
-    const gameAccount = readiness.gameAccount;
-
-    if (!recoverFn || !gameAccount) {
-      return;
-    }
-
-    const expectedTickets = Number(gameAccount.ticketsCount);
-    if (!Number.isFinite(expectedTickets) || expectedTickets <= 0) {
-      return;
-    }
-
-    const players = this.options.db.getGamePlayers(gameAddress);
-    if (players.length >= expectedTickets) {
-      return;
-    }
-
-    const now = Date.now();
-    const nextAllowed = this.registryPrefetchSchedule.get(gameAddress) ?? 0;
-    if (now < nextAllowed) {
-      return;
-    }
-
-    const nextWindow = now + this.registryPrefetchCooldownMs;
-    try {
-      const recovered = await recoverFn({
-        gameAddress,
-        context,
-        readiness,
-        expectedTickets,
-        reason: "readiness-check",
-      });
-
-      if (recovered && recovered.length === expectedTickets) {
-        this.options.db.replaceGamePlayers(gameAddress, recovered);
-        logger.info(
-          `♻️  Prefetched ${recovered.length} players for ${gameAddress} during readiness evaluation`,
-        );
-        this.registryPrefetchSchedule.set(gameAddress, nextWindow);
-      }
-    } catch (error) {
-      this.resetRegistryPrefetchSchedule(gameAddress);
-      const message = error instanceof Error ? error.message : String(error);
-      logger.warning(
-        `Unable to prefetch player registry for ${gameAddress}: ${message}`,
-      );
-    }
-
-  }
-
-  private deletePrefetchSchedule(gameAddress: string): void {
-    this.registryPrefetchSchedule.delete(gameAddress);
-  }
-
-  public resetRegistryPrefetchSchedule(gameAddress: string): void {
-    this.deletePrefetchSchedule(gameAddress);
   }
 
   public async resolveContextAndReadiness(
@@ -644,7 +476,7 @@ export class GameCompletionManager {
       : { ...resolvedContext, readiness: snapshot };
 
     if (shouldPrefetch) {
-      await this.prefetchPlayerRegistry(gameAddress, contextWithReadiness, snapshot);
+      await this.registrySyncManager.prefetchPlayerRegistry(gameAddress, contextWithReadiness, snapshot);
     }
 
     const status: "ready" | "not-ready" =
@@ -803,15 +635,16 @@ export class GameCompletionManager {
       return { ready: false, gameAccount: null };
     }
 
-  const evaluatedAt = blockTime ?? (await this.getBlockchainTime());
-  const expiresAt = Number(gameAccount.createdAt) + Number(gameAccount.timeout);
-  const isExpired = evaluatedAt >= expiresAt;
+    const evaluatedAt = blockTime ?? (await this.getBlockchainTime());
+    const expiresAt = Number(gameAccount.createdAt) + Number(gameAccount.timeout);
+    const isExpired = evaluatedAt >= expiresAt;
     const ticketsCount = Number(gameAccount.ticketsCount);
-    const isFull = ticketsCount >= Number(gameAccount.maxTickets);
-    const hasMinTickets = ticketsCount >= Number(gameAccount.minTickets);
+    const hasTickets = ticketsCount > 0;
+    const isFull = hasTickets && ticketsCount >= Number(gameAccount.maxTickets);
+    const hasMinTickets = hasTickets && ticketsCount >= Number(gameAccount.minTickets);
 
     return {
-      ready: isFull || (isExpired && hasMinTickets),
+      ready: hasTickets && (isFull || (isExpired && hasMinTickets)),
       gameAccount,
       evaluatedAt,
     };
@@ -853,200 +686,30 @@ export class GameCompletionManager {
     secretKeyBuffer: Buffer;
     winnerIndex: number;
   }): Promise<string> {
-    const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
+    // Use GameCompletionTransactionBuilder
+    const { builder, signers } = await this.transactionBuilder.buildCompletionTransaction(args);
 
-    const creatorPublicKey = ensurePublicKey(gameAccount.creator);
-    const tokenMint = ensurePublicKey(gameAccount.tokenMint);
-    const tokenProgramId = await this.resolveTokenProgram(
-      gameAccount.tokenProgram,
-      tokenMint,
-    );
-    const programId = ensurePublicKey(this.options.getProgram().programId);
-    const {
-      gamePda,
-      oraclePda,
-      gameTokenPda,
-      gameVaultPda,
-      winnerTokenAccount,
-      gameTokenAccount,
-    } = deriveGameAccounts({
-      programId,
-      randomHash: randomHashBuffer,
-      tokenMint,
-      winner: winnerAddress,
-      tokenProgramId,
-    });
+    // Use TransactionSubmitter
+    return this.transactionSubmitter.submitTransaction(
+      async (latestBlockhash) => {
+        const tx = await builder.transaction();
+        if (tx instanceof anchor.web3.VersionedTransaction) {
+          tx.message.recentBlockhash = latestBlockhash.blockhash;
+          tx.sign(signers);
+          return tx.serialize();
+        }
 
-    const gameTokenCtx = {
-      tokenMint,
-      gameToken: gameTokenPda,
-      gameVault: gameVaultPda,
-      gameTokenAccount,
-      tokenProgram: tokenProgramId,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-    } as const;
-
-    const program = this.options.getProgram();
-    const provider = program.provider as anchor.AnchorProvider | undefined;
-    const confirmOpts = provider?.opts ?? {};
-    const blockhashCommitment =
-      confirmOpts.preflightCommitment ?? confirmOpts.commitment ?? "confirmed";
-
-    const completionBuilder = program.methods
-      .completeGame([...randomHashBuffer], [...secretKeyBuffer], winnerIndex)
-      .accountsPartial({
-        game: gamePda,
-        oracle: oraclePda,
-        oracleOperator: this.options.adminKeypair.publicKey,
-        winner: winnerAddress,
-        creator: creatorPublicKey,
-        gameTokenCtx,
-        systemProgram: anchor.web3.SystemProgram.programId,
-        winnerTokenAccount,
-      })
-      .signers([this.options.adminKeypair]);
-
-    const connection = this.options.getConnection();
-
-    const sendOptions: anchor.web3.SendOptions = {};
-    if (confirmOpts.skipPreflight !== undefined) {
-      sendOptions.skipPreflight = confirmOpts.skipPreflight;
-    }
-    if (confirmOpts.preflightCommitment ?? confirmOpts.commitment) {
-      sendOptions.preflightCommitment = confirmOpts.preflightCommitment ?? confirmOpts.commitment;
-    }
-    if (confirmOpts.maxRetries !== undefined) {
-      sendOptions.maxRetries = confirmOpts.maxRetries;
-    }
-    if (confirmOpts.minContextSlot !== undefined) {
-      sendOptions.minContextSlot = confirmOpts.minContextSlot;
-    }
-
-    const signTransaction = async (
-      latestBlockhash: BlockhashWithExpiryBlockHeight,
-    ): Promise<Buffer> => {
-      const tx = await completionBuilder.transaction();
-      if (tx instanceof anchor.web3.VersionedTransaction) {
-        tx.message.recentBlockhash = latestBlockhash.blockhash;
-        tx.sign([this.options.adminKeypair]);
+        tx.feePayer = tx.feePayer ?? signers[0]!.publicKey;
+        tx.recentBlockhash = latestBlockhash.blockhash;
+        // We assume adminKeypair is the signer
+        tx.partialSign(...signers);
         return tx.serialize();
+      },
+      () => {
+        // Invalidate token program cache on error
+        const tokenMint = ensurePublicKey(args.gameAccount.tokenMint);
+        this.options.tokenProgramCache.delete(tokenMint.toBase58());
       }
-
-      tx.feePayer = tx.feePayer ?? this.options.adminKeypair.publicKey;
-      tx.recentBlockhash = latestBlockhash.blockhash;
-      tx.partialSign(this.options.adminKeypair);
-      return tx.serialize();
-    };
-
-    const sendWithBlockhash = async (
-      latestBlockhash: BlockhashWithExpiryBlockHeight,
-    ): Promise<string> => {
-      const rawTransaction = await signTransaction(latestBlockhash);
-      const signature = await connection.sendRawTransaction(rawTransaction, sendOptions);
-      await this.options.confirmTransaction(signature, latestBlockhash);
-      return signature;
-    };
-
-    const blockhashNotFoundPattern = /blockhash not found/i;
-
-    const isBlockhashExpirySendError = (error: unknown): boolean => {
-      if (!(error instanceof SendTransactionError)) {
-        return false;
-      }
-
-      const transactionError = error.transactionError;
-      const segments = [
-        error.message,
-        transactionError?.message,
-        ...(error.logs ?? []),
-        ...(transactionError?.logs ?? []),
-      ].filter((segment): segment is string => typeof segment === "string" && segment.length > 0);
-
-      return segments.some((segment) => blockhashNotFoundPattern.test(segment));
-    };
-
-    const shouldRetryAfterExpiry = (error: unknown): boolean => {
-      if (error instanceof TransactionExpiredBlockheightExceededError) {
-        return true;
-      }
-      if (error instanceof TransactionExpiredTimeoutError) {
-        return true;
-      }
-      return isBlockhashExpirySendError(error);
-    };
-
-    let latestBlockhash = await connection.getLatestBlockhash(blockhashCommitment);
-    try {
-      return await sendWithBlockhash(latestBlockhash);
-    } catch (error) {
-      if (!shouldRetryAfterExpiry(error)) {
-        throw error;
-      }
-
-      latestBlockhash = await connection.getLatestBlockhash(blockhashCommitment);
-      return await sendWithBlockhash(latestBlockhash);
-    }
-  }
-
-  public async resolveTokenProgram(
-    tokenProgram: PublicKeyLike,
-    tokenMint: PublicKey,
-  ): Promise<PublicKey> {
-    const cacheKey = tokenMint.toBase58();
-
-    // Try direct program ID first
-    const directProgram = coercePublicKey(tokenProgram);
-    if (directProgram && !directProgram.equals(PublicKey.default)) {
-      this.options.tokenProgramCache.set(cacheKey, directProgram);
-      return directProgram;
-    }
-
-    // Check cache
-    const cached = this.options.tokenProgramCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-
-    // Fetch from chain
-    try {
-      const connection = this.options.getConnection();
-      const mintAccount = await connection.getAccountInfo(tokenMint);
-      const owner = mintAccount?.owner;
-
-      const resolved = this.matchTokenProgramOwner(owner, tokenMint);
-      this.options.tokenProgramCache.set(cacheKey, resolved);
-      return resolved;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.warning(
-        `Unable to resolve token program for mint ${tokenMint.toBase58()}:`,
-        message,
-      );
-      throw new Error(
-        `Unable to resolve token program for mint ${tokenMint.toBase58()}: ${message}`,
-        {
-          cause: error instanceof Error ? error : undefined,
-        },
-      );
-    }
-  }
-
-  private matchTokenProgramOwner(
-    owner: PublicKey | undefined,
-    tokenMint: PublicKey,
-  ): PublicKey {
-    if (owner?.equals(TOKEN_2022_PROGRAM_ID)) {
-      return TOKEN_2022_PROGRAM_ID;
-    }
-
-    if (owner?.equals(TOKEN_PROGRAM_ID)) {
-      return TOKEN_PROGRAM_ID;
-    }
-
-    throw new Error(
-      owner
-        ? `Unsupported token program owner ${owner.toBase58()}`
-        : `Mint ${tokenMint.toBase58()} is missing an owner`,
     );
   }
 
@@ -1071,22 +734,8 @@ export class GameCompletionManager {
       lastSlotBytes,
     ]);
 
-    const entropyHash = createHash("sha256").update(combinedData).digest();
-
-    const maxU64 = 0xffff_ffff_ffff_ffffn;
-    const nPlayersBig = BigInt(nPlayers);
-    const maxValid = maxU64 - (maxU64 % nPlayersBig);
-
-    for (let startPos = 0; startPos <= entropyHash.length - 8; startPos++) {
-      const randomU64 = entropyHash.readBigUInt64LE(startPos);
-      if (randomU64 < maxValid) {
-        return Number(randomU64 % nPlayersBig);
-      }
-    }
-
-    throw new Error(
-      "Unable to generate unbiased random number - game must be cancelled",
-    );
+    // Use generateUnbiasedRandom from solana-utils
+    return Number(generateUnbiasedRandom(combinedData, BigInt(nPlayers)));
   }
 
   private logMissingSecret(gameAddress: string, requireOnChain: boolean): void {
@@ -1114,5 +763,10 @@ export class GameCompletionManager {
     const programId = ensurePublicKey(this.options.getProgram().programId);
     const [pda] = PublicKey.findProgramAddressSync([GAME_SEED, randomHash], programId);
     return pda;
+  }
+
+  // Delegate resetRegistryPrefetchSchedule to RegistrySyncManager
+  public resetRegistryPrefetchSchedule(gameAddress: string): void {
+    this.registrySyncManager.resetRegistryPrefetchSchedule(gameAddress);
   }
 }

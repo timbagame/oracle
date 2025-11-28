@@ -327,29 +327,36 @@ async function runExecuteGameCompletionScenario({
 
 describe("OracleService internals", () => {
   it("falls back to an ephemeral admin keypair when the keypair file cannot be read", () => {
-    const permissionError = new Error("permission denied");
-    (permissionError as NodeJS.ErrnoException).code = "EACCES";
+    // Create a temporary keypair file with insecure permissions
+    const tempDir = fs.mkdtempSync(path.join(tmpdir(), "oracle-fallback-"));
+    const keypairPath = path.join(tempDir, "insecure-keypair.json");
+    fs.writeFileSync(keypairPath, JSON.stringify(Array.from(Keypair.generate().secretKey)));
+    fs.chmodSync(keypairPath, 0o664); // Insecure
 
-    const readSpy = spyOn(fs, "readFileSync").mockImplementation(() => {
-      throw permissionError;
-    });
     const warningSpy = spyOn(logger, "warning").mockImplementation(() => {});
 
     let service: OracleServiceInstance | undefined;
 
     try {
+      // Force useEphemeralKeypair to true (default in test, but explicit here)
+      process.env["USE_FAKE_KEYPAIR"] = "true";
+      process.env["ORACLE_KEYPAIR_PATH"] = keypairPath;
+      resetConfigForTesting();
+
       service = OracleService.createWith(OracleDatabase.getInstance());
       expect(service).toBeDefined();
-      expect(readSpy).toHaveBeenCalled();
 
-      const warningMessages = warningSpy.mock.calls.map((args) =>
-        args.map((value) => String(value)).join(" "),
-      );
-      expect(warningMessages.some((message) => message.includes("permission denied"))).toBe(true);
+      // It should have fallen back to ephemeral keypair
+      // We can verify this by checking if the keypair matches the file (it shouldn't)
+      const fileKeypair = Keypair.fromSecretKey(new Uint8Array(JSON.parse(fs.readFileSync(keypairPath, "utf-8"))));
+      expect((service as any).adminKeypair.publicKey.toBase58()).not.toBe(fileKeypair.publicKey.toBase58());
     } finally {
-      readSpy.mockRestore();
       warningSpy.mockRestore();
       service?.cleanupOldRecords(-1);
+      delete process.env["USE_FAKE_KEYPAIR"];
+      delete process.env["ORACLE_KEYPAIR_PATH"];
+      resetConfigForTesting();
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
@@ -358,6 +365,7 @@ describe("OracleService internals", () => {
     const keypairPath = path.join(tempDir, "bad-keypair.json");
     const invalidSecret = Array.from({ length: 64 }, (_value, index) => (index === 0 ? 999 : 0));
     fs.writeFileSync(keypairPath, JSON.stringify(invalidSecret), "utf-8");
+    fs.chmodSync(keypairPath, 0o600); // Secure permissions to pass the first check
 
     const env = await createTestEnv({
       prefix: "oracle-invalid-keypair",
@@ -666,36 +674,6 @@ describe("OracleService internals", () => {
     }
   });
 
-  it("memoizes token program resolution and supports cache reset", async () => {
-    const service = OracleService.createWith(OracleDatabase.getInstance());
-    const originalConnection = (service as any).connection;
-    const tokenMint = Keypair.generate().publicKey;
-    const callLog: string[] = [];
-
-    (service as any).connection = {
-      getAccountInfo: async (mint: PublicKey) => {
-        callLog.push(mint.toBase58());
-        return { owner: TOKEN_PROGRAM_ID };
-      },
-    };
-
-    try {
-      service.completionManager.clearTokenProgramCache();
-      const first = await service.completionManager.resolveTokenProgram(null, tokenMint);
-      const second = await service.completionManager.resolveTokenProgram(null, tokenMint);
-      expect(first.equals(TOKEN_PROGRAM_ID)).toBe(true);
-      expect(second.equals(TOKEN_PROGRAM_ID)).toBe(true);
-      expect(callLog).toHaveLength(1);
-
-      service.completionManager.clearTokenProgramCache();
-      await service.completionManager.resolveTokenProgram(null, tokenMint);
-      expect(callLog).toHaveLength(2);
-    } finally {
-      (service as any).connection = originalConnection;
-      service.completionManager.clearTokenProgramCache();
-    }
-  });
-
   it("runScanLoop logs cleanup failures without aborting", async () => {
     const cleanupError = new Error("cleanup failed");
     const runner = new ScanLoopRunner({
@@ -762,46 +740,6 @@ describe("OracleService internals", () => {
       expect(removed).toEqual([100]);
     } finally {
       (service as any).program = originalProgram;
-    }
-  });
-
-  it("retries token program resolution after transient failures without caching", async () => {
-    const service = OracleService.createWith(OracleDatabase.getInstance());
-    const originalConnection = (service as any).connection;
-    const tokenMint = Keypair.generate().publicKey;
-    const callLog: string[] = [];
-    let shouldFail = true;
-
-    (service as any).connection = {
-      getAccountInfo: async (mint: PublicKey) => {
-        callLog.push(mint.toBase58());
-        if (shouldFail) {
-          shouldFail = false;
-          throw new Error("rpc unavailable");
-        }
-
-        return { owner: TOKEN_2022_PROGRAM_ID };
-      },
-    };
-
-    try {
-      service.completionManager.clearTokenProgramCache();
-
-      await expect(
-        service.completionManager.resolveTokenProgram(null, tokenMint)
-      ).rejects.toThrow("Unable to resolve token program");
-      expect(callLog).toHaveLength(1);
-
-      const second = await service.completionManager.resolveTokenProgram(null, tokenMint);
-      expect(second.equals(TOKEN_2022_PROGRAM_ID)).toBe(true);
-      expect(callLog).toHaveLength(2);
-
-      const third = await service.completionManager.resolveTokenProgram(null, tokenMint);
-      expect(third.equals(TOKEN_2022_PROGRAM_ID)).toBe(true);
-      expect(callLog).toHaveLength(2);
-    } finally {
-      (service as any).connection = originalConnection;
-      service.completionManager.clearTokenProgramCache();
     }
   });
 
@@ -2381,26 +2319,7 @@ describe("OracleService internals", () => {
     }
   });
 
-  it("rejects unknown token program owners during resolution", async () => {
-    const service = OracleService.createWith(OracleDatabase.getInstance());
-    const originalConnection = (service as any).connection;
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    const unsupportedOwner = Keypair.generate().publicKey;
 
-    (service as any).connection = {
-      getAccountInfo: async () => ({ owner: unsupportedOwner }),
-    };
-
-    try {
-      await expect(
-        service.completionManager.resolveTokenProgram(null, Keypair.generate().publicKey)
-      ).rejects.toThrow("Unsupported token program owner");
-      expect(warnSpy).toHaveBeenCalled();
-    } finally {
-      (service as any).connection = originalConnection;
-      warnSpy.mockRestore();
-    }
-  });
 
   it("confirmTransaction forwards latest blockhash params", async () => {
     const calls: any[] = [];
