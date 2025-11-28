@@ -440,6 +440,57 @@ describe("OracleService event handling", () => {
     expect(callLog.clearPlayers).toEqual([gameKey.toBase58()]);
   });
 
+  it("serializes player and status events for the same game", async () => {
+    const { db, callLog } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub);
+
+    const ordered: string[] = [];
+
+    const origAddPlayer = db.addPlayerToGame;
+    db.addPlayerToGame = (game, player, index) => {
+      ordered.push("player");
+      return origAddPlayer(game, player, index);
+    };
+
+    const origMarkClosed = db.markGameClosed;
+    db.markGameClosed = (game) => {
+      ordered.push("closed");
+      return origMarkClosed(game);
+    };
+
+    const origClearPlayers = db.clearStalePlayersForGame;
+    db.clearStalePlayersForGame = (game) => {
+      ordered.push("cleared");
+      return origClearPlayers(game);
+    };
+
+    // Slow down auto-complete so the status event queues behind an in-flight player handler.
+    (service as any).tryAutoComplete = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+
+    const gameKey = Keypair.generate().publicKey;
+    const playerKey = Keypair.generate().publicKey;
+
+    const playerPromise = service.events.handlePlayerEvent("joined", {
+      gameKey,
+      player: playerKey,
+      ticketIndex: 1,
+    });
+
+    service.events.handleGameStatusChange("closed", { gameKey });
+
+    await playerPromise;
+    const queues: Map<string, Promise<void>> = (service.events as any).processingQueues;
+    await Promise.all(Array.from(queues.values()));
+
+    expect(callLog.addPlayer).toHaveLength(1);
+    expect(callLog.markClosed).toEqual([gameKey.toBase58()]);
+    expect(callLog.clearPlayers).toEqual([gameKey.toBase58()]);
+    expect(ordered).toEqual(["player", "closed", "cleared"]);
+  });
+
   it("tracks game initialization with derived type", () => {
     const { db, callLog } = createDbStub();
     const programStub = createProgramStub();
