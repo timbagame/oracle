@@ -78,8 +78,33 @@ export class OracleEventProcessor {
       return;
     }
 
-    const previous = this.processingQueues.get(gameAddress) ?? Promise.resolve();
-    const next = previous.then(async () => {
+    const existing = this.processingQueues.get(gameAddress);
+
+    // Fast path: no pending work for this game; execute immediately to keep
+    // synchronous expectations in tests while still registering async work.
+    if (!existing) {
+      try {
+        const result = handler();
+        if (result && typeof (result as Promise<unknown>).then === "function") {
+          const inFlight = (result as Promise<void>).catch((error) => {
+            logger.failure(`Error in ${eventType} event for ${gameAddress}:`, error);
+          }).finally(() => {
+            if (this.processingQueues.get(gameAddress) === inFlight) {
+              this.processingQueues.delete(gameAddress);
+            }
+          });
+          this.processingQueues.set(gameAddress, inFlight);
+          return inFlight;
+        }
+        return;
+      } catch (error) {
+        logger.failure(`Error in ${eventType} event for ${gameAddress}:`, error);
+        return;
+      }
+    }
+
+    // Slow path: queue behind existing work for the same game
+    const next = existing.then(async () => {
       try {
         await handler();
       } catch (error) {
@@ -238,8 +263,8 @@ export class OracleEventProcessor {
 
     const { gameAddress } = eventData;
 
-    try {
-      // Execute synchronously as these don't have race conditions with player events
+    void this.runEventMutation(`game ${status}`, () => {
+      // Serialize with player mutations to keep per-game ordering consistent.
       if (status === "completed") {
         this.options.db.markGameCompleted(gameAddress);
         this.options.onGameFinalized?.(gameAddress);
@@ -250,9 +275,7 @@ export class OracleEventProcessor {
       this.options.db.clearStalePlayersForGame(gameAddress);
       logger.info(`🚫 Game closed: ${gameAddress}`);
       this.options.onGameFinalized?.(gameAddress);
-    } catch (error) {
-      logger.failure(`Error in game ${status} event for ${gameAddress}:`, error);
-    }
+    }, gameAddress);
   }
 
   public handleGameInitialized(event: TimbaGameInitializedEvent): void {
