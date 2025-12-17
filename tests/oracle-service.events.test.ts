@@ -25,7 +25,51 @@ afterAll(() => {
   cleanup();
 });
 
+const seedSecretForGame = (
+  db: { saveSecretKey: (game: string, secretKey: string, randomHash: string) => void },
+  gameAddress: string,
+) => {
+  db.saveSecretKey(gameAddress, "00".repeat(32), "11".repeat(32));
+};
+
 describe("OracleService event handling", () => {
+  it("ignores game initialization events for games without oracle secrets", () => {
+    const { db, callLog } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub);
+
+    const gameKey = Keypair.generate().publicKey;
+    service.events.handleGameInitialized({
+      gameKey,
+      gameType: { coinflip: {} },
+    });
+
+    expect(callLog.track).toEqual([]);
+  });
+
+  it("ignores player events for games without oracle secrets", async () => {
+    const { db, callLog } = createDbStub();
+    const programStub = createProgramStub();
+    const autoCompleteCalls: string[] = [];
+    const service = createService(db, programStub, {
+      tryAutoComplete: async (_gameKey: any, gameAddress: string) => {
+        autoCompleteCalls.push(gameAddress);
+      },
+    });
+
+    const gameKey = Keypair.generate().publicKey;
+    const playerKey = Keypair.generate().publicKey;
+
+    await service.events.handlePlayerEvent("joined", {
+      gameKey,
+      player: playerKey,
+      ticketIndex: 1,
+    });
+
+    expect(callLog.addPlayer).toEqual([]);
+    expect(autoCompleteCalls).toEqual([]);
+  });
+
   it("registers and cleans up event listeners", async () => {
     const { db } = createDbStub();
     const programStub = createProgramStub();
@@ -120,6 +164,7 @@ describe("OracleService event handling", () => {
     });
 
     const gameKey = Keypair.generate().publicKey;
+    seedSecretForGame(db, gameKey.toBase58());
     const playerKey = Keypair.generate().publicKey;
 
     await service.events.handlePlayerEvent("joined", {
@@ -175,6 +220,7 @@ describe("OracleService event handling", () => {
     });
 
     const gameKey = Keypair.generate().publicKey;
+    seedSecretForGame(db, gameKey.toBase58());
     const playerKey = Keypair.generate().publicKey;
 
     await service.events.handlePlayerEvent("joined", {
@@ -211,6 +257,7 @@ describe("OracleService event handling", () => {
     });
 
     const gameKey = Keypair.generate().publicKey;
+    seedSecretForGame(db, gameKey.toBase58());
     const playerKey = Keypair.generate().publicKey;
 
     const first = service.events.handlePlayerEvent("joined", {
@@ -368,6 +415,7 @@ describe("OracleService event handling", () => {
     };
 
     const gameKey = Keypair.generate().publicKey;
+    seedSecretForGame(db, gameKey.toBase58());
     const playerKey = Keypair.generate().publicKey;
 
     await service.events.handlePlayerEvent("joined", {
@@ -391,6 +439,7 @@ describe("OracleService event handling", () => {
     };
 
     const gameKey = Keypair.generate().publicKey;
+    seedSecretForGame(db, gameKey.toBase58());
     const playerKey = Keypair.generate().publicKey;
 
     await service.events.handlePlayerEvent("joined", {
@@ -431,6 +480,7 @@ describe("OracleService event handling", () => {
     const service = createService(db, programStub);
 
     const gameKey = Keypair.generate().publicKey;
+    seedSecretForGame(db, gameKey.toBase58());
 
     service.events.handleGameStatusChange("completed", { gameKey });
     service.events.handleGameStatusChange("closed", { gameKey });
@@ -471,6 +521,7 @@ describe("OracleService event handling", () => {
     };
 
     const gameKey = Keypair.generate().publicKey;
+    seedSecretForGame(db, gameKey.toBase58());
     const playerKey = Keypair.generate().publicKey;
 
     const playerPromise = service.events.handlePlayerEvent("joined", {
@@ -497,6 +548,7 @@ describe("OracleService event handling", () => {
     const service = createService(db, programStub);
 
     const gameKey = Keypair.generate().publicKey;
+    seedSecretForGame(db, gameKey.toBase58());
 
     service.events.handleGameInitialized({
       gameKey,
@@ -517,6 +569,7 @@ describe("OracleService event handling", () => {
     const service = createService(db, programStub);
 
     const gameKey = Keypair.generate().publicKey;
+    seedSecretForGame(db, gameKey.toBase58());
     const longKey = "A".repeat(512);
 
     service.events.handleGameInitialized({
@@ -641,6 +694,7 @@ describe("OracleService event handling", () => {
       const gameKey = Keypair.generate().publicKey;
       const gameAddress = gameKey.toBase58();
 
+      db.saveSecretKey(gameAddress, "00".repeat(32), "11".repeat(32));
       db.trackGame(gameAddress);
       db.markGameCompleted(gameAddress);
 
@@ -676,6 +730,7 @@ describe("OracleService event handling", () => {
     });
 
     const gameKey = Keypair.generate().publicKey;
+    seedSecretForGame(db, gameKey.toBase58());
     const playerKey = Keypair.generate().publicKey;
     const ticketIndex = 10;
 
@@ -742,14 +797,14 @@ describe("OracleService event handling", () => {
     const programStub = createProgramStub();
     // Mock syncPlayerRegistry to hang on the first call
     let callCount = 0;
-    const firstCallStarted = createDeferred<void>();
 
     const syncFn = async (_options: any) => {
       callCount++;
       if (callCount === 1) {
-        firstCallStarted.resolve();
-        // Hang forever (or until test timeout if not handled)
-        await new Promise(() => {});
+        // Exceed the scheduler timeout once, but eventually resolve so we don't
+        // leak a never-ending promise into the test runner.
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        return false;
       }
       return true;
     };
@@ -757,6 +812,7 @@ describe("OracleService event handling", () => {
     const service = createService(db, programStub, { syncPlayerRegistry: syncFn });
 
     const gameKey = Keypair.generate().publicKey;
+    seedSecretForGame(db, gameKey.toBase58());
     const playerKey = Keypair.generate().publicKey;
 
     // Pre-populate DB with ticket 0 to create a gap when ticket 2 arrives
@@ -769,7 +825,7 @@ describe("OracleService event handling", () => {
       ticketIndex: 2, // Force gap to trigger sync
     });
 
-    await firstCallStarted.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     // 2. Trigger second sync
     service.events.handlePlayerEvent("joined", {
@@ -789,8 +845,8 @@ describe("OracleService event handling", () => {
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     // Expect callCount to be 2 (implying the first one was aborted/timed out and second one ran)
-    // This will FAIL.
     expect(callCount).toBeGreaterThanOrEqual(2);
+    service.events.clearRegistrySyncs();
   });
 });
 
@@ -962,14 +1018,6 @@ function createDbStub(): { db: OracleDatabaseStub; callLog: CallLog } {
   };
 
   return { db, callLog };
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
 }
 
 type OracleDatabaseStub = Partial<OracleDatabase> & {

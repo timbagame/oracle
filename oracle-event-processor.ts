@@ -58,6 +58,14 @@ export class OracleEventProcessor {
     }
   }
 
+  private hasActiveSecretKey(gameAddress: string): boolean {
+    try {
+      return Boolean(this.options.db.getSecretKey(gameAddress));
+    } catch {
+      return false;
+    }
+  }
+
   public clearRegistrySyncs(): void {
     this.registrySyncScheduler?.clearAll();
   }
@@ -223,6 +231,12 @@ export class OracleEventProcessor {
     }
 
     const { gameAddress, playerAddress, ticketIndex } = eventData;
+    if (!this.hasActiveSecretKey(gameAddress)) {
+      // Hardening: ignore on-chain activity for games that the oracle did not
+      // issue secrets for (prevents DB growth from spam/invalid games).
+      return;
+    }
+
     const expectedTickets = resolveNumericLike(
       (event as Record<string, unknown>)["ticketsCount"] ??
         (event as Record<string, unknown>)["tickets_count"],
@@ -262,6 +276,10 @@ export class OracleEventProcessor {
     }
 
     const { gameAddress } = eventData;
+    if (!this.hasActiveSecretKey(gameAddress)) {
+      // Hardening: ignore status events for games the oracle did not issue secrets for.
+      return;
+    }
 
     void this.runEventMutation(`game ${status}`, () => {
       // Serialize with player mutations to keep per-game ordering consistent.
@@ -291,6 +309,11 @@ export class OracleEventProcessor {
     }
 
     const { gameAddress } = eventData;
+    if (!this.hasActiveSecretKey(gameAddress)) {
+      // Hardening: never create tracking rows based on on-chain events alone.
+      // Only games with a stored (unused) secret key are tracked.
+      return;
+    }
 
     // Execute synchronously as these don't have race conditions with player events
     let gameType: string | undefined = undefined;
