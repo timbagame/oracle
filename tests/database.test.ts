@@ -277,6 +277,27 @@ describe("OracleDatabase", () => {
     expect(db.getGamePlayers("game-players")).toEqual([]);
   });
 
+  it("applies player mutations in a single transaction", () => {
+    const db = OracleDatabase.getInstance();
+    const game = "game-batch";
+
+    db.applyPlayerMutations(game, [
+      { action: "joined", playerAddress: "player-a", ticketIndex: 0 },
+      { action: "joined", playerAddress: "player-b", ticketIndex: 1 },
+      { action: "joined", playerAddress: "player-c", ticketIndex: 2 },
+    ]);
+
+    expect(db.getGamePlayers(game)).toEqual(["player-a", "player-b", "player-c"]);
+
+    db.applyPlayerMutations(game, [
+      { action: "unjoined", ticketIndex: 1 },
+      { action: "joined", playerAddress: "player-d", ticketIndex: 1 },
+      { action: "unjoined", ticketIndex: 0 },
+    ]);
+
+    expect(db.getGamePlayers(game)).toEqual(["player-d", "player-c"]);
+  });
+
   it("reports connection info and reopens after close", () => {
     const db = OracleDatabase.getInstance();
 

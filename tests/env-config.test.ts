@@ -15,6 +15,9 @@ function resetEnv() {
     "SOLANA_NETWORK",
     "ORACLE_PORT",
     "ORACLE_SCAN_THROTTLE_MS",
+    "ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS",
+    "ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS",
+    "ORACLE_AUTOCOMPLETE_DEBOUNCE_MS",
     "DATABASE_FILE",
     "ORACLE_KEYPAIR_PATH",
   ];
@@ -72,17 +75,32 @@ describe("runtime config", () => {
     process.env["SOLANA_NETWORK"] = "https://rpc";
     process.env["ORACLE_PORT"] = "70000";
     process.env["ORACLE_SCAN_THROTTLE_MS"] = "-5";
+    process.env["ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS"] = "-1";
+    process.env["ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS"] = "0";
+    process.env["ORACLE_AUTOCOMPLETE_DEBOUNCE_MS"] = "not-a-number";
     const warnSpy = spyOn(console, "warn");
 
     const config = getConfig();
     expect(config.oraclePort).toBe(3001);
     expect(config.scanThrottleMs).toBe(0);
+    expect(config.playerEventFlushDebounceMs).toBe(100);
+    expect(config.playerEventFlushMaxOperations).toBe(500);
+    expect(config.autoCompleteDebounceMs).toBe(500);
 
     expect(warnSpy).toHaveBeenCalledWith(
       "⚠️  ORACLE_PORT must be <= 65535, received 70000; using 3001."
     );
     expect(warnSpy).toHaveBeenCalledWith(
       "⚠️  ORACLE_SCAN_THROTTLE_MS must be >= 0, received -5; using 0."
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      "⚠️  ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS must be >= 0, received -1; using 100."
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      "⚠️  ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS must be >= 1, received 0; using 500."
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      "⚠️  Ignoring invalid numeric value 'not-a-number' for ORACLE_AUTOCOMPLETE_DEBOUNCE_MS; using 500."
     );
 
     warnSpy.mockRestore();

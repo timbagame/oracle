@@ -326,6 +326,29 @@ async function runExecuteGameCompletionScenario({
 }
 
 describe("OracleService internals", () => {
+  it("wires event batching config into the event processor", () => {
+    const db = OracleDatabase.getInstance();
+
+    process.env["ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS"] = "12";
+    process.env["ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS"] = "7";
+    process.env["ORACLE_AUTOCOMPLETE_DEBOUNCE_MS"] = "34";
+    resetConfigForTesting();
+
+    const service = OracleService.createWith(db);
+
+    try {
+      expect((service.events as any).playerEventFlushDebounceMs).toBe(12);
+      expect((service.events as any).playerEventFlushMaxOperations).toBe(7);
+      expect((service.events as any).autoCompleteDebounceMs).toBe(34);
+    } finally {
+      delete process.env["ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS"];
+      delete process.env["ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS"];
+      delete process.env["ORACLE_AUTOCOMPLETE_DEBOUNCE_MS"];
+      resetConfigForTesting();
+      service.cleanupOldRecords(-1);
+    }
+  });
+
   it("falls back to an ephemeral admin keypair when the keypair file cannot be read", () => {
     // Create a temporary keypair file with insecure permissions
     const tempDir = fs.mkdtempSync(path.join(tmpdir(), "oracle-fallback-"));
