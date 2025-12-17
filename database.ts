@@ -779,6 +779,45 @@ export class OracleDatabase {
     );
   }
 
+  public applyPlayerMutations(
+    gameAddress: string,
+    operations: ReadonlyArray<
+      | { action: "joined"; playerAddress: string; ticketIndex: number }
+      | { action: "unjoined"; ticketIndex: number }
+    >,
+  ): void {
+    if (operations.length === 0) {
+      return;
+    }
+
+    this.runInTransaction(
+      () => {
+        const baseTimestamp = Date.now();
+        operations.forEach((op, index) => {
+          if (op.action === "joined") {
+            this.runStatement(
+              SQL_STATEMENTS.upsertGamePlayer,
+              "Failed to add player to game",
+              gameAddress,
+              op.playerAddress,
+              op.ticketIndex,
+              baseTimestamp + index,
+            );
+            return;
+          }
+
+          this.runStatement(
+            SQL_STATEMENTS.deleteGamePlayerByTicket,
+            "Failed to remove player from game",
+            gameAddress,
+            op.ticketIndex,
+          );
+        });
+      },
+      `Failed to apply player mutations for game ${gameAddress}`,
+    );
+  }
+
   public clearStalePlayersForGame(gameAddress: string): void {
     this.runStatement(
       SQL_STATEMENTS.deleteGamePlayers,

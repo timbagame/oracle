@@ -204,6 +204,88 @@ describe("OracleService event handling", () => {
     expect(secondTrigger).toBe("unjoined");
   });
 
+  it("batches high-volume player events into a single auto-complete attempt", async () => {
+    const { db, callLog } = createDbStub();
+    const programStub = createProgramStub();
+    const autoCompleteCalls: Array<{ game: string; trigger: string }> = [];
+    const service = createService(db, programStub, {
+      playerEventFlushDebounceMs: 10,
+      autoCompleteDebounceMs: 10,
+      tryAutoComplete: async (_gameKey: any, gameAddress: string, trigger: string) => {
+        autoCompleteCalls.push({ game: gameAddress, trigger });
+      },
+    });
+
+    const gameKey = Keypair.generate().publicKey;
+    seedSecretForGame(db, gameKey.toBase58());
+
+    const players = [Keypair.generate().publicKey, Keypair.generate().publicKey, Keypair.generate().publicKey];
+
+    await Promise.all(
+      players.map((player, index) =>
+        service.events.handlePlayerEvent("joined", {
+          gameKey,
+          player,
+          ticketIndex: index,
+          ticketsCount: index + 1,
+        } as any)
+      )
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(callLog.addPlayer).toHaveLength(3);
+    expect(autoCompleteCalls).toHaveLength(1);
+    expect(autoCompleteCalls[0]?.game).toBe(gameKey.toBase58());
+  });
+
+  it("flushes pending player batches before processing status events", async () => {
+    const { db } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub, {
+      playerEventFlushDebounceMs: 50,
+      autoCompleteDebounceMs: 0,
+    });
+
+    const ordered: string[] = [];
+
+    const origAddPlayer = db.addPlayerToGame;
+    db.addPlayerToGame = (game, player, index) => {
+      ordered.push("player");
+      return origAddPlayer(game, player, index);
+    };
+
+    const origMarkClosed = db.markGameClosed;
+    db.markGameClosed = (game) => {
+      ordered.push("closed");
+      return origMarkClosed(game);
+    };
+
+    const origClearPlayers = db.clearStalePlayersForGame;
+    db.clearStalePlayersForGame = (game) => {
+      ordered.push("cleared");
+      return origClearPlayers(game);
+    };
+
+    const gameKey = Keypair.generate().publicKey;
+    seedSecretForGame(db, gameKey.toBase58());
+    const playerKey = Keypair.generate().publicKey;
+
+    await service.events.handlePlayerEvent("joined", {
+      gameKey,
+      player: playerKey,
+      ticketIndex: 1,
+      ticketsCount: 1,
+    } as any);
+
+    service.events.handleGameStatusChange("closed", { gameKey } as any);
+
+    const queues: Map<string, Promise<void>> = (service.events as any).processingQueues;
+    await Promise.all(Array.from(queues.values()));
+
+    expect(ordered).toEqual(["player", "closed", "cleared"]);
+  });
+
   it("requests registry reconciliation when ticket indexes skip", async () => {
     const { db } = createDbStub();
     const programStub = createProgramStub();
@@ -864,6 +946,8 @@ function createService(
     config: EVENT_HANDLER_CONFIG,
     clearTokenProgramCache: () => {},
     syncPlayerRegistry: async () => true,
+    playerEventFlushDebounceMs: 0,
+    autoCompleteDebounceMs: 0,
     registrySyncTimeoutMs: 100, // Short timeout for testing
     registrySyncRetryDelayMs: 50, // Short retry delay for testing
     ...optionsOverride,

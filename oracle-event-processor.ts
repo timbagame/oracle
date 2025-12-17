@@ -10,6 +10,9 @@ import { logger } from "./logger.ts";
 import { analyzeRegistryState } from "./player-registry-utils.ts";
 
 const DEFAULT_REGISTRY_SYNC_RETRY_DELAY_MS = 2000;
+const DEFAULT_PLAYER_EVENT_FLUSH_DEBOUNCE_MS = 100;
+const DEFAULT_PLAYER_EVENT_FLUSH_MAX_OPERATIONS = 500;
+const DEFAULT_AUTOCOMPLETE_DEBOUNCE_MS = 500;
 
 export interface OracleEventProcessorOptions {
   getProgram: () => anchor.Program<Timba>;
@@ -28,7 +31,31 @@ export interface OracleEventProcessorOptions {
   clearTimeoutFn?: typeof clearTimeout;
   registrySyncRetryDelayMs?: number;
   registrySyncTimeoutMs?: number;
+  playerEventFlushDebounceMs?: number;
+  playerEventFlushMaxOperations?: number;
+  autoCompleteDebounceMs?: number;
 }
+
+type PlayerMutation =
+  | { action: "joined"; playerAddress: string; ticketIndex: number }
+  | { action: "unjoined"; ticketIndex: number };
+
+type PendingPlayerMutationBuffer = {
+  operations: PlayerMutation[];
+  running: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+  expectedTickets?: number;
+  lastGameKey?: PublicKeyLike;
+  lastTrigger?: string;
+};
+
+type PendingAutoCompleteState = {
+  pending: boolean;
+  running: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+  gameKey?: PublicKeyLike;
+  trigger?: string;
+};
 
 export class OracleEventProcessor {
   private listenerIds: number[] = [];
@@ -36,6 +63,11 @@ export class OracleEventProcessor {
   private startPromise: Promise<void> | null = null;
   private readonly registrySyncScheduler?: RegistrySyncScheduler;
   private readonly registrySyncRetryDelayMs: number;
+  private readonly playerEventFlushDebounceMs: number;
+  private readonly playerEventFlushMaxOperations: number;
+  private readonly autoCompleteDebounceMs: number;
+  private readonly playerMutationBuffers = new Map<string, PendingPlayerMutationBuffer>();
+  private readonly pendingAutoCompletes = new Map<string, PendingAutoCompleteState>();
   public scheduleRetryTimeout: (
     callback: () => void,
     delay: number,
@@ -47,6 +79,15 @@ export class OracleEventProcessor {
     this.clearRetryTimeout = options.clearTimeoutFn ?? ((timer) => clearTimeout(timer));
     this.registrySyncRetryDelayMs =
       options.registrySyncRetryDelayMs ?? DEFAULT_REGISTRY_SYNC_RETRY_DELAY_MS;
+    const isTestEnv = (process.env["NODE_ENV"] ?? "").toLowerCase() === "test";
+    this.playerEventFlushDebounceMs =
+      options.playerEventFlushDebounceMs ??
+      (isTestEnv ? 0 : DEFAULT_PLAYER_EVENT_FLUSH_DEBOUNCE_MS);
+    this.playerEventFlushMaxOperations =
+      options.playerEventFlushMaxOperations ?? DEFAULT_PLAYER_EVENT_FLUSH_MAX_OPERATIONS;
+    this.autoCompleteDebounceMs =
+      options.autoCompleteDebounceMs ??
+      (isTestEnv ? 0 : DEFAULT_AUTOCOMPLETE_DEBOUNCE_MS);
     if (options.syncPlayerRegistry) {
       this.registrySyncScheduler = new RegistrySyncScheduler(
         options.syncPlayerRegistry,
@@ -203,6 +244,8 @@ export class OracleEventProcessor {
     this.listenerIds = [];
     this.listening = false;
     this.options.clearTokenProgramCache();
+    this.clearBufferedPlayerMutations();
+    this.clearAutoCompleteSchedules();
   }
 
   public isListening(): boolean {
@@ -243,20 +286,15 @@ export class OracleEventProcessor {
     );
 
     await this.runEventMutation(eventType, async () => {
-      if (action === "joined") {
-        this.options.db.addPlayerToGame(gameAddress, playerAddress!, ticketIndex!);
-      } else {
-        this.options.db.removePlayerFromGame(gameAddress, ticketIndex!);
-      }
-
-      void this.evaluateRegistryConsistency(
-        gameAddress,
+      const mutation: PlayerMutation =
+        action === "joined"
+          ? { action: "joined", playerAddress: playerAddress!, ticketIndex: ticketIndex! }
+          : { action: "unjoined", ticketIndex: ticketIndex! };
+      await this.enqueuePlayerMutation(gameAddress, mutation, {
         expectedTickets,
-        eventType,
-        event.gameKey,
-      );
-
-      await this.options.tryAutoComplete(event.gameKey, gameAddress, action);
+        gameKey: event.gameKey,
+        trigger: action,
+      });
     }, gameAddress);
   }
 
@@ -281,10 +319,35 @@ export class OracleEventProcessor {
       return;
     }
 
-    void this.runEventMutation(`game ${status}`, () => {
+    const flushPromise = this.flushPlayerMutationBuffer(gameAddress, {
+      trigger: `game ${status}`,
+      gameKey: event.gameKey,
+    });
+
+    if (!flushPromise) {
+      void this.runEventMutation(`game ${status}`, () => {
+        if (status === "completed") {
+          this.options.db.markGameCompleted(gameAddress);
+          this.cancelAutoComplete(gameAddress);
+          this.options.onGameFinalized?.(gameAddress);
+          return;
+        }
+
+        this.options.db.markGameClosed(gameAddress);
+        this.options.db.clearStalePlayersForGame(gameAddress);
+        logger.info(`🚫 Game closed: ${gameAddress}`);
+        this.cancelAutoComplete(gameAddress);
+        this.options.onGameFinalized?.(gameAddress);
+      }, gameAddress);
+      return;
+    }
+
+    void this.runEventMutation(`game ${status}`, async () => {
+      await flushPromise;
       // Serialize with player mutations to keep per-game ordering consistent.
       if (status === "completed") {
         this.options.db.markGameCompleted(gameAddress);
+        this.cancelAutoComplete(gameAddress);
         this.options.onGameFinalized?.(gameAddress);
         return;
       }
@@ -292,6 +355,7 @@ export class OracleEventProcessor {
       this.options.db.markGameClosed(gameAddress);
       this.options.db.clearStalePlayersForGame(gameAddress);
       logger.info(`🚫 Game closed: ${gameAddress}`);
+      this.cancelAutoComplete(gameAddress);
       this.options.onGameFinalized?.(gameAddress);
     }, gameAddress);
   }
@@ -334,6 +398,261 @@ export class OracleEventProcessor {
 
     logger.info(`🎮 Game initialized: ${gameAddress}, Type: ${gameType || "unknown"}`);
     this.options.db.trackGame(gameAddress, gameType, { preserveFinalized: true });
+  }
+
+  private clearBufferedPlayerMutations(): void {
+    for (const entry of this.playerMutationBuffers.values()) {
+      if (entry.timer) {
+        this.clearRetryTimeout(entry.timer);
+      }
+    }
+    this.playerMutationBuffers.clear();
+  }
+
+  private clearAutoCompleteSchedules(): void {
+    for (const entry of this.pendingAutoCompletes.values()) {
+      if (entry.timer) {
+        this.clearRetryTimeout(entry.timer);
+      }
+    }
+    this.pendingAutoCompletes.clear();
+  }
+
+  private cancelAutoComplete(gameAddress: string): void {
+    const entry = this.pendingAutoCompletes.get(gameAddress);
+    if (!entry) {
+      return;
+    }
+    if (entry.timer) {
+      this.clearRetryTimeout(entry.timer);
+      entry.timer = undefined;
+    }
+    this.pendingAutoCompletes.delete(gameAddress);
+  }
+
+  private scheduleAutoComplete(
+    gameAddress: string,
+    options: { gameKey?: PublicKeyLike; trigger?: string } = {},
+  ): Promise<void> | void {
+    const entry = this.pendingAutoCompletes.get(gameAddress) ?? {
+      pending: false,
+      running: false,
+    };
+
+    entry.pending = true;
+    entry.gameKey = options.gameKey ?? entry.gameKey;
+    entry.trigger = options.trigger ?? entry.trigger;
+
+    if (entry.running) {
+      this.pendingAutoCompletes.set(gameAddress, entry);
+      return;
+    }
+
+    if (this.autoCompleteDebounceMs <= 0) {
+      this.pendingAutoCompletes.set(gameAddress, entry);
+      return this.flushAutoComplete(gameAddress);
+    }
+
+    if (entry.timer) {
+      this.pendingAutoCompletes.set(gameAddress, entry);
+      return;
+    }
+
+    entry.timer = this.scheduleRetryTimeout(() => {
+      void this.flushAutoComplete(gameAddress);
+    }, this.autoCompleteDebounceMs);
+    this.pendingAutoCompletes.set(gameAddress, entry);
+  }
+
+  private async flushAutoComplete(gameAddress: string): Promise<void> {
+    const entry = this.pendingAutoCompletes.get(gameAddress);
+    if (!entry) {
+      return;
+    }
+
+    if (entry.timer) {
+      this.clearRetryTimeout(entry.timer);
+      entry.timer = undefined;
+    }
+
+    if (!entry.pending || entry.running) {
+      return;
+    }
+
+    entry.pending = false;
+    entry.running = true;
+    this.pendingAutoCompletes.set(gameAddress, entry);
+
+    try {
+      await this.options.tryAutoComplete(entry.gameKey, gameAddress, entry.trigger ?? "batch");
+    } catch (error) {
+      logger.failure(`Auto-complete attempt failed for ${gameAddress}:`, error);
+    } finally {
+      entry.running = false;
+      if (entry.pending) {
+        this.pendingAutoCompletes.set(gameAddress, entry);
+        await this.flushAutoComplete(gameAddress);
+        return;
+      }
+      this.pendingAutoCompletes.delete(gameAddress);
+    }
+  }
+
+  private enqueuePlayerMutation(
+    gameAddress: string,
+    mutation: PlayerMutation,
+    options: { expectedTickets?: number; gameKey?: PublicKeyLike; trigger: string },
+  ): Promise<void> | void {
+    const entry = this.playerMutationBuffers.get(gameAddress) ?? {
+      operations: [],
+      running: false,
+    };
+
+    entry.operations.push(mutation);
+    entry.lastGameKey = options.gameKey ?? entry.lastGameKey;
+    entry.lastTrigger = options.trigger;
+    if (typeof options.expectedTickets === "number" && Number.isFinite(options.expectedTickets)) {
+      entry.expectedTickets = options.expectedTickets;
+    }
+
+    const shouldFlushNow =
+      this.playerEventFlushDebounceMs <= 0 ||
+      entry.operations.length >= Math.max(1, this.playerEventFlushMaxOperations);
+
+    this.playerMutationBuffers.set(gameAddress, entry);
+
+    if (shouldFlushNow) {
+      return this.flushPlayerMutationBufferSerialized(gameAddress, {
+        trigger: options.trigger,
+        gameKey: entry.lastGameKey,
+      });
+    }
+
+    if (entry.timer) {
+      return;
+    }
+
+    entry.timer = this.scheduleRetryTimeout(() => {
+      void this.flushPlayerMutationBuffer(gameAddress, {
+        trigger: "debounce",
+        gameKey: entry.lastGameKey,
+      });
+    }, this.playerEventFlushDebounceMs);
+    this.playerMutationBuffers.set(gameAddress, entry);
+  }
+
+  private flushPlayerMutationBuffer(
+    gameAddress: string,
+    options: { trigger: string; gameKey?: PublicKeyLike },
+  ): Promise<void> | void {
+    const entry = this.playerMutationBuffers.get(gameAddress);
+    if (!entry || (entry.operations.length === 0 && !entry.running && !entry.timer)) {
+      if (entry && entry.timer) {
+        this.clearRetryTimeout(entry.timer);
+      }
+      this.playerMutationBuffers.delete(gameAddress);
+      return;
+    }
+
+    return this.runEventMutation(
+      "player batch flush",
+      async () => {
+        await this.flushPlayerMutationBufferSerialized(gameAddress, options);
+      },
+      gameAddress,
+    );
+  }
+
+  private async flushPlayerMutationBufferSerialized(
+    gameAddress: string,
+    options: { trigger: string; gameKey?: PublicKeyLike },
+  ): Promise<void> {
+    const entry = this.playerMutationBuffers.get(gameAddress);
+    if (!entry) {
+      return;
+    }
+
+    if (entry.timer) {
+      this.clearRetryTimeout(entry.timer);
+      entry.timer = undefined;
+    }
+
+    if (entry.running) {
+      return;
+    }
+
+    if (entry.operations.length === 0) {
+      this.playerMutationBuffers.delete(gameAddress);
+      return;
+    }
+
+    entry.running = true;
+    const operations = entry.operations;
+    entry.operations = [];
+    const expectedTickets = entry.expectedTickets;
+    entry.expectedTickets = undefined;
+    const gameKey = options.gameKey ?? entry.lastGameKey;
+    const trigger = options.trigger ?? entry.lastTrigger ?? "batch";
+    this.playerMutationBuffers.set(gameAddress, entry);
+
+    try {
+      const apply = (this.options.db as any).applyPlayerMutations as
+        | ((address: string, ops: ReadonlyArray<PlayerMutation>) => void)
+        | undefined;
+
+      if (typeof apply === "function") {
+        apply(gameAddress, operations);
+      } else {
+        for (const op of operations) {
+          if (op.action === "joined") {
+            this.options.db.addPlayerToGame(gameAddress, op.playerAddress, op.ticketIndex);
+          } else {
+            this.options.db.removePlayerFromGame(gameAddress, op.ticketIndex);
+          }
+        }
+      }
+
+      void this.evaluateRegistryConsistency(
+        gameAddress,
+        expectedTickets,
+        trigger === "joined" || trigger === "unjoined"
+          ? `player ${trigger}`
+          : `player batch ${trigger}`,
+        gameKey,
+      );
+
+      await this.flushMaybeAutoComplete(gameAddress, {
+        gameKey,
+        trigger,
+      });
+    } finally {
+      entry.running = false;
+      if (entry.operations.length > 0) {
+        this.playerMutationBuffers.set(gameAddress, entry);
+        await this.flushPlayerMutationBufferSerialized(gameAddress, {
+          trigger: "followup",
+          gameKey: entry.lastGameKey,
+        });
+        return;
+      }
+
+      if (entry.timer) {
+        this.playerMutationBuffers.set(gameAddress, entry);
+        return;
+      }
+
+      this.playerMutationBuffers.delete(gameAddress);
+    }
+  }
+
+  private async flushMaybeAutoComplete(
+    gameAddress: string,
+    options: { gameKey?: PublicKeyLike; trigger?: string },
+  ): Promise<void> {
+    const scheduled = this.scheduleAutoComplete(gameAddress, options);
+    if (scheduled && typeof (scheduled as Promise<void>).then === "function") {
+      await scheduled;
+    }
   }
 
   private async evaluateRegistryConsistency(

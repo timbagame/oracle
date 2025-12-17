@@ -144,6 +144,9 @@ export class OracleService {
       syncPlayerRegistry: (options) => this.syncPlayerRegistry(options),
       onGameFinalized: (gameAddress) =>
         this.completion.resetRegistryPrefetchSchedule(gameAddress),
+      playerEventFlushDebounceMs: this.config.playerEventFlushDebounceMs,
+      playerEventFlushMaxOperations: this.config.playerEventFlushMaxOperations,
+      autoCompleteDebounceMs: this.config.autoCompleteDebounceMs,
     });
   }
 

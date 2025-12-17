@@ -76,6 +76,9 @@ export interface OracleRuntimeConfig {
   readonly adminKeypairPath: string;
   readonly adminKeypairSource: string;
   readonly scanThrottleMs: number;
+  readonly playerEventFlushDebounceMs: number;
+  readonly playerEventFlushMaxOperations: number;
+  readonly autoCompleteDebounceMs: number;
   readonly useEphemeralKeypair: boolean;
   readonly environment: string;
 }
@@ -103,6 +106,25 @@ function loadConfig(): OracleRuntimeConfig {
     key: "ORACLE_SCAN_THROTTLE_MS",
   });
 
+  const playerEventFlushDebounceMs = parseNonNegative(
+    readEnv("ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS"),
+    { defaultValue: 100, key: "ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS" }
+  );
+
+  const playerEventFlushMaxOperations = parseInteger(
+    readEnv("ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS"),
+    {
+      defaultValue: 500,
+      min: 1,
+      key: "ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS",
+    }
+  );
+
+  const autoCompleteDebounceMs = parseNonNegative(
+    readEnv("ORACLE_AUTOCOMPLETE_DEBOUNCE_MS"),
+    { defaultValue: 500, key: "ORACLE_AUTOCOMPLETE_DEBOUNCE_MS" }
+  );
+
   const useEphemeralKeypair = shouldUseEphemeralKeypair();
 
   return {
@@ -113,6 +135,9 @@ function loadConfig(): OracleRuntimeConfig {
     adminKeypairPath,
     adminKeypairSource,
     scanThrottleMs,
+    playerEventFlushDebounceMs,
+    playerEventFlushMaxOperations,
+    autoCompleteDebounceMs,
     useEphemeralKeypair,
     environment,
   } as const;
