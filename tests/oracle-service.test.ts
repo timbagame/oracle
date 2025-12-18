@@ -231,11 +231,11 @@ describe("OracleService", () => {
     };
 
     const stats = await service.scanRunner.scanAndCompleteActiveGames();
-    expect(stats).toEqual({ completed: 1, errors: 2, notReady: 1 });
+    expect(stats).toEqual({ completed: 1, errors: 1, notReady: 2 });
 
-    // gameGone should be marked completed due to missing on-chain account
+    // gameGone should STILL be pending due to retry logic
     const pending = db.getPendingGames().map((g) => g.game_address);
-    expect(pending).not.toContain("gameGone");
+    expect(pending).toContain("gameGone");
 
     service.completionManager.resolveContextAndReadiness = originalResolve;
     (service as any).completeGame = originalComplete;

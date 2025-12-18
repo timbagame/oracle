@@ -780,9 +780,11 @@ describe("OracleService internals", () => {
     });
     const res = await service.completionManager.isGameReadyForCompletion(new PublicKey(addr));
     expect(res).toBe(false);
-    // now pending list should not contain addr since marked completed
+    // now pending list should still contain addr because of retry logic
     const pending = db.getPendingGames().map((g) => g.game_address);
-    expect(pending.includes(addr)).toBe(false);
+    expect(pending.includes(addr)).toBe(true);
+    const entry = db.getPendingGames().find(g => g.game_address === addr);
+    expect(entry?.completion_attempts).toBe(0); // evaluateGameReadiness doesn't increment attempts, scanRunner does
   });
 
   it("isGameReadyForCompletion reports readiness for full and expired lobbies", async () => {

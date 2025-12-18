@@ -1,3 +1,5 @@
+process.env["SOLANA_NETWORK"] = "devnet";
+
 import { describe, it, expect } from "bun:test";
 import { ScanLoopRunner } from "../oracle-scan-runner.ts";
 import { OracleDatabase } from "../database.ts";
