@@ -11,8 +11,9 @@ import { logger } from "./logger.ts";
 import { normalizeGameType } from "./game-type.ts";
 
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
-const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = 5000;
 const IS_TEST_ENV = isTestEnvironment();
+const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = IS_TEST_ENV ? 50 : 5000;
+const EVENT_LISTENER_SHUTDOWN_TIMEOUT_MS = IS_TEST_ENV ? 50 : 5000;
 const INTERNAL_SERVER_ERROR_MESSAGE = "Internal server error";
 const GAME_TYPE_FIELD = "gameType";
 
@@ -68,10 +69,28 @@ async function abortBackgroundLoop(): Promise<void> {
 }
 
 async function stopEventListeners(oracle: OracleApi): Promise<void> {
+  let stopPromise: Promise<unknown>;
   try {
-    await oracle.stopEventListening();
+    stopPromise = Promise.resolve(oracle.stopEventListening());
   } catch (error) {
     logger.warning("Failed to stop event listeners:", error);
+    return;
+  }
+
+  const timeoutResult = await Promise.race<"completed" | "timeout">([
+    stopPromise
+      .then(() => "completed" as const)
+      .catch((error) => {
+        logger.warning("Failed to stop event listeners:", error);
+        return "completed" as const;
+      }),
+    delay(EVENT_LISTENER_SHUTDOWN_TIMEOUT_MS).then(() => "timeout" as const),
+  ]);
+
+  if (timeoutResult === "timeout") {
+    logger.warning(
+      "Event listeners did not stop within the shutdown timeout; proceeding with shutdown.",
+    );
   }
 }
 
@@ -79,9 +98,9 @@ async function stopServer(
   oracle: OracleApi,
   exitCode?: number
 ): Promise<void> {
+  server?.stop();
   await abortBackgroundLoop();
   await stopEventListeners(oracle);
-  server?.stop();
 
   if (exitCode !== undefined && !IS_TEST_ENV) {
     process.exit(exitCode);

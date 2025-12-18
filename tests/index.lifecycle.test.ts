@@ -43,4 +43,19 @@ describe("lifecycle helpers", () => {
     );
     expect(stopped).toBe(true);
   });
+
+  it("shutdown completes even when listener teardown hangs", async () => {
+    const oracle = createBasicOracle({
+      stopEventListening: async () => {
+        await new Promise<void>(() => {});
+      },
+    });
+
+    const result = await Promise.race([
+      context.shutdown(oracle, "SIGTERM").then(() => "completed" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 250)),
+    ]);
+
+    expect(result).toBe("completed");
+  });
 });

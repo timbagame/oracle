@@ -243,6 +243,7 @@ export class OracleEventProcessor {
 
     this.listenerIds = [];
     this.listening = false;
+    this.clearRegistrySyncs();
     this.options.clearTokenProgramCache();
     this.clearBufferedPlayerMutations();
     this.clearAutoCompleteSchedules();
