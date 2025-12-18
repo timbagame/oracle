@@ -41,6 +41,8 @@ export interface ScanLoopRunnerOptions {
 }
 
 export class ScanLoopRunner {
+  private running = false;
+
   constructor(private readonly options: ScanLoopRunnerOptions) {}
 
   public async scanAndCompleteActiveGames(
@@ -199,6 +201,10 @@ export class ScanLoopRunner {
     return stats;
   }
 
+  public stop(): void {
+    this.running = false;
+  }
+
   public async runScanLoop(options: ScanLoopOptions = {}): Promise<ScanLoopSummary> {
     const {
       waitBetweenCyclesMs = DEFAULT_DELAY_MS,
@@ -210,62 +216,64 @@ export class ScanLoopRunner {
       onCycleComplete,
     } = options;
 
+    if (this.running) {
+      throw new Error("Scan loop is already running");
+    }
+    this.running = true;
+
     const totals: CompletionStats = createEmptyCompletionStats();
     let lastStats: CompletionStats | null = null;
     let cycle = 0;
 
-    const shouldAbort = () => Boolean(signal?.aborted);
+    const shouldAbort = () => Boolean(signal?.aborted) || !this.running;
 
-    const waitForNextCycle = async () => {
-      if (waitBetweenCyclesMs <= 0) {
-        return;
-      }
+    try {
+      while (!shouldAbort()) {
+        cycle++;
+        onCycleStart?.(cycle);
 
-      await delayHelper(waitBetweenCyclesMs, { signal });
-    };
+        lastStats = await this.scanAndCompleteActiveGames({ signal });
 
-    while (!shouldAbort()) {
-      cycle += 1;
-      onCycleStart?.(cycle);
+        totals.completed += lastStats.completed;
+        totals.errors += lastStats.errors;
+        totals.notReady += lastStats.notReady;
 
-    const stats = await this.scanAndCompleteActiveGames({ signal });
-      lastStats = stats;
+        if (cleanupAfterCycleHours !== undefined) {
+          try {
+            this.options.cleanupOldRecords(cleanupAfterCycleHours);
+          } catch (error) {
+            logger.failure("Cleanup after scan cycle failed:", error);
+          }
+        }
 
-      totals.completed += stats.completed;
-      totals.errors += stats.errors;
-      totals.notReady += stats.notReady;
+        onCycleComplete?.(cycle, lastStats);
 
-      if (cleanupAfterCycleHours !== undefined) {
-        try {
-          this.options.cleanupOldRecords(cleanupAfterCycleHours);
-        } catch (error) {
-          logger.failure("Cleanup after scan cycle failed:", error);
+        if (shouldAbort()) break;
+
+        const continueLoop = shouldContinue
+          ? shouldContinue(lastStats, cycle)
+          : lastStats.completed > 0 || lastStats.notReady > 0 || lastStats.errors > 0;
+
+        if (!continueLoop) {
+          break;
+        }
+
+        const onlyErrorsThisCycle =
+          lastStats.errors > 0 && lastStats.completed === 0 && lastStats.notReady === 0;
+
+        const effectiveDelay =
+          waitForPendingOnly && !onlyErrorsThisCycle && lastStats.notReady === 0
+            ? 0
+            : waitBetweenCyclesMs;
+
+        if (effectiveDelay > 0) {
+          await delayHelper(effectiveDelay, { signal });
+        } else if (waitForPendingOnly && !shouldContinue) {
+          break;
         }
       }
-
-      onCycleComplete?.(cycle, stats);
-
-      if (shouldAbort()) {
-        break;
-      }
-
-      const continueLoop = shouldContinue
-        ? shouldContinue(stats, cycle)
-        : stats.completed > 0 || stats.notReady > 0 || stats.errors > 0;
-
-      const onlyErrorsThisCycle =
-        stats.errors > 0 && stats.completed === 0 && stats.notReady === 0;
-
-      if (!continueLoop) {
-        break;
-      }
-
-      if (
-        waitBetweenCyclesMs > 0 &&
-        (!waitForPendingOnly || stats.notReady > 0 || onlyErrorsThisCycle)
-      ) {
-        await waitForNextCycle();
-      }
+    } finally {
+      this.running = false;
     }
 
     return {

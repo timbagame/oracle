@@ -421,6 +421,11 @@ export class OracleService {
     await this.eventProcessor.stopListening();
   }
 
+  public async close(): Promise<void> {
+    await this.stopEventListening();
+    this.scanner.stop();
+  }
+
   public generateGameSecrets(
     options: GenerateGameSecretsOptions = {},
   ): GameSecrets {

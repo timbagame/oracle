@@ -412,11 +412,6 @@ describe("OracleService event handling", () => {
     // But here we are testing deduplication of SCHEDULING.
     // If sync is running, second request is queued.
     // When first finishes, it processes queue.
-    // So syncCount should be 2?
-    // Unless the test expects deduplication logic to merge them?
-    // RegistrySyncScheduler merges if retryPending.
-    // If running, it pushes to queue.
-    // When first finishes, it processes queue.
     // So it runs twice.
     // But the test name says "deduplicates".
     // Maybe it means "does not start parallel sync"?
@@ -809,12 +804,11 @@ describe("OracleService event handling", () => {
   });
 
   it("preserves finalized games when initialization events replay", async () => {
+    // Let's refactor it to use setupOracleServiceEnv but with proper isolation.
     const env = await setupOracleServiceEnv("oracle-service-events-finalized");
-    const { OracleService, OracleDatabase, cleanup: envCleanup } = env;
-
     try {
-      const db = OracleDatabase.getInstance();
-      const service = OracleService.createWith(db);
+      const db = env.OracleDatabase.getInstance();
+      const service = env.OracleService.createWith(db);
 
       const gameKey = Keypair.generate().publicKey;
       const gameAddress = gameKey.toBase58();
@@ -828,19 +822,10 @@ describe("OracleService event handling", () => {
       const pending = db.getPendingGames().map((entry) => entry.game_address);
       expect(pending).not.toContain(gameAddress);
 
-      const sqlite = (db as any).db as {
-        prepare: (
-          sql: string,
-        ) => { get: (...args: unknown[]) => { status?: string } | undefined };
-      };
-
-      const statusRow = sqlite
-        .prepare("SELECT status FROM game_tracking WHERE game_address = ?")
-        .get(gameAddress) as { status?: string } | undefined;
-
-      expect(statusRow?.status).toBe("completed");
+      const status = db.getGameStatus(gameAddress);
+      expect(status).toBe("completed");
     } finally {
-      envCleanup();
+      env.cleanup();
     }
   });
 
