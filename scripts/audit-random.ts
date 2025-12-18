@@ -6,7 +6,7 @@ import { OracleDatabase } from "../database.ts";
 import { OracleService } from "../oracle-service.ts";
 import type { Timba } from "../idl/idlType.ts";
 import type { TimbaGameAccount, TimbaPlayerEvent } from "../types/timba.ts";
-import { ensurePublicKey, resolveNumericLike, toBase58 } from "../solana-utils.ts";
+import { ensurePublicKey, resolveNumericLike, toBase58, type PublicKeyLike } from "../solana-utils.ts";
 
 type CliOptions = {
   gameAddress?: string;
@@ -20,6 +20,12 @@ type CliOptions = {
 type PlayerMutation =
   | { action: "joined"; playerAddress: string; ticketIndex: number }
   | { action: "unjoined"; ticketIndex: number };
+
+type LastJoinSnapshot = {
+  playerAddress: string;
+  ticketIndex: number;
+  observedAtMs: number;
+};
 
 function parseArgs(argv: string[]): CliOptions {
   let gameAddress: string | undefined;
@@ -164,6 +170,23 @@ function extractPlayerMutation(
   return { gameAddress, mutation: { action: "joined", playerAddress, ticketIndex } };
 }
 
+function extractGameAddressFromEventPayload(event: Record<string, unknown>): string | null {
+  const candidates: unknown[] = [
+    event["gameAddress"],
+    event["gameKey"],
+    event["game"],
+    event["game_key"],
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const normalized = toBase58(candidate as PublicKeyLike);
+    if (normalized) return normalized;
+  }
+
+  return null;
+}
+
 async function fetchGameAccount(
   program: anchor.Program<Timba>,
   gamePda: PublicKey,
@@ -206,6 +229,10 @@ async function main(): Promise<void> {
 
   const gameAddress = (options.gameAddress?.trim() || (await promptSelectGame(db))).trim();
 
+  let lastJoin: LastJoinSnapshot | null = null;
+  let completionStatus: "completed" | "closed" | "missing" | null = null;
+  let completionObservedAtMs: number | null = null;
+
   const secretData = db.getSecretKey(gameAddress);
   if (!secretData) {
     throw new Error(`No secret key found in local DB for ${gameAddress}`);
@@ -226,12 +253,29 @@ async function main(): Promise<void> {
       const extracted = extractPlayerMutation(action, event);
       if (!extracted) return;
       if (extracted.gameAddress !== gameAddress) return;
+      if (extracted.mutation.action === "joined") {
+        lastJoin = {
+          playerAddress: extracted.mutation.playerAddress,
+          ticketIndex: extracted.mutation.ticketIndex,
+          observedAtMs: Date.now(),
+        };
+      }
       db.applyPlayerMutations(gameAddress, [extracted.mutation]);
+    };
+
+    const onStatus = (status: "completed" | "closed") => async (event: unknown) => {
+      if (!event || typeof event !== "object") return;
+      const address = extractGameAddressFromEventPayload(event as Record<string, unknown>);
+      if (!address || address !== gameAddress) return;
+      completionStatus = status;
+      completionObservedAtMs = Date.now();
     };
 
     listenerIds = await Promise.all([
       program.addEventListener("playerJoined", onEvent("joined")),
       program.addEventListener("playerUnjoined", onEvent("unjoined")),
+      program.addEventListener("gameCompleted", onStatus("completed")),
+      program.addEventListener("gameClosed", onStatus("closed")),
     ]);
   };
 
@@ -257,6 +301,22 @@ async function main(): Promise<void> {
     const timeout = gameAccount ? Number(gameAccount.timeout) : null;
     const expiresAt = createdAt !== null && timeout !== null ? createdAt + timeout : null;
 
+    const isFinal =
+      completionStatus === "completed" ||
+      completionStatus === "closed" ||
+      completionStatus === "missing";
+
+    const statusLine = (() => {
+      if (completionStatus === "completed") return "completed";
+      if (completionStatus === "closed") return "closed";
+      if (completionStatus === "missing") return "completed (account missing)";
+      return "active";
+    })();
+
+    const lastJoinLine = lastJoin
+      ? `${lastJoin.playerAddress} (ticketIndex=${lastJoin.ticketIndex}, at=${new Date(lastJoin.observedAtMs).toISOString()})`
+      : "n/a";
+
     const winnerText =
       winnerIndexNow === null
         ? "n/a"
@@ -264,28 +324,36 @@ async function main(): Promise<void> {
 
     const lines: string[] = [];
     lines.push(`Game: ${gameAddress}`);
+    lines.push(
+      `Status: ${statusLine}${
+        completionObservedAtMs ? ` | CompletedAt: ${new Date(completionObservedAtMs).toISOString()}` : ""
+      }`,
+    );
+    lines.push(`Last joiner: ${lastJoinLine}`);
     lines.push(`Slot: ${currentSlot ?? "n/a"} | BlockTime: ${formatUnixSeconds(blockTime ?? undefined)}`);
     lines.push(`Tickets: ${ticketsCount} | Players(DB): ${players.length} | lastSlot(entropy): ${lastSlot}`);
     lines.push(`CreatedAt: ${formatUnixSeconds(createdAt ?? undefined)} | ExpiresAt: ${formatUnixSeconds(expiresAt ?? undefined)}`);
     lines.push(`Winner if completes now: ${winnerText}`);
-    lines.push("");
-    lines.push(`If 1 new ticket joins at future slot (n=${players.length + 1}):`);
+    if (!isFinal) {
+      lines.push("");
+      lines.push(`If 1 new ticket joins at future slot (n=${players.length + 1}):`);
 
-    if (currentSlot !== null && players.length >= 0) {
-      const joinNPlayers = players.length + 1;
-      for (let offset = 1; offset <= options.lookaheadSlots; offset += 1) {
-        const slot = currentSlot + offset;
-        const winnerIndexIfJoin = completion.calculateWinnerIndex(secretKeyBuffer, slot, joinNPlayers);
-        const winnerLabel =
-          winnerIndexIfJoin === players.length
-            ? "<new join>"
-            : (players[winnerIndexIfJoin] ?? "<missing>");
-        lines.push(
-          `${String(slot).padStart(12, " ")} -> index=${String(winnerIndexIfJoin).padStart(4, " ")} pos=${String(winnerIndexIfJoin + 1).padStart(4, " ")} winner=${winnerLabel}`,
-        );
+      if (currentSlot !== null && players.length >= 0) {
+        const joinNPlayers = players.length + 1;
+        for (let offset = 1; offset <= options.lookaheadSlots; offset += 1) {
+          const slot = currentSlot + offset;
+          const winnerIndexIfJoin = completion.calculateWinnerIndex(secretKeyBuffer, slot, joinNPlayers);
+          const winnerLabel =
+            winnerIndexIfJoin === players.length
+              ? "<new join>"
+              : (players[winnerIndexIfJoin] ?? "<missing>");
+          lines.push(
+            `${String(slot).padStart(12, " ")} -> index=${String(winnerIndexIfJoin).padStart(4, " ")} pos=${String(winnerIndexIfJoin + 1).padStart(4, " ")} winner=${winnerLabel}`,
+          );
+        }
+      } else {
+        lines.push("n/a (slot unavailable)");
       }
-    } else {
-      lines.push("n/a (slot unavailable)");
     }
 
     if (errors.length > 0) {
@@ -297,7 +365,7 @@ async function main(): Promise<void> {
     }
 
     lines.push("");
-    lines.push("Ctrl+C to exit.");
+    lines.push(isFinal ? "Completed. Exiting..." : "Ctrl+C to exit.");
 
     process.stdout.write("\x1Bc");
     process.stdout.write(lines.join("\n"));
@@ -321,6 +389,11 @@ async function main(): Promise<void> {
       gameAccount = await fetchGameAccount(program, gamePda);
     } catch (error) {
       errors.push(`Fetch game account: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    if (gameAccount === null) {
+      completionStatus = completionStatus ?? "missing";
+      completionObservedAtMs = completionObservedAtMs ?? Date.now();
     }
 
     const players = options.refreshFromDbEachTick ? db.getGamePlayers(gameAddress) : [];
@@ -350,20 +423,18 @@ async function main(): Promise<void> {
       winnerIndexNow,
       errors,
     });
-
-    if (gameAccount === null) {
-      throw new Error("Game account not found on-chain (it may be completed/closed)");
-    }
   };
 
   try {
     await registerPlayerListeners();
     await pollOnce();
     if (options.once) return;
+    if (completionStatus) return;
 
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, options.intervalMs));
       await pollOnce();
+      if (completionStatus) return;
     }
   } finally {
     await unregisterPlayerListeners().catch(() => {});
