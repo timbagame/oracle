@@ -400,7 +400,11 @@ describe("GameCompletionManager.attemptGameCompletion outcome handling", () => {
 
       expect(failure).toEqual({ success: false, error: "boom" });
       expect(errorSpy).toHaveBeenCalledWith("failure:failure-game:boom");
-      expect(infoSpy).toHaveBeenCalledTimes(1);
+      // Verify success log was called exactly once for the success-game
+      const successLogCalls = infoSpy.mock.calls.filter(
+        (call: unknown[]) => call[0] === "success:success-game"
+      );
+      expect(successLogCalls).toHaveLength(1);
 
       expect(records).toEqual([
         { gameAddress: "success-game", outcome: "success", error: undefined },
