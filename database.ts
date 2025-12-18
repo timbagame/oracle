@@ -709,15 +709,12 @@ export class OracleDatabase {
       const deletedSecrets = this.runDelete(
         `DELETE FROM secret_keys
          WHERE created_at < ?
-           AND (
-             used = TRUE OR
-             game_address IN (
-               SELECT game_address FROM game_tracking WHERE status != ?
-             )
+           AND game_address IN (
+             SELECT game_address FROM game_tracking
+             WHERE status IN ('completed', 'cancelled')
            )`,
         "Failed to delete old secret keys",
-        cutoffTime,
-        DEFAULT_STATUS
+        cutoffTime
       );
 
       const deletedPlayers = this.runDelete(

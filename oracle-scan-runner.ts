@@ -106,17 +106,34 @@ export class ScanLoopRunner {
         }
 
         if (readinessResolution.status === "missing-context") {
-          stats.errors += 1;
           const secret = this.options.db.getSecretKey(game.game_address);
-          const errorReason = secret ? "missing-game-account" : "missing-secret";
-          const logMessage = secret
-            ? `⚠️  Game ${game.game_address} lost its on-chain account while still tracked; marking as desynced.`
+          const hasSecret = Boolean(secret);
+          const attempts = (game.completion_attempts ?? 0) + 1;
+          const maxReached = attempts >= this.options.maxCompletionAttempts;
+
+          if (hasSecret && !maxReached) {
+            // Be patient if we have the secret; it might be RPC flakiness
+            stats.notReady += 1;
+            logger.warning(
+              `⚠️  Game ${game.game_address} account not found on-chain (attempt ${attempts}/${this.options.maxCompletionAttempts}); retrying later.`
+            );
+            this.options.db.incrementCompletionAttempts(game.game_address);
+            this.options.db.touchGameCheck(game.game_address);
+            continue;
+          }
+
+          stats.errors += 1;
+          const errorReason = hasSecret ? "missing-game-account" : "missing-secret";
+          const logMessage = hasSecret
+            ? `⚠️  Game ${game.game_address} lost its on-chain account after ${attempts} attempts; marking as desynced.`
             : `❌ Game ${game.game_address} is missing its secret key; marking as desynced.`;
-          if (secret) {
-            logger.warning(logMessage);
+
+          if (hasSecret) {
+            logger.failure(logMessage);
           } else {
             logger.failure(logMessage);
           }
+
           this.options.db.markGameDesynced(game.game_address);
           this.options.metrics.recordCompletion({
             gameAddress: game.game_address,

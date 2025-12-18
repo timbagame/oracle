@@ -210,7 +210,7 @@ describe("GameCompletionManager readiness evaluation", () => {
     const fetchSpy = spyOn(manager as any, "fetchGameAccount").mockResolvedValue(gameAccount);
 
     const gamePda = Keypair.generate().publicKey;
-    const readiness = await manager.evaluateGameReadiness(gamePda, gamePda.toBase58());
+    const readiness = await manager.evaluateGameReadiness(gamePda);
 
     expect(readiness.ready).toBe(false);
 
@@ -222,7 +222,7 @@ describe("GameCompletionManager.evaluateGameReadiness", () => {
   it("treats block time equal to the timeout boundary as expired when minimum tickets are met", async () => {
     const { manager } = createManager();
     const gamePda = Keypair.generate().publicKey;
-    const gameAddress = gamePda.toBase58();
+
     const fetchSpy = spyOn(manager as any, "fetchGameAccount").mockResolvedValue({
       createdAt: BigInt(1_000),
       timeout: BigInt(60),
@@ -232,7 +232,7 @@ describe("GameCompletionManager.evaluateGameReadiness", () => {
     } satisfies Partial<TimbaGameAccount>);
 
     try {
-      const readiness = await manager.evaluateGameReadiness(gamePda, gameAddress, 1_060);
+      const readiness = await manager.evaluateGameReadiness(gamePda, 1_060);
       expect(readiness.ready).toBe(true);
       expect(readiness.evaluatedAt).toBe(1_060);
     } finally {

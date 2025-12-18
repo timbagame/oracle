@@ -13,13 +13,13 @@ async function main(): Promise<void> {
   const gamePda = new PublicKey(address);
 
   try {
-    const gameAccount = await completion.fetchGameAccount(gamePda, address);
+    const gameAccount = await completion.fetchGameAccount(gamePda);
     if (!gameAccount) {
       console.log(JSON.stringify({ address, exists: false }, null, 2));
       return;
     }
 
-    const readiness = await completion.evaluateGameReadiness(gamePda, address);
+    const readiness = await completion.evaluateGameReadiness(gamePda);
 
     console.log(JSON.stringify({
       address,

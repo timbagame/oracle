@@ -614,7 +614,7 @@ export class GameCompletionManager {
     gameAddress: string,
     blockTime?: number,
   ): Promise<GameReadinessSnapshot> {
-    const readiness = await this.evaluateGameReadiness(gamePda, gameAddress, blockTime);
+    const readiness = await this.evaluateGameReadiness(gamePda, blockTime);
 
     if (readiness.ready) {
       this.options.readinessCache.set(gameAddress, readiness);
@@ -627,10 +627,9 @@ export class GameCompletionManager {
 
   public async evaluateGameReadiness(
     gamePda: PublicKey,
-    gameAddress: string,
     blockTime?: number,
   ): Promise<GameReadinessSnapshot> {
-    const gameAccount = await this.fetchGameAccount(gamePda, gameAddress);
+    const gameAccount = await this.fetchGameAccount(gamePda);
     if (!gameAccount) {
       return { ready: false, gameAccount: null };
     }
@@ -652,14 +651,12 @@ export class GameCompletionManager {
 
   public async fetchGameAccount(
     gamePda: PublicKey,
-    gameAddress: string,
   ): Promise<TimbaGameAccount | null> {
     try {
       const program = this.options.getProgram();
       return (await program.account.game.fetch(gamePda)) as TimbaGameAccount;
     } catch (error: unknown) {
       if (this.isAccountNotFoundError(error)) {
-        this.options.db.markGameCompleted(gameAddress);
         return null;
       }
       throw error;
