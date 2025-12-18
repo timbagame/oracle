@@ -757,9 +757,18 @@ export class OracleDatabase {
 
   public close(): void {
     try {
+      // Checkpoint WAL to ensure all data is written to main database file
+      // This is critical for data persistence when using WAL mode with NORMAL synchronous
+      try {
+        this.db.query("PRAGMA wal_checkpoint(TRUNCATE)").run();
+      } catch (checkpointError) {
+        logger.warn("Failed to checkpoint WAL during close:", checkpointError);
+      }
+
       this.finalizePreparedStatements();
       this.db.close();
       this.closed = true;
+      logger.info("📁 Database closed successfully");
     } catch (error) {
       logger.failure("Failed to close database:", error);
     }

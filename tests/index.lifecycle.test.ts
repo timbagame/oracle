@@ -32,21 +32,21 @@ describe("lifecycle helpers", () => {
   });
 
   it("shutdown stops listeners and does not exit in tests", async () => {
-    let stopped = false;
+    let closed = false;
     await context.shutdown(
       createBasicOracle({
-        stopEventListening: async () => {
-          stopped = true;
+        close: async () => {
+          closed = true;
         },
       }),
       "SIGINT",
     );
-    expect(stopped).toBe(true);
+    expect(closed).toBe(true);
   });
 
   it("shutdown completes even when listener teardown hangs", async () => {
     const oracle = createBasicOracle({
-      stopEventListening: async () => {
+      close: async () => {
         await new Promise<void>(() => {});
       },
     });

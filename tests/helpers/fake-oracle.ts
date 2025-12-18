@@ -13,6 +13,7 @@ export interface FakeOracleOptions {
   scanAndCompleteActiveGames?: OracleApi["scanAndCompleteActiveGames"];
   startEventListening?: OracleApi["startEventListening"];
   stopEventListening?: OracleApi["stopEventListening"];
+  close?: OracleApi["close"];
   cleanupOldRecords?: OracleApi["cleanupOldRecords"];
   requeueGame?: OracleApi["requeueGame"];
 }
@@ -40,6 +41,7 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
     scanAndCompleteActiveGames,
     startEventListening,
     stopEventListening,
+    close,
     cleanupOldRecords,
     requeueGame,
   } = options;
@@ -55,6 +57,7 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
       scanAndCompleteActiveGames ?? (async () => ({ ...createEmptyCompletionStats() })),
     startEventListening: startEventListening ?? (async () => {}),
     stopEventListening: stopEventListening ?? (async () => {}),
+    close: close ?? (async () => {}),
     cleanupOldRecords: cleanupOldRecords ?? (() => ({ ...DEFAULT_CLEANUP_STATS })),
     requeueGame: requeueGame ?? (() => ({ success: true })),
   };

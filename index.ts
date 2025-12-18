@@ -68,20 +68,20 @@ async function abortBackgroundLoop(): Promise<void> {
   backgroundAbortController = undefined;
 }
 
-async function stopEventListeners(oracle: OracleApi): Promise<void> {
-  let stopPromise: Promise<unknown>;
+async function closeOracle(oracle: OracleApi): Promise<void> {
+  let closePromise: Promise<unknown>;
   try {
-    stopPromise = Promise.resolve(oracle.stopEventListening());
+    closePromise = Promise.resolve(oracle.close());
   } catch (error) {
-    logger.warning("Failed to stop event listeners:", error);
+    logger.warning("Failed to close oracle:", error);
     return;
   }
 
   const timeoutResult = await Promise.race<"completed" | "timeout">([
-    stopPromise
+    closePromise
       .then(() => "completed" as const)
       .catch((error) => {
-        logger.warning("Failed to stop event listeners:", error);
+        logger.warning("Failed to close oracle:", error);
         return "completed" as const;
       }),
     delay(EVENT_LISTENER_SHUTDOWN_TIMEOUT_MS).then(() => "timeout" as const),
@@ -89,7 +89,7 @@ async function stopEventListeners(oracle: OracleApi): Promise<void> {
 
   if (timeoutResult === "timeout") {
     logger.warning(
-      "Event listeners did not stop within the shutdown timeout; proceeding with shutdown.",
+      "Oracle close did not complete within the shutdown timeout; proceeding with shutdown.",
     );
   }
 }
@@ -100,7 +100,7 @@ async function stopServer(
 ): Promise<void> {
   server?.stop();
   await abortBackgroundLoop();
-  await stopEventListeners(oracle);
+  await closeOracle(oracle);
 
   if (exitCode !== undefined && !IS_TEST_ENV) {
     process.exit(exitCode);
@@ -196,6 +196,7 @@ export interface OracleApi {
   scanAndCompleteActiveGames: () => Promise<CompletionStats>;
   startEventListening: () => ReturnType<OracleService["startEventListening"]>;
   stopEventListening: () => ReturnType<OracleService["stopEventListening"]>;
+  close: () => ReturnType<OracleService["close"]>;
   cleanupOldRecords: OracleService["cleanupOldRecords"];
   requeueGame: (gameAddress: string) => RequeueGameResult;
 }
@@ -527,6 +528,7 @@ if (!IS_TEST_ENV) {
     scanAndCompleteActiveGames: () => realOracle.scanRunner.scanAndCompleteActiveGames(),
     startEventListening: () => realOracle.startEventListening(),
     stopEventListening: () => realOracle.stopEventListening(),
+    close: () => realOracle.close(),
     cleanupOldRecords: (hoursOld) => realOracle.cleanupOldRecords(hoursOld),
     requeueGame: (gameAddress) => realOracle.requeueGame(gameAddress),
   };
