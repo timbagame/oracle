@@ -31,7 +31,7 @@ describe("lifecycle helpers", () => {
     ).rejects.toThrow("boom");
   });
 
-  it("shutdown stops listeners and does not exit in tests", async () => {
+  it("shutdown calls close() on the oracle", async () => {
     let closed = false;
     await context.shutdown(
       createBasicOracle({
@@ -44,7 +44,7 @@ describe("lifecycle helpers", () => {
     expect(closed).toBe(true);
   });
 
-  it("shutdown completes even when listener teardown hangs", async () => {
+  it("shutdown completes even when close() hangs", async () => {
     const oracle = createBasicOracle({
       close: async () => {
         await new Promise<void>(() => {});
@@ -57,5 +57,37 @@ describe("lifecycle helpers", () => {
     ]);
 
     expect(result).toBe("completed");
+  });
+
+  it("shutdown completes when close() throws an error", async () => {
+    const oracle = createBasicOracle({
+      close: async () => {
+        throw new Error("close failed");
+      },
+    });
+
+    // Shutdown should complete without throwing
+    await expect(context.shutdown(oracle, "SIGTERM")).resolves.toBeUndefined();
+  });
+
+  it("shutdown calls close() not stopEventListening() directly", async () => {
+    let closeCalled = false;
+    let stopCalled = false;
+
+    const oracle = createBasicOracle({
+      close: async () => {
+        closeCalled = true;
+      },
+      stopEventListening: async () => {
+        stopCalled = true;
+      },
+    });
+
+    await context.shutdown(oracle, "SIGINT");
+
+    // close() should be called (which internally calls stopEventListening)
+    expect(closeCalled).toBe(true);
+    // stopEventListening should NOT be called directly by shutdown
+    expect(stopCalled).toBe(false);
   });
 });

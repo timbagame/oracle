@@ -476,3 +476,65 @@ describe("OracleService", () => {
     connection.getAccountInfo = originalGetAccountInfo;
   });
 });
+
+describe("OracleService shutdown", () => {
+  it("close() stops event listeners, scanner, and closes database", async () => {
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+
+    // Track initial state
+    const dbCloseSpy = spyOn(db, "close");
+    const scannerStopSpy = spyOn(service.scanRunner, "stop");
+
+    // Close the service
+    await service.close();
+
+    // Verify all components were properly shutdown
+    expect(scannerStopSpy).toHaveBeenCalledTimes(1);
+    expect(dbCloseSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("close() closes database even after stopping event listeners", async () => {
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+
+    const closeOrder: string[] = [];
+    const dbCloseSpy = spyOn(db, "close").mockImplementation(() => {
+      closeOrder.push("db.close");
+    });
+    const scannerStopSpy = spyOn(service.scanRunner, "stop").mockImplementation(() => {
+      closeOrder.push("scanner.stop");
+    });
+    const stopEventSpy = spyOn(service, "stopEventListening").mockImplementation(async () => {
+      closeOrder.push("stopEventListening");
+    });
+
+    await service.close();
+
+    // Verify order: event listeners first, then scanner, then database
+    expect(closeOrder).toEqual(["stopEventListening", "scanner.stop", "db.close"]);
+
+    dbCloseSpy.mockRestore();
+    scannerStopSpy.mockRestore();
+    stopEventSpy.mockRestore();
+  });
+
+  it("close() ensures database flush after game secrets generation", async () => {
+    const db = OracleDatabase.getInstance();
+    const service = OracleService.createWith(db);
+    service.cleanupOldRecords(-1);
+
+    // Generate a game (writes to database)
+    const { gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
+
+    // Verify game is tracked before close
+    expect(db.getGameStatus(gameAddress)).toBe("pending");
+    expect(db.getSecretKey(gameAddress)).not.toBeNull();
+
+    // Close should flush all pending writes
+    await service.close();
+
+    // Verify db is closed
+    expect(db.getConnectionInfo().isOpen).toBe(false);
+  });
+});
