@@ -259,16 +259,46 @@ async function main(): Promise<void> {
   const completion = oracle.completionManager;
   const db = OracleDatabase.getInstance();
 
-  const gameAddress = (options.gameAddress?.trim() || (await promptSelectGame(db))).trim();
+  const isInteractive = !options.gameAddress;
+  let gameAddress = (options.gameAddress?.trim() || "").trim();
+  for (;;) {
+    if (!gameAddress) {
+      gameAddress = (await promptSelectGame(db)).trim();
+    }
+
+    const secretInfo = db.getSecretKeyInfo(gameAddress);
+    if (secretInfo) {
+      break;
+    }
+
+    const status = db.getGameStatus(gameAddress);
+    const tracked = status ? `tracked(status=${status})` : "not tracked";
+    const hint = [
+      `No secret key found in this oracle DB for ${gameAddress} (${tracked}).`,
+      "This tool can only audit games that were created by this oracle instance (/generate-hash), because it needs the secret key.",
+      "Pick one of the listed pending games, or paste an address that appears in this oracle.sqlite.",
+    ].join("\n");
+
+    if (!isInteractive) {
+      throw new Error(hint);
+    }
+
+    console.error(hint);
+    gameAddress = "";
+  }
 
   let lastJoin: LastJoinSnapshot | null = null;
   let completionStatus: "completed" | "closed" | "missing" | null = null;
   let completionObservedAtMs: number | null = null;
   let completionSlot: number | null = null;
 
-  const secretData = db.getSecretKey(gameAddress);
+  const secretData = db.getSecretKeyInfo(gameAddress);
   if (!secretData) {
     throw new Error(`No secret key found in local DB for ${gameAddress}`);
+  }
+  if (secretData.used) {
+    // Still usable for audits; mark as finalized context in the UI if we later see the on-chain account missing.
+    completionStatus = completionStatus ?? "completed";
   }
 
   const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");

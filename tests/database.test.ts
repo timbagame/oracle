@@ -47,6 +47,11 @@ describe("OracleDatabase", () => {
     db.saveSecretKey("game-lifecycle", "secret-value", "hash-value");
     db.trackGame("game-lifecycle", "raffle");
 
+    expect(db.getSecretKeyInfo("game-lifecycle")).toEqual({
+      secretKey: "secret-value",
+      randomHash: "hash-value",
+      used: false,
+    });
     expect(db.getSecretKey("game-lifecycle")).toEqual({
       secretKey: "secret-value",
       randomHash: "hash-value",
@@ -57,6 +62,11 @@ describe("OracleDatabase", () => {
 
     db.markSecretKeyUsed("game-lifecycle");
     expect(db.getSecretKey("game-lifecycle")).toBeNull();
+    expect(db.getSecretKeyInfo("game-lifecycle")).toEqual({
+      secretKey: "secret-value",
+      randomHash: "hash-value",
+      used: true,
+    });
 
     db.markGameCompleted("game-lifecycle");
 

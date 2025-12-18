@@ -37,6 +37,8 @@ const COMPLETED_GAME_PREDICATE = "status != ? AND completed_at IS NOT NULL AND c
 const SQL_QUERIES = Object.freeze({
   selectSecretKey:
     "SELECT secret_key, random_hash FROM secret_keys WHERE game_address = ? AND used = FALSE",
+  selectSecretKeyAny:
+    "SELECT secret_key, random_hash, used FROM secret_keys WHERE game_address = ?",
   selectGameType: "SELECT game_type FROM game_tracking WHERE game_address = ?",
   selectGameStatus:
     "SELECT status, game_type FROM game_tracking WHERE game_address = ?",
@@ -403,6 +405,25 @@ export class OracleDatabase {
           randomHash: result.random_hash,
         }
       : null;
+  }
+
+  public getSecretKeyInfo(gameAddress: string): (SecretKeyData & { used: boolean }) | null {
+    const result = this.queryOne<{ secret_key: string; random_hash: string; used: number | boolean }>(
+      SQL_QUERIES.selectSecretKeyAny,
+      "Failed to get secret key info",
+      null,
+      gameAddress,
+    );
+
+    if (!result) {
+      return null;
+    }
+
+    return {
+      secretKey: result.secret_key,
+      randomHash: result.random_hash,
+      used: Boolean(result.used),
+    };
   }
 
   public markSecretKeyUsed(gameAddress: string): void {
