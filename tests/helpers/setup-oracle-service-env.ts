@@ -16,6 +16,10 @@ export async function setupOracleServiceEnv(prefix: string): Promise<{
       OracleService: async () => OracleService,
       OracleDatabase: async () => OracleDatabase,
     },
+    // Explicitly set SOLANA_NETWORK to prevent CI environment overrides
+    env: {
+      SOLANA_NETWORK: "http://localhost",
+    },
   });
 
   return {
