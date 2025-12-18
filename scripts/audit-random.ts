@@ -26,6 +26,8 @@ export type PlayerMutation =
 type LastJoinSnapshot = {
   playerAddress: string;
   ticketIndex: number;
+  joinedSlot: number | null;
+  gameLastSlotAtJoin: number | null;
   observedAtMs: number;
 };
 
@@ -262,6 +264,7 @@ async function main(): Promise<void> {
   let lastJoin: LastJoinSnapshot | null = null;
   let completionStatus: "completed" | "closed" | "missing" | null = null;
   let completionObservedAtMs: number | null = null;
+  let completionSlot: number | null = null;
 
   const secretData = db.getSecretKey(gameAddress);
   if (!secretData) {
@@ -277,16 +280,10 @@ async function main(): Promise<void> {
 
   // Keep a local in-memory registry snapshot to avoid writing to SQLite from this script by default.
   let playersCache: (string | undefined)[] = [];
+  let lastKnownGameAccount: TimbaGameAccount | null = null;
   try {
     const initialPlayers = db.getGamePlayers(gameAddress);
     playersCache = initialPlayers.slice();
-    if (initialPlayers.length > 0) {
-      lastJoin = {
-        playerAddress: initialPlayers[initialPlayers.length - 1]!,
-        ticketIndex: initialPlayers.length - 1,
-        observedAtMs: Date.now(),
-      };
-    }
   } catch {
     playersCache = [];
   }
@@ -295,14 +292,18 @@ async function main(): Promise<void> {
   const registerPlayerListeners = async (): Promise<void> => {
     if (!options.listen) return;
 
-    const onEvent = (action: "joined" | "unjoined") => async (event: TimbaPlayerEvent) => {
+    const onEvent = (action: "joined" | "unjoined") =>
+      async (event: TimbaPlayerEvent, slot?: number) => {
       const extracted = extractPlayerMutation(action, event);
       if (!extracted) return;
       if (extracted.gameAddress !== gameAddress) return;
       if (extracted.mutation.action === "joined") {
+        const joinedSlot = Number.isFinite(slot) ? (slot as number) : null;
         lastJoin = {
           playerAddress: extracted.mutation.playerAddress,
           ticketIndex: extracted.mutation.ticketIndex,
+          joinedSlot,
+          gameLastSlotAtJoin: lastKnownGameAccount ? Number(lastKnownGameAccount.lastSlot) : null,
           observedAtMs: Date.now(),
         };
       }
@@ -312,12 +313,14 @@ async function main(): Promise<void> {
       }
     };
 
-    const onStatus = (status: "completed" | "closed") => async (event: unknown) => {
+    const onStatus = (status: "completed" | "closed") =>
+      async (event: unknown, slot?: number) => {
       if (!event || typeof event !== "object") return;
       const address = extractGameAddressFromEventPayload(event as Record<string, unknown>);
       if (!address || address !== gameAddress) return;
       completionStatus = status;
       completionObservedAtMs = Date.now();
+      completionSlot = Number.isFinite(slot) ? (slot as number) : completionSlot;
     };
 
     listenerIds = await Promise.all([
@@ -344,10 +347,12 @@ async function main(): Promise<void> {
   }) => {
     const { currentSlot, blockTime, gameAccount, players, winnerIndexNow, errors } = payload;
 
-    const ticketsCount = gameAccount ? Number(gameAccount.ticketsCount) : 0;
-    const lastSlot = gameAccount ? Number(gameAccount.lastSlot) : 0;
-    const createdAt = gameAccount ? Number(gameAccount.createdAt) : null;
-    const timeout = gameAccount ? Number(gameAccount.timeout) : null;
+    const displayAccount = gameAccount ?? lastKnownGameAccount;
+
+    const ticketsCount = displayAccount ? Number(displayAccount.ticketsCount) : 0;
+    const lastSlot = displayAccount ? Number(displayAccount.lastSlot) : 0;
+    const createdAt = displayAccount ? Number(displayAccount.createdAt) : null;
+    const timeout = displayAccount ? Number(displayAccount.timeout) : null;
     const expiresAt = createdAt !== null && timeout !== null ? createdAt + timeout : null;
 
     const isFinal =
@@ -363,7 +368,7 @@ async function main(): Promise<void> {
     })();
 
     const lastJoinLine = lastJoin
-      ? `${lastJoin.playerAddress} (ticketIndex=${lastJoin.ticketIndex}, at=${new Date(lastJoin.observedAtMs).toISOString()})`
+      ? `${lastJoin.playerAddress} (ticketIndex=${lastJoin.ticketIndex}, joinedSlot=${lastJoin.joinedSlot ?? "n/a"}, gameLastSlotAtJoin=${lastJoin.gameLastSlotAtJoin ?? "n/a"}, at=${new Date(lastJoin.observedAtMs).toISOString()})`
       : "n/a";
 
     const winnerText =
@@ -376,6 +381,8 @@ async function main(): Promise<void> {
     lines.push(
       `Status: ${statusLine}${
         completionObservedAtMs ? ` | CompletedAt: ${new Date(completionObservedAtMs).toISOString()}` : ""
+      }${
+        completionSlot !== null ? ` | CompletedSlot: ${completionSlot}` : ""
       }`,
     );
     lines.push(`Last joiner: ${lastJoinLine}`);
@@ -455,6 +462,9 @@ async function main(): Promise<void> {
       completionStatus = completionStatus ?? "missing";
       completionObservedAtMs = completionObservedAtMs ?? Date.now();
     }
+    if (gameAccount) {
+      lastKnownGameAccount = gameAccount;
+    }
 
     let players: string[] = [];
     if (options.refreshFromDbEachTick) {
@@ -475,10 +485,17 @@ async function main(): Promise<void> {
       if (Number.isFinite(ticketsCount) && ticketsCount !== players.length) {
         errors.push(`Player registry mismatch: on-chain ticketsCount=${ticketsCount}, DB players=${players.length}`);
       }
+    }
+
+    const entropySlot = gameAccount
+      ? Number(gameAccount.lastSlot)
+      : (lastKnownGameAccount ? Number(lastKnownGameAccount.lastSlot) : null);
+
+    if (entropySlot !== null && Number.isFinite(entropySlot) && players.length > 0) {
       try {
         winnerIndexNow = completion.calculateWinnerIndex(
           secretKeyBuffer,
-          Number(gameAccount.lastSlot),
+          entropySlot,
           players.length,
         );
       } catch (error) {
