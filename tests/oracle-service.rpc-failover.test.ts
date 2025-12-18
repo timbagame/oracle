@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
-import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
+import { setupOracleServiceEnv, type OracleServiceClass } from "./helpers/setup-oracle-service-env.ts";
 import type { ActiveEndpointChange } from "../rpc-endpoints.ts";
 
 
@@ -30,12 +30,12 @@ class TestRpcEndpointManager {
 }
 
 describe("OracleService RPC failover listener", () => {
-  let OracleDatabase: typeof import("../database.ts").OracleDatabase;
+  let OracleServiceClass: OracleServiceClass;
   let cleanup: () => void;
 
   beforeAll(async () => {
     const env = await setupOracleServiceEnv("oracle-service-rpc-failover");
-    OracleDatabase = env.OracleDatabase;
+    OracleServiceClass = env.OracleService;
     cleanup = env.cleanup;
   });
 
@@ -44,14 +44,9 @@ describe("OracleService RPC failover listener", () => {
   });
 
   it("restarts event listeners after an RPC endpoint change", async () => {
-    const db = OracleDatabase.getInstance();
-    const service = (import.meta.require("../oracle-service.ts").OracleService).createWith(db);
-
-    // We don't call registerRpcEndpointFailoverListener here because it's called in constructor
-    // But we need to replace the manager with our test one
-    const manager = new TestRpcEndpointManager();
-    (service as any).rpcEndpointManager = manager;
-    (service as any).registerRpcEndpointFailoverListener(); // This will add a SECOND listener if we are not careful, but createWith creates a FRESH service.
+    const service = OracleServiceClass.getInstance();
+    const previousEventProcessor = (service as any).eventProcessor;
+    const previousManager = (service as any).rpcEndpointManager;
 
     const eventProcessor = {
       isListening: () => true,
@@ -64,24 +59,32 @@ describe("OracleService RPC failover listener", () => {
 
     (service as any).eventProcessor = eventProcessor;
 
-    await manager.trigger({
-      endpoint: "https://rpc-b",
-      previousEndpoint: "https://rpc-a",
-      index: 1,
-      previousIndex: 0,
-    });
+    const manager = new TestRpcEndpointManager();
+    (service as any).rpcEndpointManager = manager;
+    (service as any).registerRpcEndpointFailoverListener();
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    try {
+      await manager.trigger({
+        endpoint: "https://rpc-b",
+        previousEndpoint: "https://rpc-a",
+        index: 1,
+        previousIndex: 0,
+      });
 
-    expect(stopSpy).toHaveBeenCalledTimes(1);
-    expect(startSpy).toHaveBeenCalledTimes(1);
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
-    await service.close();
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+      expect(startSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      (service as any).eventProcessor = previousEventProcessor;
+      (service as any).rpcEndpointManager = previousManager;
+    }
   });
 
   it("propagates restart failures and clears pending syncs on every retry", async () => {
-    const db = OracleDatabase.getInstance();
-    const service = (import.meta.require("../oracle-service.ts").OracleService).createWith(db);
+    const service = OracleServiceClass.getInstance();
+    const previousEventProcessor = (service as any).eventProcessor;
+    const previousManager = (service as any).rpcEndpointManager;
 
     const eventProcessor = {
       isListening: () => true,
@@ -100,21 +103,25 @@ describe("OracleService RPC failover listener", () => {
 
     const manager = new TestRpcEndpointManager();
     (service as any).rpcEndpointManager = manager;
-    (service as any).registerRpcEndpointFailoverListener();
 
-    await expect(
-      manager.trigger({
-        endpoint: "https://rpc-b",
-        previousEndpoint: "https://rpc-a",
-        index: 1,
-        previousIndex: 0,
-      }),
-    ).rejects.toThrow("boom");
+    try {
+      (service as any).registerRpcEndpointFailoverListener();
 
-    expect(stopSpy).toHaveBeenCalledTimes(3);
-    expect(startSpy).toHaveBeenCalledTimes(3);
-    expect(clearSpy).toHaveBeenCalledTimes(3);
+      await expect(
+        manager.trigger({
+          endpoint: "https://rpc-b",
+          previousEndpoint: "https://rpc-a",
+          index: 1,
+          previousIndex: 0,
+        }),
+      ).rejects.toThrow("boom");
 
-    await service.close();
+      expect(stopSpy).toHaveBeenCalledTimes(3);
+      expect(startSpy).toHaveBeenCalledTimes(3);
+      expect(clearSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      (service as any).eventProcessor = previousEventProcessor;
+      (service as any).rpcEndpointManager = previousManager;
+    }
   });
 });

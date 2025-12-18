@@ -804,11 +804,11 @@ describe("OracleService event handling", () => {
   });
 
   it("preserves finalized games when initialization events replay", async () => {
-    // Let's refactor it to use setupOracleServiceEnv but with proper isolation.
+    // Use setupOracleServiceEnv which sets the correct SOLANA_NETWORK
     const env = await setupOracleServiceEnv("oracle-service-events-finalized");
     try {
       const db = env.OracleDatabase.getInstance();
-      const service = env.OracleService.createWith(db);
+      const service = env.OracleService.getInstance();
 
       const gameKey = Keypair.generate().publicKey;
       const gameAddress = gameKey.toBase58();
