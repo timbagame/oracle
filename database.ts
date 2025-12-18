@@ -235,11 +235,24 @@ export class OracleDatabase {
 
   private initializeDatabase(): void {
     try {
+      this.configureDatabasePragmas();
       this.createTables();
       logger.success("Oracle database initialized");
     } catch (error) {
       logger.failure("Database initialization failed:", error);
       throw error;
+    }
+  }
+
+  private configureDatabasePragmas(): void {
+    // Improve concurrency between multiple Bun processes (e.g., oracle + audit scripts).
+    // WAL allows readers to proceed during writes; busy_timeout reduces SQLITE_BUSY errors.
+    try {
+      this.db.query("PRAGMA journal_mode = WAL").get();
+      this.db.query("PRAGMA synchronous = NORMAL").run();
+      this.db.query("PRAGMA busy_timeout = 5000").run();
+    } catch (error) {
+      logger.warning("Failed to apply SQLite PRAGMAs:", error);
     }
   }
 

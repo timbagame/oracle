@@ -15,6 +15,8 @@ type CliOptions = {
   once: boolean;
   listen: boolean;
   refreshFromDbEachTick: boolean;
+  writeDb: boolean;
+  withBlockTime: boolean;
 };
 
 type PlayerMutation =
@@ -29,11 +31,13 @@ type LastJoinSnapshot = {
 
 function parseArgs(argv: string[]): CliOptions {
   let gameAddress: string | undefined;
-  let intervalMs = 1000;
+  let intervalMs = 2500;
   let lookaheadSlots = 25;
   let once = false;
   let listen = true;
-  let refreshFromDbEachTick = true;
+  let refreshFromDbEachTick = false;
+  let writeDb = false;
+  let withBlockTime = false;
 
   const positionals: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
@@ -52,8 +56,17 @@ function parseArgs(argv: string[]): CliOptions {
       case "--no-listen":
         listen = false;
         continue;
+      case "--db-refresh":
+        refreshFromDbEachTick = true;
+        continue;
       case "--no-db-refresh":
         refreshFromDbEachTick = false;
+        continue;
+      case "--write-db":
+        writeDb = true;
+        continue;
+      case "--with-block-time":
+        withBlockTime = true;
         continue;
       case "--interval": {
         const value = argv[index + 1];
@@ -98,6 +111,8 @@ function parseArgs(argv: string[]): CliOptions {
     once,
     listen,
     refreshFromDbEachTick,
+    writeDb,
+    withBlockTime,
   };
 }
 
@@ -245,6 +260,22 @@ async function main(): Promise<void> {
   const connection = (oracle as unknown as { connection: Connection }).connection;
   const program = (oracle as unknown as { program: anchor.Program<Timba> }).program;
 
+  // Keep a local in-memory registry snapshot to avoid writing to SQLite from this script by default.
+  let playersCache: (string | undefined)[] = [];
+  try {
+    const initialPlayers = db.getGamePlayers(gameAddress);
+    playersCache = initialPlayers.slice();
+    if (initialPlayers.length > 0) {
+      lastJoin = {
+        playerAddress: initialPlayers[initialPlayers.length - 1]!,
+        ticketIndex: initialPlayers.length - 1,
+        observedAtMs: Date.now(),
+      };
+    }
+  } catch {
+    playersCache = [];
+  }
+
   let listenerIds: number[] = [];
   const registerPlayerListeners = async (): Promise<void> => {
     if (!options.listen) return;
@@ -259,8 +290,13 @@ async function main(): Promise<void> {
           ticketIndex: extracted.mutation.ticketIndex,
           observedAtMs: Date.now(),
         };
+        playersCache[extracted.mutation.ticketIndex] = extracted.mutation.playerAddress;
+      } else {
+        playersCache[extracted.mutation.ticketIndex] = undefined;
       }
-      db.applyPlayerMutations(gameAddress, [extracted.mutation]);
+      if (options.writeDb) {
+        db.applyPlayerMutations(gameAddress, [extracted.mutation]);
+      }
     };
 
     const onStatus = (status: "completed" | "closed") => async (event: unknown) => {
@@ -372,23 +408,34 @@ async function main(): Promise<void> {
     process.stdout.write("\n");
   };
 
-  const pollOnce = async (): Promise<void> => {
+  const pollOnce = async (): Promise<{ sawRateLimit: boolean }> => {
     const errors: string[] = [];
     let currentSlot: number | null = null;
     let blockTime: number | null = null;
     let gameAccount: TimbaGameAccount | null = null;
+    let sawRateLimit = false;
 
     try {
       currentSlot = await connection.getSlot();
-      blockTime = await connection.getBlockTime(currentSlot);
+      if (options.withBlockTime) {
+        blockTime = await connection.getBlockTime(currentSlot);
+      }
     } catch (error) {
-      errors.push(`RPC slot/time: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("429")) {
+        sawRateLimit = true;
+      }
+      errors.push(`RPC slot/time: ${message}`);
     }
 
     try {
       gameAccount = await fetchGameAccount(program, gamePda);
     } catch (error) {
-      errors.push(`Fetch game account: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("429")) {
+        sawRateLimit = true;
+      }
+      errors.push(`Fetch game account: ${message}`);
     }
 
     if (gameAccount === null) {
@@ -396,7 +443,18 @@ async function main(): Promise<void> {
       completionObservedAtMs = completionObservedAtMs ?? Date.now();
     }
 
-    const players = options.refreshFromDbEachTick ? db.getGamePlayers(gameAddress) : [];
+    let players: string[] = [];
+    if (options.refreshFromDbEachTick) {
+      try {
+        players = db.getGamePlayers(gameAddress);
+        playersCache = players.slice();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`DB players refresh: ${message}`);
+      }
+    } else {
+      players = playersCache.filter((player): player is string => typeof player === "string");
+    }
 
     let winnerIndexNow: number | null = null;
     if (gameAccount && players.length > 0) {
@@ -423,6 +481,8 @@ async function main(): Promise<void> {
       winnerIndexNow,
       errors,
     });
+
+    return { sawRateLimit };
   };
 
   try {
@@ -431,9 +491,15 @@ async function main(): Promise<void> {
     if (options.once) return;
     if (completionStatus) return;
 
+    let delayMs = options.intervalMs;
     for (;;) {
-      await new Promise((resolve) => setTimeout(resolve, options.intervalMs));
-      await pollOnce();
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const { sawRateLimit } = await pollOnce();
+      if (sawRateLimit) {
+        delayMs = Math.min(30_000, Math.max(2_000, delayMs * 2));
+      } else {
+        delayMs = options.intervalMs;
+      }
       if (completionStatus) return;
     }
   } finally {
