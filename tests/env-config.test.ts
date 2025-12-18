@@ -18,6 +18,7 @@ function resetEnv() {
     "ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS",
     "ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS",
     "ORACLE_AUTOCOMPLETE_DEBOUNCE_MS",
+    "ORACLE_DISABLE_RPC_BATCH_TRANSACTIONS",
     "DATABASE_FILE",
     "ORACLE_KEYPAIR_PATH",
   ];
@@ -86,6 +87,7 @@ describe("runtime config", () => {
     expect(config.playerEventFlushDebounceMs).toBe(100);
     expect(config.playerEventFlushMaxOperations).toBe(500);
     expect(config.autoCompleteDebounceMs).toBe(500);
+    expect(config.disableBatchTransactions).toBe(false);
 
     expect(warnSpy).toHaveBeenCalledWith(
       "⚠️  ORACLE_PORT must be <= 65535, received 70000; using 3001."
@@ -104,6 +106,16 @@ describe("runtime config", () => {
     );
 
     warnSpy.mockRestore();
+  });
+
+  it("supports disabling batch RPC requests via ORACLE_DISABLE_RPC_BATCH_TRANSACTIONS", () => {
+    process.env["SOLANA_NETWORK"] = "https://rpc";
+    process.env["ORACLE_DISABLE_RPC_BATCH_TRANSACTIONS"] = "true";
+    expect(getConfig().disableBatchTransactions).toBe(true);
+
+    resetConfigForTesting();
+    process.env["ORACLE_DISABLE_RPC_BATCH_TRANSACTIONS"] = "false";
+    expect(getConfig().disableBatchTransactions).toBe(false);
   });
 
   it("resolves relative paths and caches results until reset", () => {

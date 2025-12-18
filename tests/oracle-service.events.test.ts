@@ -239,6 +239,49 @@ describe("OracleService event handling", () => {
     expect(autoCompleteCalls[0]?.game).toBe(gameKey.toBase58());
   });
 
+  it("applies player mutation batches via db.applyPlayerMutations with correct this binding", async () => {
+    const { db, callLog } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub, {
+      playerEventFlushDebounceMs: 0,
+      autoCompleteDebounceMs: 0,
+    });
+
+    (db as any).marker = "bound";
+    (db as any).applyPlayerMutations = function (
+      game: string,
+      operations: ReadonlyArray<{ action: "joined"; playerAddress: string; ticketIndex: number } | { action: "unjoined"; ticketIndex: number }>,
+    ) {
+      if ((this as any).marker !== "bound") {
+        throw new Error("applyPlayerMutations lost this binding");
+      }
+      for (const op of operations) {
+        if (op.action === "joined") {
+          this.addPlayerToGame(game, op.playerAddress, op.ticketIndex);
+        } else {
+          this.removePlayerFromGame(game, op.ticketIndex);
+        }
+      }
+    };
+
+    const gameKey = Keypair.generate().publicKey;
+    seedSecretForGame(db, gameKey.toBase58());
+    const playerKey = Keypair.generate().publicKey;
+
+    await expect(
+      service.events.handlePlayerEvent("joined", {
+        gameKey,
+        player: playerKey,
+        ticketIndex: 1,
+        ticketsCount: 1,
+      } as any),
+    ).resolves.toBeUndefined();
+
+    expect(callLog.addPlayer).toEqual([
+      { game: gameKey.toBase58(), player: playerKey.toBase58(), index: 1 },
+    ]);
+  });
+
   it("flushes pending player batches before processing status events", async () => {
     const { db } = createDbStub();
     const programStub = createProgramStub();

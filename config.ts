@@ -6,6 +6,23 @@ export const DEFAULT_ORACLE_PORT = 3001;
 const DEFAULT_DATABASE_FILE = "oracle.sqlite";
 const DEFAULT_KEYPAIR_FILE = "admin-keypair.json";
 
+function parseBoolean(
+  value: string | undefined,
+  { defaultValue }: { defaultValue: boolean },
+): boolean {
+  if (value === undefined) {
+    return defaultValue;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+  return defaultValue;
+}
+
 function parseInteger(
   value: string | undefined,
   {
@@ -79,6 +96,7 @@ export interface OracleRuntimeConfig {
   readonly playerEventFlushDebounceMs: number;
   readonly playerEventFlushMaxOperations: number;
   readonly autoCompleteDebounceMs: number;
+  readonly disableBatchTransactions: boolean;
   readonly useEphemeralKeypair: boolean;
   readonly environment: string;
 }
@@ -125,6 +143,11 @@ function loadConfig(): OracleRuntimeConfig {
     { defaultValue: 500, key: "ORACLE_AUTOCOMPLETE_DEBOUNCE_MS" }
   );
 
+  const disableBatchTransactions = parseBoolean(
+    readEnv("ORACLE_DISABLE_RPC_BATCH_TRANSACTIONS"),
+    { defaultValue: false },
+  );
+
   const useEphemeralKeypair = shouldUseEphemeralKeypair();
 
   return {
@@ -138,6 +161,7 @@ function loadConfig(): OracleRuntimeConfig {
     playerEventFlushDebounceMs,
     playerEventFlushMaxOperations,
     autoCompleteDebounceMs,
+    disableBatchTransactions,
     useEphemeralKeypair,
     environment,
   } as const;

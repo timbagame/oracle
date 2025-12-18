@@ -539,4 +539,111 @@ describe("PlayerRegistrySync", () => {
 
     expect(players).toEqual([playerTwo.toBase58()]);
   });
+
+  it("disables batch transaction requests after provider rejects them", async () => {
+    const gamePda = Keypair.generate().publicKey;
+    const players = Array.from({ length: 7 }, () => Keypair.generate().publicKey);
+
+    const eventsPerTransaction: Array<EventData[]> = players.map((player, index) => [
+      {
+        name: "playerJoined",
+        data: {
+          gameKey: gamePda,
+          player,
+          ticketIndex: index,
+        },
+      },
+    ]);
+
+    const signatureInfos: anchor.web3.ConfirmedSignatureInfo[] = eventsPerTransaction.map(
+      (_events, index) => ({ signature: `sig-${index}` } as anchor.web3.ConfirmedSignatureInfo),
+    );
+    let signaturePageCalls = 0;
+    const batchedCalls: Array<string[]> = [];
+    const perSignatureCalls: string[] = [];
+
+    const connection = {
+      async getSignaturesForAddress() {
+        return signaturePageCalls++ === 0 ? signatureInfos : [];
+      },
+      async getTransactions(signatures: string[]) {
+        batchedCalls.push(signatures);
+        throw new Error(
+          '403 Forbidden: {"jsonrpc":"2.0","error":{"code":-32403,"message":"Batch requests are only available for paid plans. Please upgrade if you would like to gain access"}}',
+        );
+      },
+      async getTransaction(signature: string) {
+        perSignatureCalls.push(signature);
+        return {
+          meta: { logMessages: [`single:${signature}`] },
+        } as anchor.web3.TransactionResponse;
+      },
+    } as unknown as anchor.web3.Connection;
+
+    const sync = createSync(eventsPerTransaction, {
+      connection,
+      transactionConcurrency: 1,
+    });
+
+    const recovered = await sync.fetchPlayersFromChain({
+      gamePda,
+      expectedTickets: players.length,
+    });
+
+    expect(recovered).toEqual(players.map((player) => player.toBase58()));
+    expect(batchedCalls).toHaveLength(1);
+    expect(perSignatureCalls).toHaveLength(players.length);
+  });
+
+  it("skips batch transaction requests when disableBatchTransactions is enabled", async () => {
+    const gamePda = Keypair.generate().publicKey;
+    const player = Keypair.generate().publicKey;
+
+    const eventsPerTransaction: Array<EventData[]> = [
+      [
+        {
+          name: "playerJoined",
+          data: {
+            gameKey: gamePda,
+            player,
+            ticketIndex: 0,
+          },
+        },
+      ],
+    ];
+
+    let signaturePageCalls = 0;
+    let batchedCalls = 0;
+    let perSignatureCalls = 0;
+
+    const connection = {
+      async getSignaturesForAddress() {
+        return signaturePageCalls++ === 0
+          ? ([{ signature: "sig-0" }] as anchor.web3.ConfirmedSignatureInfo[])
+          : [];
+      },
+      async getTransactions() {
+        batchedCalls += 1;
+        return [];
+      },
+      async getTransaction() {
+        perSignatureCalls += 1;
+        return { meta: { logMessages: ["dummy"] } } as const;
+      },
+    } as unknown as anchor.web3.Connection;
+
+    const sync = createSync(eventsPerTransaction, {
+      connection,
+      disableBatchTransactions: true,
+    });
+
+    const recovered = await sync.fetchPlayersFromChain({
+      gamePda,
+      expectedTickets: 1,
+    });
+
+    expect(recovered).toEqual([player.toBase58()]);
+    expect(batchedCalls).toBe(0);
+    expect(perSignatureCalls).toBe(1);
+  });
 });

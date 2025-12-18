@@ -357,6 +357,7 @@ export class OracleService {
     return new PlayerRegistrySync({
       connection: this.connection,
       program: this.program,
+      disableBatchTransactions: this.config.disableBatchTransactions,
     });
   }
 

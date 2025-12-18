@@ -19,6 +19,7 @@ export interface PlayerRegistrySyncOptions {
   };
   transactionConcurrency?: number;
   transactionBatchSize?: number;
+  disableBatchTransactions?: boolean;
 }
 
 export interface FetchRegistryParams {
@@ -32,6 +33,7 @@ export class PlayerRegistrySync {
   private readonly maxBatches: number;
   private readonly transactionConcurrency: number;
   private readonly transactionBatchSize: number;
+  private disableBatchTransactions: boolean;
   private readonly createEventParser: (
     programId: PublicKey,
     coder: anchor.Coder,
@@ -47,8 +49,36 @@ export class PlayerRegistrySync {
       100,
       Math.max(5, options.transactionBatchSize ?? derivedBatchSize ?? 25),
     );
+    this.disableBatchTransactions = options.disableBatchTransactions ?? false;
     this.createEventParser = options.eventParserFactory
       ?? ((programId, coder) => new anchor.EventParser(programId, coder));
+  }
+
+  private isPaidPlanBatchError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /batch requests are only available for paid plans/i.test(message);
+  }
+
+  private async runWithConcurrency<TItem>(
+    items: readonly TItem[],
+    fn: (item: TItem) => Promise<void>,
+  ): Promise<void> {
+    const concurrency = Math.max(1, this.transactionConcurrency);
+    const active = new Set<Promise<void>>();
+
+    for (const item of items) {
+      const task = fn(item).finally(() => {
+        active.delete(task);
+      });
+      active.add(task);
+      if (active.size >= concurrency) {
+        await Promise.race(active);
+      }
+    }
+
+    if (active.size > 0) {
+      await Promise.all(active);
+    }
   }
 
   public async fetchPlayersFromChain(params: FetchRegistryParams): Promise<string[] | null> {
@@ -190,22 +220,28 @@ export class PlayerRegistrySync {
         | null = null;
 
       try {
-        transactions = await this.options.connection.getTransactions(signaturesForChunk, {
-          commitment: "confirmed",
-          maxSupportedTransactionVersion: 0,
-        });
+        if (!this.disableBatchTransactions) {
+          transactions = await this.options.connection.getTransactions(signaturesForChunk, {
+            commitment: "confirmed",
+            maxSupportedTransactionVersion: 0,
+          });
+        }
       } catch (error) {
+        if (this.isPaidPlanBatchError(error)) {
+          this.disableBatchTransactions = true;
+        }
         logger.warning(
           `Failed to batch fetch transactions (${signaturesForChunk.length}): ${error instanceof Error ? error.message : String(error)}`,
         );
       }
 
       if (!transactions || transactions.length === 0) {
-        await Promise.all(
-          chunkInfos.map(async (info, offset) => {
+        await this.runWithConcurrency(
+          chunkInfos.map((info, offset) => ({ info, offset })),
+          async ({ info, offset }) => {
             const events = await fetchSingleSignature(info);
             recordEvents(startIndex + offset, events);
-          }),
+          },
         );
         return;
       }
