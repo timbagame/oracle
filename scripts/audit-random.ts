@@ -8,7 +8,7 @@ import type { Timba } from "../idl/idlType.ts";
 import type { TimbaGameAccount, TimbaPlayerEvent } from "../types/timba.ts";
 import { ensurePublicKey, resolveNumericLike, toBase58, type PublicKeyLike } from "../solana-utils.ts";
 
-type CliOptions = {
+export type CliOptions = {
   gameAddress?: string;
   intervalMs: number;
   lookaheadSlots: number;
@@ -19,7 +19,7 @@ type CliOptions = {
   withBlockTime: boolean;
 };
 
-type PlayerMutation =
+export type PlayerMutation =
   | { action: "joined"; playerAddress: string; ticketIndex: number }
   | { action: "unjoined"; ticketIndex: number };
 
@@ -29,7 +29,7 @@ type LastJoinSnapshot = {
   observedAtMs: number;
 };
 
-function parseArgs(argv: string[]): CliOptions {
+export function parseArgs(argv: string[]): CliOptions {
   let gameAddress: string | undefined;
   let intervalMs = 2500;
   let lookaheadSlots = 25;
@@ -147,7 +147,7 @@ async function promptSelectGame(db: OracleDatabase): Promise<string> {
   }
 }
 
-function extractPlayerMutation(
+export function extractPlayerMutation(
   action: "joined" | "unjoined",
   event: TimbaPlayerEvent,
 ): { gameAddress: string; mutation: PlayerMutation } | null {
@@ -185,7 +185,7 @@ function extractPlayerMutation(
   return { gameAddress, mutation: { action: "joined", playerAddress, ticketIndex } };
 }
 
-function extractGameAddressFromEventPayload(event: Record<string, unknown>): string | null {
+export function extractGameAddressFromEventPayload(event: Record<string, unknown>): string | null {
   const candidates: unknown[] = [
     event["gameAddress"],
     event["gameKey"],
@@ -200,6 +200,21 @@ function extractGameAddressFromEventPayload(event: Record<string, unknown>): str
   }
 
   return null;
+}
+
+export function applyMutationToPlayersCache(
+  playersCache: (string | undefined)[],
+  mutation: PlayerMutation,
+): void {
+  if (mutation.action === "joined") {
+    playersCache[mutation.ticketIndex] = mutation.playerAddress;
+    return;
+  }
+  playersCache[mutation.ticketIndex] = undefined;
+}
+
+export function materializePlayersCache(playersCache: (string | undefined)[]): string[] {
+  return playersCache.filter((player): player is string => typeof player === "string");
 }
 
 async function fetchGameAccount(
@@ -290,10 +305,8 @@ async function main(): Promise<void> {
           ticketIndex: extracted.mutation.ticketIndex,
           observedAtMs: Date.now(),
         };
-        playersCache[extracted.mutation.ticketIndex] = extracted.mutation.playerAddress;
-      } else {
-        playersCache[extracted.mutation.ticketIndex] = undefined;
       }
+      applyMutationToPlayersCache(playersCache, extracted.mutation);
       if (options.writeDb) {
         db.applyPlayerMutations(gameAddress, [extracted.mutation]);
       }
@@ -453,7 +466,7 @@ async function main(): Promise<void> {
         errors.push(`DB players refresh: ${message}`);
       }
     } else {
-      players = playersCache.filter((player): player is string => typeof player === "string");
+      players = materializePlayersCache(playersCache);
     }
 
     let winnerIndexNow: number | null = null;
@@ -508,8 +521,10 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`audit-random failed: ${message}`);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`audit-random failed: ${message}`);
+    process.exit(1);
+  });
+}
