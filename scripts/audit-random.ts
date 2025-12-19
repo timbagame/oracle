@@ -219,6 +219,43 @@ export function materializePlayersCache(playersCache: (string | undefined)[]): s
   return playersCache.filter((player): player is string => typeof player === "string");
 }
 
+export type WinProbability = {
+  position: number;
+  wins: number;
+  total: number;
+  probability: number;
+  playerLabel: string;
+};
+
+export function calculateWinProbabilities(
+  winCounts: Map<number, number>,
+  totalSlots: number,
+  players: string[],
+): WinProbability[] {
+  const joinNPlayers = players.length + 1;
+  const results: WinProbability[] = [];
+
+  for (let i = 0; i < joinNPlayers; i++) {
+    const wins = winCounts.get(i) ?? 0;
+    const probability = (wins / totalSlots) * 100;
+    const playerLabel = i === players.length ? "<new join>" : (players[i] ?? "<missing>");
+    results.push({
+      position: i + 1,
+      wins,
+      total: totalSlots,
+      probability,
+      playerLabel,
+    });
+  }
+
+  return results;
+}
+
+export function formatPlayerLabel(label: string, maxLength: number = 12): string {
+  if (label.length <= maxLength) return label;
+  return `${label.slice(0, 4)}...${label.slice(-4)}`;
+}
+
 async function fetchGameAccount(
   program: anchor.Program<Timba>,
   gamePda: PublicKey,
@@ -445,19 +482,15 @@ async function main(): Promise<void> {
           );
         }
 
-        // Display probability summary
+        // Display probability summary using exported helper
+        const probabilities = calculateWinProbabilities(winCounts, options.lookaheadSlots, players);
         lines.push("");
         lines.push(`Win probability (next ${options.lookaheadSlots} slots):`);
-        for (let i = 0; i < joinNPlayers; i++) {
-          const wins = winCounts.get(i) ?? 0;
-          const probability = ((wins / options.lookaheadSlots) * 100).toFixed(1);
-          const playerLabel =
-            i === players.length
-              ? "<new join>"
-              : (players[i] ?? "<missing>");
-          const shortLabel = playerLabel.length > 12 ? `${playerLabel.slice(0, 4)}...${playerLabel.slice(-4)}` : playerLabel;
+        for (const prob of probabilities) {
+          const probabilityStr = prob.probability.toFixed(1);
+          const shortLabel = formatPlayerLabel(prob.playerLabel);
           lines.push(
-            `  pos=${String(i + 1).padStart(2, " ")} | ${probability.padStart(5, " ")}% (${String(wins).padStart(3, " ")}/${options.lookaheadSlots}) | ${shortLabel}`,
+            `  pos=${String(prob.position).padStart(2, " ")} | ${probabilityStr.padStart(5, " ")}% (${String(prob.wins).padStart(3, " ")}/${prob.total}) | ${shortLabel}`,
           );
         }
       } else {
