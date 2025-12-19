@@ -426,15 +426,38 @@ async function main(): Promise<void> {
 
       if (currentSlot !== null && players.length >= 0) {
         const joinNPlayers = players.length + 1;
+        // Track wins per player index for probability calculation
+        const winCounts: Map<number, number> = new Map();
+        for (let i = 0; i < joinNPlayers; i++) {
+          winCounts.set(i, 0);
+        }
+
         for (let offset = 1; offset <= options.lookaheadSlots; offset += 1) {
           const slot = currentSlot + offset;
           const winnerIndexIfJoin = completion.calculateWinnerIndex(secretKeyBuffer, slot, joinNPlayers);
+          winCounts.set(winnerIndexIfJoin, (winCounts.get(winnerIndexIfJoin) ?? 0) + 1);
           const winnerLabel =
             winnerIndexIfJoin === players.length
               ? "<new join>"
               : (players[winnerIndexIfJoin] ?? "<missing>");
           lines.push(
             `${String(slot).padStart(12, " ")} -> index=${String(winnerIndexIfJoin).padStart(4, " ")} pos=${String(winnerIndexIfJoin + 1).padStart(4, " ")} winner=${winnerLabel}`,
+          );
+        }
+
+        // Display probability summary
+        lines.push("");
+        lines.push(`Win probability (next ${options.lookaheadSlots} slots):`);
+        for (let i = 0; i < joinNPlayers; i++) {
+          const wins = winCounts.get(i) ?? 0;
+          const probability = ((wins / options.lookaheadSlots) * 100).toFixed(1);
+          const playerLabel =
+            i === players.length
+              ? "<new join>"
+              : (players[i] ?? "<missing>");
+          const shortLabel = playerLabel.length > 12 ? `${playerLabel.slice(0, 4)}...${playerLabel.slice(-4)}` : playerLabel;
+          lines.push(
+            `  pos=${String(i + 1).padStart(2, " ")} | ${probability.padStart(5, " ")}% (${String(wins).padStart(3, " ")}/${options.lookaheadSlots}) | ${shortLabel}`,
           );
         }
       } else {
