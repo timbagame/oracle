@@ -34,7 +34,7 @@ type LastJoinSnapshot = {
 export function parseArgs(argv: string[]): CliOptions {
   let gameAddress: string | undefined;
   let intervalMs = 2500;
-  let lookaheadSlots = 25;
+  let lookaheadSlots = 50;
   let once = false;
   let listen = true;
   let refreshFromDbEachTick = false;
