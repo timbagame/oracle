@@ -782,14 +782,19 @@ describe("GameCompletionManager.ensurePlayersInSync boundary cases", () => {
       } as TimbaGameAccount,
     };
 
+    let receivedError = "";
     const result = await (manager.registrySyncManager as any).ensurePlayersInSync(
       gameAddress,
       context,
       readiness,
       0,
-      () => ({ success: false, error: "fatal" })
+      (_addr: string, err: string) => {
+        receivedError = err;
+        return { success: false, error: "fatal" };
+      }
     );
 
     expect(result).toHaveProperty("error");
+    expect(receivedError).toBe("No ticket entries available for completion");
   });
 });
