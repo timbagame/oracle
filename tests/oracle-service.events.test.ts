@@ -829,7 +829,7 @@ describe("OracleService event handling", () => {
     }
   });
 
-  // B-003: handlePlayerEvent processes out-of-order join/unjoin
+  // handlePlayerEvent processes out-of-order join/unjoin
   it("handles race conditions between joined and unjoined events", async () => {
     const { db } = createDbStub();
     const programStub = createProgramStub();
@@ -901,7 +901,7 @@ describe("OracleService event handling", () => {
     expect(registry.count).toBe(0);
   });
 
-  // B-006: RegistrySyncScheduler handles hanging syncFn
+  // RegistrySyncScheduler handles hanging syncFn
   it("recovers from hanging registry sync operations", async () => {
     const { db } = createDbStub();
     const programStub = createProgramStub();

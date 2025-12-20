@@ -724,7 +724,7 @@ describe("GameCompletionManager registry prefetch", () => {
     }
   });
 
-  // B-007: prefetchPlayerRegistry prevents concurrent fetches
+  // prefetchPlayerRegistry prevents concurrent fetches
   it("prevents concurrent registry prefetches for the same game", async () => {
     let attempts = 0;
     let release: ((value?: unknown) => void) | undefined;
@@ -763,7 +763,7 @@ describe("GameCompletionManager registry prefetch", () => {
 });
 
 describe("GameCompletionManager.ensurePlayersInSync boundary cases", () => {
-  // B-001: ensurePlayersInSync rejects 0 expected tickets
+  // ensurePlayersInSync rejects 0 expected tickets
   it("returns a fatal error when expected tickets is zero", async () => {
     const { manager } = createManager();
     const gameAddress = "zero-tickets-game";
