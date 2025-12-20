@@ -412,7 +412,7 @@ describe("OracleService", () => {
     }
   });
 
-  // B-004: loadAdminKeypair rejects world-readable file
+  // loadAdminKeypair rejects world-readable file
   it("rejects admin keypair file with insecure permissions", () => {
     const service = OracleService.getInstance();
     // Create a temporary keypair file
@@ -441,7 +441,7 @@ describe("OracleService", () => {
     }
   });
 
-  // B-005: resolveTokenProgram invalidates cache on error/change
+  // resolveTokenProgram invalidates cache on error/change
   it("invalidates cached token program IDs on error", async () => {
     const service = OracleService.getInstance();
     const mint = Keypair.generate().publicKey;

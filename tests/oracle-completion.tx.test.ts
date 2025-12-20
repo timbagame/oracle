@@ -24,7 +24,7 @@ const mockDb = {
 };
 
 describe("GameCompletionManager.executeGameCompletion transaction handling", () => {
-  // B-002: executeGameCompletion handles tx success + timeout
+  // executeGameCompletion handles tx success + timeout
   it("handles transaction success followed by a timeout error (false negative)", async () => {
     // Setup
     const connection = {
