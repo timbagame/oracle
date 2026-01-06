@@ -13,7 +13,13 @@ const SQL_STATEMENTS = Object.freeze({
   reactivateSecretKey: "UPDATE secret_keys SET used = FALSE WHERE game_address = ?",
   deleteSecretKey: "DELETE FROM secret_keys WHERE game_address = ?",
   upsertGameTracking:
-    "INSERT OR REPLACE INTO game_tracking (game_address, status, game_type, last_checked) VALUES (?, ?, ?, ?)",
+    `INSERT INTO game_tracking (game_address, status, game_type, last_checked, auto_complete_disabled)
+     VALUES (?, ?, ?, ?, COALESCE((SELECT auto_complete_disabled FROM game_tracking WHERE game_address = ?), FALSE))
+     ON CONFLICT(game_address) DO UPDATE SET
+       status = excluded.status,
+       game_type = excluded.game_type,
+       last_checked = excluded.last_checked,
+       auto_complete_disabled = COALESCE(game_tracking.auto_complete_disabled, excluded.auto_complete_disabled, FALSE)`,
   updateGameStatus:
     "UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?",
   deleteGamePlayers: "DELETE FROM game_players WHERE game_address = ?",
@@ -30,6 +36,8 @@ const SQL_STATEMENTS = Object.freeze({
     "UPDATE game_tracking SET game_type = ?, last_checked = ? WHERE game_address = ?",
   markGameDesynced:
     "UPDATE game_tracking SET status = ?, completed_at = NULL, last_checked = ? WHERE game_address = ?",
+  setAutoCompleteDisabled:
+    "UPDATE game_tracking SET auto_complete_disabled = ?, last_checked = ? WHERE game_address = ?",
 } satisfies Record<string, string>);
 
 const COMPLETED_GAME_PREDICATE = "status != ? AND completed_at IS NOT NULL AND completed_at < ?";
@@ -43,11 +51,17 @@ const SQL_QUERIES = Object.freeze({
   selectGameStatus:
     "SELECT status, game_type FROM game_tracking WHERE game_address = ?",
   selectGameStatusWithAttempts:
-    "SELECT status, completion_attempts FROM game_tracking WHERE game_address = ?",
+    "SELECT status, completion_attempts, auto_complete_disabled FROM game_tracking WHERE game_address = ?",
+  selectGameStatusWithAutoFlag:
+    "SELECT status, auto_complete_disabled FROM game_tracking WHERE game_address = ?",
   selectPendingGames:
     "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?",
+  selectPendingGamesActive:
+    "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND auto_complete_disabled = FALSE ORDER BY last_checked ASC LIMIT ?",
   selectPendingGamesWithAttempts:
     "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND completion_attempts < ? ORDER BY last_checked ASC LIMIT ?",
+  selectPendingGamesWithAttemptsActive:
+    "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND auto_complete_disabled = FALSE AND completion_attempts < ? ORDER BY last_checked ASC LIMIT ?",
   selectSecretsStats:
     "SELECT COUNT(*) as total, SUM(CASE WHEN used = TRUE THEN 1 ELSE 0 END) as used FROM secret_keys",
   selectGamesStats: `SELECT
@@ -97,6 +111,10 @@ export type ResetCompletionAttemptsResult =
   | { success: true }
   | { success: false; reason: "not-found" | "finalized" | "unchanged" };
 
+export type ToggleAutoCompleteResult =
+  | { success: true; autoCompleteDisabled: boolean }
+  | { success: false; reason: "invalid-address" | "not-found" | "finalized" | "unchanged" };
+
 const TABLE_DEFINITIONS: ReadonlyArray<{
   sql: string;
   log: string;
@@ -123,7 +141,8 @@ const TABLE_DEFINITIONS: ReadonlyArray<{
         game_type TEXT,
         last_checked INTEGER NOT NULL,
         completion_attempts INTEGER DEFAULT 0,
-        completed_at INTEGER
+        completed_at INTEGER,
+        auto_complete_disabled BOOLEAN NOT NULL DEFAULT FALSE
       )
     `,
     log: "Ensuring game_tracking table exists",
@@ -268,6 +287,7 @@ export class OracleDatabase {
   private createTables(): void {
     this.executeSchemaSteps(TABLE_DEFINITIONS);
     this.ensureTicketSchema();
+    this.ensureTrackingSchema();
     this.ensureTrackingIndexes();
   }
 
@@ -286,6 +306,25 @@ export class OracleDatabase {
 
   private ensureTrackingIndexes(): void {
     this.executeSchemaSteps(TRACKING_INDEX_DEFINITIONS);
+  }
+
+  private ensureTrackingSchema(): void {
+    const tableInfo = this.db
+      .query("PRAGMA table_info('game_tracking')")
+      .all() as Array<{ name: string }>;
+    const hasAutoCompleteFlag = tableInfo.some(
+      (column) => column.name === "auto_complete_disabled",
+    );
+
+    if (!hasAutoCompleteFlag) {
+      this.executeSchemaSteps([
+        {
+          sql: "ALTER TABLE game_tracking ADD COLUMN auto_complete_disabled BOOLEAN NOT NULL DEFAULT FALSE",
+          log: "Adding auto_complete_disabled column to game_tracking",
+          error: "Failed to add auto_complete_disabled column to game_tracking",
+        },
+      ]);
+    }
   }
 
   private executeDbOperation<T>(
@@ -480,7 +519,70 @@ export class OracleDatabase {
       DEFAULT_STATUS,
       gameType || null,
       Date.now(),
+      gameAddress,
     );
+  }
+
+  public setAutoCompleteDisabled(
+    gameAddress: string,
+    disabled: boolean,
+  ): ToggleAutoCompleteResult {
+    const normalized = gameAddress.trim();
+    if (!normalized) {
+      return { success: false, reason: "invalid-address" };
+    }
+
+    const statusRecord = this.queryOne<{ status: string; auto_complete_disabled: number | boolean }>(
+      SQL_QUERIES.selectGameStatusWithAutoFlag,
+      "Failed to lookup game status",
+      null,
+      normalized,
+    );
+
+    if (!statusRecord) {
+      return { success: false, reason: "not-found" };
+    }
+
+    const status = statusRecord.status;
+    const currentDisabled = Boolean(statusRecord.auto_complete_disabled);
+    const isPendingState = status === DEFAULT_STATUS || status === "desynced";
+    const isFinalized = status === "completed" || status === "cancelled";
+
+    if (!isPendingState) {
+      return { success: false, reason: isFinalized ? "finalized" : "unchanged" };
+    }
+
+    if (currentDisabled === disabled) {
+      return { success: false, reason: "unchanged" };
+    }
+
+    this.runStatement(
+      SQL_STATEMENTS.setAutoCompleteDisabled,
+      "Failed to update auto-complete state",
+      disabled,
+      Date.now(),
+      normalized,
+    );
+
+    return { success: true, autoCompleteDisabled: disabled };
+  }
+
+  public isAutoCompleteDisabled(gameAddress: string): boolean | null {
+    const normalized = gameAddress.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const record = this.queryOne<{ auto_complete_disabled: number | boolean }>(
+      SQL_QUERIES.selectGameStatusWithAutoFlag,
+      "Failed to lookup auto-complete status",
+      null,
+      normalized,
+    );
+    if (!record) {
+      return null;
+    }
+    return Boolean(record.auto_complete_disabled);
   }
 
   public getGameType(gameAddress: string): string | null {
@@ -642,6 +744,25 @@ export class OracleDatabase {
 
     return this.queryAll<PendingGame>(
       SQL_QUERIES.selectPendingGames,
+      "Failed to get pending games",
+      DEFAULT_STATUS,
+      PENDING_SCAN_LIMIT
+    );
+  }
+
+  public getActivePendingGames(maxAttempts?: number): PendingGame[] {
+    if (maxAttempts !== undefined && Number.isFinite(maxAttempts)) {
+      return this.queryAll<PendingGame>(
+        SQL_QUERIES.selectPendingGamesWithAttemptsActive,
+        "Failed to get pending games",
+        DEFAULT_STATUS,
+        maxAttempts,
+        PENDING_SCAN_LIMIT
+      );
+    }
+
+    return this.queryAll<PendingGame>(
+      SQL_QUERIES.selectPendingGamesActive,
       "Failed to get pending games",
       DEFAULT_STATUS,
       PENDING_SCAN_LIMIT

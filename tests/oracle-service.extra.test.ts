@@ -702,8 +702,9 @@ describe("OracleService internals", () => {
     const runner = new ScanLoopRunner({
       db: {
         getPendingGames: () => [],
+        getActivePendingGames: () => [],
         markGameCompleted: () => {},
-        } as unknown as OracleDatabaseInstance,
+      } as unknown as OracleDatabaseInstance,
       metrics: new OracleMetricsRecorder(),
       completion: {
         resolveContextAndReadiness: async () => makeReadyResolution(),

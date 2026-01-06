@@ -145,6 +145,34 @@ describe("OracleDatabase", () => {
     });
   });
 
+  it("toggles auto-complete state and filters active pending games", () => {
+    const db = OracleDatabase.getInstance();
+    const gameAddress = "toggle-auto";
+
+    db.trackGame(gameAddress);
+    expect(db.isAutoCompleteDisabled(gameAddress)).toBe(false);
+    expect(db.getActivePendingGames().map((entry) => entry.game_address)).toContain(
+      gameAddress,
+    );
+
+    const disableResult = db.setAutoCompleteDisabled(gameAddress, true);
+    expect(disableResult).toEqual({ success: true, autoCompleteDisabled: true });
+    expect(db.isAutoCompleteDisabled(gameAddress)).toBe(true);
+    expect(
+      db.getActivePendingGames().some((entry) => entry.game_address === gameAddress),
+    ).toBe(false);
+
+    const enableResult = db.setAutoCompleteDisabled(gameAddress, false);
+    expect(enableResult).toEqual({ success: true, autoCompleteDisabled: false });
+    expect(db.isAutoCompleteDisabled(gameAddress)).toBe(false);
+    expect(db.getActivePendingGames().map((entry) => entry.game_address)).toContain(
+      gameAddress,
+    );
+
+    const notFound = db.setAutoCompleteDisabled("missing-auto", true);
+    expect(notFound).toEqual({ success: false, reason: "not-found" });
+  });
+
   it("resets completion attempts for eligible games", () => {
     const db = OracleDatabase.getInstance();
     const sqlite = (db as any).db as {

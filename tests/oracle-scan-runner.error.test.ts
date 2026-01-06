@@ -90,4 +90,65 @@ describe("ScanLoopRunner completion attempt boundary", () => {
       env.cleanup();
     }
   });
+
+  it("skips auto-completion for disabled games while keeping them tracked", async () => {
+    const env = await createTestEnv({
+      prefix: "scan-runner-disabled",
+      singletons: {
+        OracleDatabase: async () => OracleDatabase,
+      },
+    });
+
+    try {
+      const db = env.singletons.OracleDatabase.getInstance();
+      db.cleanupOldRecords(-1);
+
+      const activeGame = "enabled-game";
+      const disabledGame = "disabled-game";
+      db.trackGame(activeGame);
+      db.trackGame(disabledGame);
+      db.setAutoCompleteDisabled(disabledGame, true);
+
+      const completionCalls: string[] = [];
+      const completion: ScanLoopRunnerOptions["completion"] = {
+        resolveContextAndReadiness: async () => ({
+          status: "ready",
+          context: {} as any,
+          readiness: { ready: true, gameAccount: {} } as any,
+          prefetchScheduled: false,
+        }),
+        attemptGameCompletion: async (options) => {
+          completionCalls.push(options.gameAddress);
+          return { success: true };
+        },
+        consumeReadiness: () => undefined,
+        getBlockchainTime: async () => Date.now(),
+      };
+
+      const metrics: OracleMetrics = {
+        recordCompletion: () => {},
+        recordScanCycle: () => {},
+        recordCleanupSweep: () => {},
+      };
+
+      const runner = new ScanLoopRunner({
+        db,
+        metrics,
+        completion,
+        interGameDelayMs: 0,
+        maxCompletionAttempts: 5,
+        cleanupOldRecords: () => {},
+      });
+
+      const stats = await runner.scanAndCompleteActiveGames();
+
+      expect(stats).toEqual({ completed: 1, errors: 0, notReady: 0 });
+      expect(completionCalls).toEqual([activeGame]);
+
+      const pendingTracked = db.getPendingGames().map((entry) => entry.game_address);
+      expect(pendingTracked).toEqual(expect.arrayContaining([disabledGame, activeGame]));
+    } finally {
+      env.cleanup();
+    }
+  });
 });
