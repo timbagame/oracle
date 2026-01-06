@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import { randomBytes, createHash } from "crypto";
 import * as fs from "fs";
-import { OracleDatabase, type ResetCompletionAttemptsResult } from "./database.ts";
+import { OracleDatabase, type ResetCompletionAttemptsResult, type ToggleAutoCompleteResult } from "./database.ts";
 import { getConfig, type OracleRuntimeConfig } from "./config.ts";
 import { getOracleMetrics, type OracleMetrics } from "./metrics.ts";
 import { OracleEventProcessor, EVENT_HANDLER_CONFIG } from "./oracle-event-processor.ts";
@@ -503,11 +503,30 @@ export class OracleService {
     return { success: true };
   }
 
+  public setAutoCompleteDisabled(
+    gameAddress: string,
+    disabled: boolean,
+  ): ToggleAutoCompleteResult {
+    const result = this.db.setAutoCompleteDisabled(gameAddress, disabled);
+    if (result.success) {
+      this.readinessCache.delete(gameAddress.trim());
+    }
+    return result;
+  }
+
   private async tryAutoComplete(
     gameKey: PublicKeyLike,
     gameAddress: string,
     trigger: string,
   ): Promise<void> {
+    const autoCompleteDisabled = this.db.isAutoCompleteDisabled(gameAddress);
+    if (autoCompleteDisabled) {
+      logger.info(
+        `Skipping auto-complete for ${gameAddress} after ${trigger} (auto-complete disabled)`,
+      );
+      return;
+    }
+
     await this.attemptGameCompletion({
       gameAddress,
       gameKey,

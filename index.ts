@@ -7,6 +7,7 @@ import {
 import { getEnvironmentMode, isTestEnvironment } from "./env.ts";
 import { getConfig, DEFAULT_ORACLE_PORT } from "./config.ts";
 import type { CompletionStats } from "./oracle-service.types.ts";
+import type { ToggleAutoCompleteResult } from "./database.ts";
 import { logger } from "./logger.ts";
 import { normalizeGameType } from "./game-type.ts";
 
@@ -199,6 +200,10 @@ export interface OracleApi {
   close: () => ReturnType<OracleService["close"]>;
   cleanupOldRecords: OracleService["cleanupOldRecords"];
   requeueGame: (gameAddress: string) => RequeueGameResult;
+  setAutoCompleteDisabled: (
+    gameAddress: string,
+    disabled: boolean,
+  ) => ToggleAutoCompleteResult;
 }
 
 interface JsonBodyResult {
@@ -315,6 +320,45 @@ export function buildHandlers(oracle: OracleApi) {
         return createInternalServerErrorResponse();
       }
     },
+
+    async handleToggleAutoComplete(request?: Request): Promise<Response> {
+      try {
+        if (!request) {
+          return createErrorResponse("Request body required", 400);
+        }
+
+        const { body, parseError } = await readJsonBody(request);
+        if (parseError) {
+          return createErrorResponse(parseError, 400);
+        }
+
+        const providedAddress =
+          typeof body?.["gameAddress"] === "string" ? body["gameAddress"].trim() : "";
+        const providedDisabled = body?.["autoCompleteDisabled"];
+
+        if (!providedAddress) {
+          return createErrorResponse("gameAddress is required", 400);
+        }
+
+        if (typeof providedDisabled !== "boolean") {
+          return createErrorResponse("autoCompleteDisabled must be a boolean", 400);
+        }
+
+        const result = oracle.setAutoCompleteDisabled(providedAddress, providedDisabled);
+        if (!result.success) {
+          const outcome = mapToggleAutoCompleteFailure(providedAddress, result);
+          return createErrorResponse(outcome.message, outcome.status);
+        }
+
+        return createSuccessResponse({
+          gameAddress: providedAddress,
+          autoCompleteDisabled: result.autoCompleteDisabled,
+        });
+      } catch (error: unknown) {
+        logger.failure("Error toggling auto-complete:", error);
+        return createInternalServerErrorResponse();
+      }
+    },
   };
 }
 
@@ -336,6 +380,26 @@ function mapRequeueFailureToResponse(
       return {
         status: 409,
         message: `Game ${gameAddress} is already queued for completion`,
+      };
+  }
+}
+
+function mapToggleAutoCompleteFailure(
+  gameAddress: string,
+  result: Extract<ToggleAutoCompleteResult, { success: false }>,
+): { status: number; message: string } {
+  switch (result.reason) {
+    case "invalid-address":
+      return { status: 400, message: "gameAddress is required" };
+    case "not-found":
+      return { status: 404, message: `Game ${gameAddress} is not tracked` };
+    case "finalized":
+      return { status: 409, message: `Game ${gameAddress} is already finalized` };
+    case "unchanged":
+    default:
+      return {
+        status: 409,
+        message: `Auto-complete state for ${gameAddress} is already set to the requested value`,
       };
   }
 }
@@ -376,6 +440,13 @@ export const ROUTE_METADATA: ReadonlyArray<RouteDocumentation> = [
     handler: "handleRequeueGame",
     summary: "Reset completion attempts so a pending game can be scanned again",
     requestExample: '{ "gameAddress": "Ht8Kup..." }',
+  },
+  {
+    path: "/games/auto-complete",
+    method: "POST",
+    handler: "handleToggleAutoComplete",
+    summary: "Enable or disable automatic completion for a tracked game",
+    requestExample: '{ "gameAddress": "Ht8Kup...", "autoCompleteDisabled": true | false }',
   },
 ];
 
@@ -531,6 +602,8 @@ if (!IS_TEST_ENV) {
     close: () => realOracle.close(),
     cleanupOldRecords: (hoursOld) => realOracle.cleanupOldRecords(hoursOld),
     requeueGame: (gameAddress) => realOracle.requeueGame(gameAddress),
+    setAutoCompleteDisabled: (gameAddress, disabled) =>
+      realOracle.setAutoCompleteDisabled(gameAddress, disabled),
   };
   const handlers = buildHandlers(oracleApi);
   const fetchRouter = buildFetchRouter(handlers);

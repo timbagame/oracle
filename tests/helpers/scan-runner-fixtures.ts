@@ -29,6 +29,7 @@ export function createScanRunnerFixture(
 
   const db = {
     getPendingGames: overrides.pendingGames ?? (() => []),
+    getActivePendingGames: overrides.pendingGames ?? (() => []),
     markGameCompleted: () => {},
     touchGameCheck: (address: string) => {
       touchCalls.push(address);

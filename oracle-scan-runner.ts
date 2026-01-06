@@ -50,7 +50,7 @@ export class ScanLoopRunner {
   ): Promise<CompletionStats> {
     const { signal } = runOptions;
     const stats: CompletionStats = createEmptyCompletionStats();
-    const pendingGames = this.options.db.getPendingGames(
+    const pendingGames = this.options.db.getActivePendingGames(
       this.options.maxCompletionAttempts,
     );
     const pendingCount = pendingGames.length;

@@ -253,6 +253,83 @@ describe("index router", () => {
     }
   });
 
+  test("POST /games/auto-complete toggles auto-complete state", async () => {
+    const toggleCalls: Array<{ address: string; disabled: boolean }> = [];
+    const toggleContext = await createIndexRouterTestContext("index-router-toggle", {
+      setAutoCompleteDisabled: (address, disabled) => {
+        toggleCalls.push({ address, disabled });
+        return { success: true, autoCompleteDisabled: disabled };
+      },
+    });
+
+    try {
+      const { response, json } = await executeJsonRequest(
+        toggleContext.router,
+        "/games/auto-complete",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameAddress: "game123", autoCompleteDisabled: true }),
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect((json as any).success).toBe(true);
+      expect((json as any).autoCompleteDisabled).toBe(true);
+      expect(toggleCalls).toEqual([{ address: "game123", disabled: true }]);
+    } finally {
+      toggleContext.testEnv.cleanup();
+    }
+  });
+
+  test("POST /games/auto-complete validates payload and propagates failures", async () => {
+    const failingContext = await createIndexRouterTestContext("index-router-toggle-fail", {
+      setAutoCompleteDisabled: () => ({ success: false, reason: "not-found" }),
+    });
+
+    try {
+      const missingBody = await executeJsonRequest(
+        failingContext.router,
+        "/games/auto-complete",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      );
+      expect(missingBody.response.status).toBe(400);
+      expect((missingBody.json as any).error).toContain("gameAddress");
+
+      const badBoolean = await executeJsonRequest(
+        failingContext.router,
+        "/games/auto-complete",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameAddress: "game123", autoCompleteDisabled: "yes" }),
+        },
+      );
+      expect(badBoolean.response.status).toBe(400);
+      expect((badBoolean.json as any).error).toContain("autoCompleteDisabled");
+
+      const failure = await executeJsonRequest(
+        failingContext.router,
+        "/games/auto-complete",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameAddress: "unknown", autoCompleteDisabled: true }),
+        },
+      );
+
+      expect(failure.response.status).toBe(404);
+      expect((failure.json as any).success).toBe(false);
+      expect((failure.json as any).error).toContain("not tracked");
+    } finally {
+      failingContext.testEnv.cleanup();
+    }
+  });
+
   test("POST /games/requeue rejects whitespace-only addresses", async () => {
     const calls: string[] = [];
     const rejectingContext = await createIndexRouterTestContext("index-router-requeue-whitespace", {
