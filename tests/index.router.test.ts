@@ -543,6 +543,7 @@ describe("index router", () => {
         handleGenerateHash: async (_request: Request) => new Response("ok"),
         handleStats: async (_request: Request) => new Response("ok"),
         handleRequeueGame: async (_request: Request) => new Response("ok"),
+        handleToggleAutoComplete: async (_request: Request) => new Response("ok"),
       });
 
       const { response, json } = await executeJsonRequest(router, "/health", {
@@ -570,6 +571,7 @@ describe("index router", () => {
       >;
       delete (incompleteHandlers as any).handleStats;
       incompleteHandlers.handleRequeueGame = async () => new Response("ok");
+      incompleteHandlers.handleToggleAutoComplete = async () => new Response("ok");
       const router = context.module.buildFetchRouter(incompleteHandlers as any);
 
       const { response, json } = await executeJsonRequest(router, "/stats", {
