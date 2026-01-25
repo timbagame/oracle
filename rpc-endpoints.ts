@@ -1,6 +1,8 @@
 import * as anchor from "@coral-xyz/anchor";
 import type { Commitment } from "@solana/web3.js";
 
+import { delay } from "./delay.ts";
+
 type Connection = anchor.web3.Connection;
 
 export type RpcEndpointLogger = {
@@ -27,6 +29,8 @@ type ActiveEndpointChangeListener = (
 ) => void | Promise<void>;
 
 export const DEFAULT_MAINNET_ENDPOINT = "https://api.mainnet-beta.solana.com";
+export const RPC_RETRY_BASE_DELAY_MS = 500;
+const RPC_RETRY_MAX_DELAY_MS = 30_000;
 
 export function normalizeRpcEndpoint(endpoint: string): string {
   const trimmed = endpoint.trim();
@@ -55,6 +59,137 @@ const TRANSIENT_ERROR_TOKENS = [
   "temporarily unavailable",
   "tls",
 ];
+
+type HeadersLike = {
+  get?: (name: string) => string | null;
+  [key: string]: unknown;
+};
+
+function extractHeaders(error: unknown): HeadersLike | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+
+  const withHeaders = error as { headers?: HeadersLike; response?: { headers?: HeadersLike } };
+  if (withHeaders.headers) {
+    return withHeaders.headers;
+  }
+  return withHeaders.response?.headers;
+}
+
+function readHeader(headers: HeadersLike | undefined, name: string): string | undefined {
+  if (!headers) {
+    return undefined;
+  }
+
+  if (typeof headers.get === "function") {
+    return headers.get(name) ?? headers.get(name.toLowerCase()) ?? undefined;
+  }
+
+  const matchingKey = Object.keys(headers).find(
+    (key) => key.toLowerCase() === name.toLowerCase(),
+  );
+  if (!matchingKey) {
+    return undefined;
+  }
+
+  const value = headers[matchingKey];
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return String(value);
+  }
+  return undefined;
+}
+
+function parseRetryAfterMs(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    return Number(trimmed) * 1000;
+  }
+
+  const parsedDate = Date.parse(trimmed);
+  if (!Number.isNaN(parsedDate)) {
+    return Math.max(0, parsedDate - Date.now());
+  }
+
+  return undefined;
+}
+
+function extractStatusCode(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+
+  const withStatus = error as {
+    status?: number;
+    statusCode?: number;
+    code?: number | string;
+    response?: { status?: number };
+  };
+
+  if (typeof withStatus.status === "number") {
+    return withStatus.status;
+  }
+  if (typeof withStatus.statusCode === "number") {
+    return withStatus.statusCode;
+  }
+  if (typeof withStatus.response?.status === "number") {
+    return withStatus.response.status;
+  }
+  if (typeof withStatus.code === "number") {
+    return withStatus.code;
+  }
+  if (typeof withStatus.code === "string") {
+    const parsed = Number(withStatus.code);
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+}
+
+function isRateLimitError(error: unknown): boolean {
+  const statusCode = extractStatusCode(error);
+  if (statusCode === 429) {
+    return true;
+  }
+
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /\b429\b/.test(message);
+}
+
+function getRetryAfterMs(error: unknown): number | undefined {
+  const headers = extractHeaders(error);
+  if (!headers) {
+    return undefined;
+  }
+
+  return parseRetryAfterMs(readHeader(headers, "retry-after"));
+}
+
+function computeRetryDelayMs(attempt: number, retryAfterMs?: number): number {
+  const exponent = Math.min(attempt, 6);
+  const baseDelay = RPC_RETRY_BASE_DELAY_MS * 2 ** exponent;
+  const jitter = Math.random() * RPC_RETRY_BASE_DELAY_MS;
+  const computedDelay = Math.min(RPC_RETRY_MAX_DELAY_MS, baseDelay + jitter);
+
+  if (typeof retryAfterMs === "number") {
+    return Math.max(retryAfterMs, computedDelay);
+  }
+
+  return computedDelay;
+}
 
 function isRetryableRpcError(error: unknown): boolean {
   if (!error) {
@@ -226,16 +361,27 @@ export class RpcEndpointManager {
     endpoint: string,
     attempt: number,
     total: number,
-  ): boolean {
+  ): { shouldRetry: boolean; delayMs?: number } {
     if (!isRetryableRpcError(error) || total === 1 || attempt >= total - 1) {
       this.logger?.error?.(`RPC call ${methodName} failed on ${endpoint} without fallback:`, error);
-      return false;
+      return { shouldRetry: false };
+    }
+
+    if (isRateLimitError(error)) {
+      const retryAfterMs = getRetryAfterMs(error);
+      const delayMs = computeRetryDelayMs(attempt, retryAfterMs);
+      this.logger?.warn?.(
+        `RPC call ${methodName} rate limited on ${endpoint}; waiting ${Math.round(
+          delayMs,
+        )}ms before retrying (${attempt + 1}/${total}).`,
+      );
+      return { shouldRetry: true, delayMs };
     }
 
     this.logger?.warn?.(
       `RPC call ${methodName} failed on ${endpoint}; trying next endpoint (${attempt + 1}/${total}).`,
     );
-    return true;
+    return { shouldRetry: true };
   }
 
   private invokeWithFallback(prop: string | symbol, args: unknown[]): unknown {
@@ -259,8 +405,12 @@ export class RpcEndpointManager {
       const endpoint = this.endpoints[index] ?? this.endpoints[0]!;
       const handleFailure = (error: unknown): unknown => {
         lastError = error;
-        if (!this.shouldRetryRpcCall(error, methodName, endpoint, offset, total)) {
+        const decision = this.shouldRetryRpcCall(error, methodName, endpoint, offset, total);
+        if (!decision.shouldRetry) {
           throw error;
+        }
+        if (decision.delayMs && decision.delayMs > 0) {
+          return delay(decision.delayMs).then(() => attemptCall(offset + 1));
         }
         return attemptCall(offset + 1);
       };

@@ -3,6 +3,7 @@ import * as anchor from "@coral-xyz/anchor";
 import type { ActiveEndpointChange } from "../rpc-endpoints.ts";
 import {
   DEFAULT_MAINNET_ENDPOINT,
+  RPC_RETRY_BASE_DELAY_MS,
   RpcEndpointManager,
   parseRpcEndpointList,
 } from "../rpc-endpoints.ts";
@@ -122,5 +123,101 @@ describe("RpcEndpointManager", () => {
     const manager = new RpcEndpointManager(endpoints, { connectionFactory });
 
     expect(manager.getAllEndpoints()).toEqual(["https://rpc"]);
+  });
+
+  test("waits before rotating endpoints on rate limit", async () => {
+    const endpoints = ["https://rpc-a", "https://rpc-b"];
+    const callTimes = new Map<string, number>();
+    const warnings: string[] = [];
+    const originalRandom = Math.random;
+    Math.random = () => 0;
+
+    const connectionFactory = (endpoint: string, commitment: string) => {
+      if (endpoint === endpoints[0]) {
+        return {
+          rpcEndpoint: endpoint,
+          commitment,
+          async getBlockHeight(): Promise<number> {
+            const error = new Error("HTTP 429");
+            (error as { code?: number }).code = 429;
+            throw error;
+          },
+        } as unknown as anchor.web3.Connection;
+      }
+
+      return {
+        rpcEndpoint: endpoint,
+        commitment,
+        async getBlockHeight(): Promise<number> {
+          callTimes.set(endpoint, Date.now());
+          return 456;
+        },
+      } as unknown as anchor.web3.Connection;
+    };
+
+    const manager = new RpcEndpointManager(endpoints, {
+      connectionFactory,
+      logger: {
+        warn: (...args: unknown[]) => warnings.push(args.join(" ")),
+      },
+    });
+
+    const startedAt = Date.now();
+    const blockHeight = await manager.getConnection().getBlockHeight();
+    const secondCallTime = callTimes.get(endpoints[1]!);
+
+    Math.random = originalRandom;
+
+    expect(blockHeight).toBe(456);
+    expect(secondCallTime).toBeDefined();
+    expect((secondCallTime ?? 0) - startedAt).toBeGreaterThanOrEqual(
+      RPC_RETRY_BASE_DELAY_MS,
+    );
+    expect(warnings.some((entry) => entry.includes("rate limited"))).toBe(true);
+  });
+
+  test("honors retry-after when rate limited", async () => {
+    const endpoints = ["https://rpc-a", "https://rpc-b"];
+    const callTimes = new Map<string, number>();
+    const originalRandom = Math.random;
+    Math.random = () => 0;
+
+    const connectionFactory = (endpoint: string, commitment: string) => {
+      if (endpoint === endpoints[0]) {
+        return {
+          rpcEndpoint: endpoint,
+          commitment,
+          async getBlockHeight(): Promise<number> {
+            const error = new Error("HTTP 429");
+            (error as { code?: number }).code = 429;
+            (error as { headers?: Record<string, string> }).headers = {
+              "retry-after": "1",
+            };
+            throw error;
+          },
+        } as unknown as anchor.web3.Connection;
+      }
+
+      return {
+        rpcEndpoint: endpoint,
+        commitment,
+        async getBlockHeight(): Promise<number> {
+          callTimes.set(endpoint, Date.now());
+          return 789;
+        },
+      } as unknown as anchor.web3.Connection;
+    };
+
+    const manager = new RpcEndpointManager(endpoints, { connectionFactory });
+
+    const startedAt = Date.now();
+    const blockHeight = await manager.getConnection().getBlockHeight();
+    const secondCallTime = callTimes.get(endpoints[1]!);
+
+    Math.random = originalRandom;
+
+    expect(blockHeight).toBe(789);
+    expect(secondCallTime).toBeDefined();
+    expect((secondCallTime ?? 0) - startedAt).toBeGreaterThanOrEqual(1000);
   });
 });
