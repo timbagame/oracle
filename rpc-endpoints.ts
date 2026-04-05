@@ -15,6 +15,7 @@ export interface RpcEndpointManagerOptions {
   commitment?: Commitment;
   logger?: RpcEndpointLogger;
   connectionFactory?: (endpoint: string, commitment: Commitment) => Connection;
+  delayFn?: (ms: number) => Promise<void>;
 }
 
 export interface ActiveEndpointChange {
@@ -230,6 +231,7 @@ export class RpcEndpointManager {
   private readonly commitment: Commitment;
   private readonly logger?: RpcEndpointLogger;
   private readonly connectionFactory: (endpoint: string, commitment: Commitment) => Connection;
+  private readonly delayFn: (ms: number) => Promise<void>;
   private readonly connectionCache = new Map<number, Connection>();
   private readonly proxyConnection: Connection;
   private activeIndex = 0;
@@ -254,6 +256,7 @@ export class RpcEndpointManager {
     this.connectionFactory =
       options.connectionFactory ??
       ((endpoint: string, commitment: Commitment) => new anchor.web3.Connection(endpoint, commitment));
+    this.delayFn = options.delayFn ?? delay;
     this.proxyConnection = this.createProxyConnection();
   }
 
@@ -410,7 +413,7 @@ export class RpcEndpointManager {
           throw error;
         }
         if (decision.delayMs && decision.delayMs > 0) {
-          return delay(decision.delayMs).then(() => attemptCall(offset + 1));
+          return this.delayFn(decision.delayMs).then(() => attemptCall(offset + 1));
         }
         return attemptCall(offset + 1);
       };
