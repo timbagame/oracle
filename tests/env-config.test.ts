@@ -65,6 +65,17 @@ describe("environment helpers", () => {
     process.env["USE_FAKE_KEYPAIR"] = "true";
     expect(shouldUseEphemeralKeypair()).toBe(true);
   });
+
+  it("allows opting out of ephemeral keypairs via USE_FAKE_KEYPAIR=false", () => {
+    process.env["CI"] = "true";
+    process.env["USE_FAKE_KEYPAIR"] = "false";
+    expect(shouldUseEphemeralKeypair()).toBe(false);
+
+    resetEnv();
+    process.env["NODE_ENV"] = "test";
+    process.env["USE_FAKE_KEYPAIR"] = "false";
+    expect(shouldUseEphemeralKeypair()).toBe(false);
+  });
 });
 
 describe("runtime config", () => {

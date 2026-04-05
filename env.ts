@@ -91,7 +91,29 @@ export function isTestEnvironment(): boolean {
   return mode === "test" || mode.includes("test");
 }
 
+function readBooleanEnv(key: string): boolean | undefined {
+  const value = readEnv(key);
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const normalized = value.toLowerCase();
+  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+
+  return undefined;
+}
+
 export function shouldUseEphemeralKeypair(): boolean {
+  const explicitValue = readBooleanEnv("USE_FAKE_KEYPAIR");
+  if (explicitValue !== undefined) {
+    return explicitValue;
+  }
+
   if (isTestEnvironment()) {
     return true;
   }
@@ -100,5 +122,5 @@ export function shouldUseEphemeralKeypair(): boolean {
     return true;
   }
 
-  return process.env["USE_FAKE_KEYPAIR"] === "true";
+  return false;
 }
