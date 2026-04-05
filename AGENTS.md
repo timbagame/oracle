@@ -1,36 +1,45 @@
-# Repository Guidelines
+## Approach
 
-## Project Structure & Module Organization
-- `index.ts`: HTTP API (Bun server) exposing `/health`, `/generate-hash`, `/stats`.
-- `oracle-service.ts`: Core oracle logic (event listeners, completion flow, winner selection).
-- `database.ts`: SQLite access layer (`oracle.sqlite`) for secrets, games, players, stats.
-- `idl/`: Solana program IDL (`idl.json`) and generated types (`idlType.ts`).
-- `.env` / `env.example`: Runtime configuration.
+- Think before acting. Read existing files before writing code.
+- Be concise in output but thorough in reasoning.
+- Prefer editing over rewriting whole files.
+- Do not re-read files you have already read unless the file may have changed.
+- Test your code before declaring done.
+- No sycophantic openers or closing fluff.
+- Keep solutions simple and direct.
+- User instructions always override this file.
 
-## Build, Test, and Development Commands
-- Install: `bun install` — install dependencies.
-- Run (prod-like): `bun start` — runs `index.ts`.
-- Run (watch): `bun run --watch index.ts` — auto‑reload on change.
-- Type-check: `bunx tsc --noEmit` — validate types using the repo’s `tsconfig.json`.
-- Test: `bun test` — Bun’s test runner (add tests as described below).
+## Output
 
-## Coding Style & Naming Conventions
-- Language: TypeScript (strict mode; no `any`; fix `noUnused*` warnings).
-- Indentation: 2 spaces; keep lines concise; include semicolons.
-- Naming: files kebab/lowercase (e.g., `oracle-service.ts`, `database.ts`); types/interfaces PascalCase; functions/variables camelCase; constants UPPER_SNAKE_CASE.
-- Imports: prefer explicit file extensions (e.g., `"./oracle-service.ts"`).
+- Return code first. Explanation after, only if non-obvious.
+- No inline prose. Use comments sparingly - only where logic is unclear.
+- No boilerplate unless explicitly requested.
 
-## Testing Guidelines
-- Framework: Use Bun’s built-in runner.
-- Location: `tests/**/*.test.ts` (all tests consolidated under `tests/`).
-- Scope: unit tests for database and winner-index logic; lightweight API tests for `/health`, `/stats`, `/generate-hash`.
-- Run: `bun test`; aim to cover edge cases (empty players, max tickets, expiry logic). No coverage threshold enforced yet.
+## Code Rules
 
-## Commit & Pull Request Guidelines
-- Commits: imperative mood, concise summary, scope when helpful (e.g., "Refactor: winner selection bounds"). Group related changes only.
-- PRs: clear description, motivation, and testing notes; link issues; include commands to verify (e.g., `bunx tsc`, `bun start`, `curl /health`). Keep PRs small and reviewable.
+- Simplest working solution. No over-engineering.
+- No abstractions for single-use operations.
+- No speculative features or "you might also want..."
+- Read the file before modifying it. Never edit blind.
+- No docstrings or type annotations on code not being changed.
+- No error handling for scenarios that cannot happen.
+- Three similar lines is better than a premature abstraction.
 
-## Security & Configuration Tips
-- Required env: `SOLANA_NETWORK` (JSON array or comma-separated RPC list), optional `ORACLE_PORT`. Use `env.example` as reference.
-- Secrets: place `admin-keypair.json` at repo root; never commit `.env`, keypairs, or `*.sqlite` (already ignored).
-- Local DB: `oracle.sqlite` is for development/runtime; delete/regenerate as needed.
+## Review Rules
+
+- State the bug. Show the fix. Stop.
+- No suggestions beyond the scope of the review.
+- No compliments on the code before or after the review.
+
+## Debugging Rules
+
+- Never speculate about a bug without reading the relevant code first.
+- State what you found, where, and the fix. One pass.
+- If cause is unclear: say so. Do not guess.
+
+## Simple Formatting
+
+- No em dashes, smart quotes, or decorative Unicode symbols.
+- Plain hyphens and straight quotes only.
+- Natural language characters (accented letters, CJK, etc.) are fine when the content requires them.
+- Code output must be copy-paste safe.
