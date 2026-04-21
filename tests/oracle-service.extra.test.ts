@@ -1948,9 +1948,8 @@ describe("OracleService internals", () => {
     const winnerIndexSpy = spyOn(completion as any, "calculateWinnerIndex").mockReturnValue(0);
     const executeSpy = spyOn(completion, "executeGameCompletion").mockResolvedValue("tx-123");
     const finalizeSpy = spyOn(dbInstance, "finalizeCompletedGame").mockImplementation(() => undefined);
-    const playersSpy = spyOn(dbInstance, "getGamePlayers").mockReturnValue([
-      Keypair.generate().publicKey.toBase58(),
-    ]);
+    const playerAddress = Keypair.generate().publicKey.toBase58();
+    const playersSpy = spyOn(dbInstance, "getGamePlayers").mockReturnValue([playerAddress]);
     const attemptsSpy = spyOn(dbInstance, "incrementCompletionAttempts").mockImplementation(
       () => undefined,
     );
@@ -1961,7 +1960,7 @@ describe("OracleService internals", () => {
     try {
       const result = await service.completeGame(gameAddress);
 
-      expect(result).toEqual({ success: true, txHash: "tx-123" });
+      expect(result).toEqual({ success: true, txHash: "tx-123", winnerAddress: playerAddress });
       expect((service as any).readinessCache.has(gameAddress)).toBe(false);
       expect(playersSpy).toHaveBeenCalledWith(gameAddress);
       expect(finalizeSpy).toHaveBeenCalledWith(gameAddress);
