@@ -33,6 +33,7 @@
 - Smallest proof first, then broader checks.
 - Use the standard toolchain. Default checks: format, lint (warnings as errors), tests. Skip only with stated reason.
 - No "fixed/safe/ready" claims without fresh command output.
+- Fix every issue you encounter. There are no pre-existing bugs or errors to ignore.
 
 ## Tests
 
