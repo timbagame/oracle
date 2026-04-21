@@ -34,6 +34,12 @@
 - Ask before pushing every time, even if previously approved. No batch commit+push. No force push or hard reset without approval.
 - Merge to `main` with a single squashed commit. Commit messages in English.
 
+## Configuration
+
+- Avoid adding unnecessary environment variables. Reserve env vars for secrets and external service credentials only.
+- Prioritize sane defaults, zero-config, easy setup and maintenance. Internal URLs, ports, and feature flags should have sensible hardcoded defaults.
+- When adding a dependency, check the actual latest version via the package registry or official source. Never rely on model memory for version numbers.
+
 ## Formatting
 
 - Plain hyphens and straight quotes only. No decorative Unicode. Code output copy-paste safe.
