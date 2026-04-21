@@ -1,45 +1,39 @@
 ## Approach
 
-- Think before acting. Read existing files before writing code.
-- Be concise in output but thorough in reasoning.
-- Prefer editing over rewriting whole files.
-- Do not re-read files you have already read unless the file may have changed.
-- Test your code before declaring done.
-- No sycophantic openers or closing fluff.
-- Keep solutions simple and direct.
-- User instructions always override this file.
+- Read before editing. Test before declaring done.
+- Prefer small edits over rewrites.
+- Reproduce before fixing issues that depend on runtime behavior or external services.
+- Unproven concerns are risks, not bugs. Say so if you haven't reproduced it.
+- Simplest working solution. No over-engineering, no speculative features, no abstractions for single-use ops.
 
 ## Output
 
-- Return code first. Explanation after, only if non-obvious.
-- No inline prose. Use comments sparingly - only where logic is unclear.
-- No boilerplate unless explicitly requested.
+- Code first. Explanation and comments only when logic is non-obvious.
+- No filler, no boilerplate, no suggestions outside scope.
 
-## Code Rules
+## Code
 
-- Simplest working solution. No over-engineering.
-- No abstractions for single-use operations.
-- No speculative features or "you might also want..."
-- Read the file before modifying it. Never edit blind.
-- No docstrings or type annotations on code not being changed.
-- No error handling for scenarios that cannot happen.
-- Three similar lines is better than a premature abstraction.
+- Remove unused imports, variables, parameters, dead branches, dead functions in files you edit.
+- No error handling for impossible scenarios.
+- All imports at top of file. No imports inside functions unless strictly required to break circular dependencies.
+- Code and comments in English. User-facing strings stay in their original language.
 
-## Review Rules
+## Debugging
 
-- State the bug. Show the fix. Stop.
-- No suggestions beyond the scope of the review.
-- No compliments on the code before or after the review.
+- Read code before explaining. Prove with direct evidence: failing test, reproduced run, or concrete probe.
+- State what you found, where, and the fix. If unclear, say so.
 
-## Debugging Rules
+## Verification
 
-- Never speculate about a bug without reading the relevant code first.
-- State what you found, where, and the fix. One pass.
-- If cause is unclear: say so. Do not guess.
+- Smallest proof first, then broader checks.
+- Use the language's standard toolchain. Default checks: format, lint (warnings as errors), tests. Skip only with stated reason.
+- No "fixed/safe/ready" claims without fresh command output.
 
-## Simple Formatting
+## Git
 
-- No em dashes, smart quotes, or decorative Unicode symbols.
-- Plain hyphens and straight quotes only.
-- Natural language characters (accented letters, CJK, etc.) are fine when the content requires them.
-- Code output must be copy-paste safe.
+- Ask before pushing every time, even if previously approved. No batch commit+push. No force push or hard reset without approval.
+- Merge to `main` with a single squashed commit. Commit messages in English.
+
+## Formatting
+
+- Plain hyphens and straight quotes only. No decorative Unicode. Code output copy-paste safe.
