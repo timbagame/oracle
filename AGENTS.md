@@ -20,9 +20,8 @@
 
 ## Maintenance
 
-- Do not leave legacy code or backward compatibility shims. Remove old code when introducing replacements.
-- Do not preserve dead code, feature flags for shipped features, or abstractions that serve a single caller.
-- Ask for explicit authorization before keeping backward compatibility.
+- Remove old code when introducing replacements. No backward compatibility shims without explicit authorization.
+- Do not preserve feature flags for shipped features or abstractions that serve a single caller.
 
 ## Debugging
 
