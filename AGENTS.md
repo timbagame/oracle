@@ -29,6 +29,11 @@
 - Use the standard toolchain. Default checks: format, lint (warnings as errors), tests. Skip only with stated reason.
 - No "fixed/safe/ready" claims without fresh command output.
 
+## Tests
+
+- If the project has tests, run them before committing or declaring work complete. No exceptions.
+- A failing test is a blocking issue. Fix it before moving on.
+
 ## Git
 
 - Ask before pushing every time, even if previously approved.
