@@ -18,6 +18,12 @@
 - All imports at top of file. None inside functions unless strictly required to break circular dependencies.
 - Code and comments in English. User-facing strings stay in their original language.
 
+## Maintenance
+
+- Do not leave legacy code or backward compatibility shims. Remove old code when introducing replacements.
+- Do not preserve dead code, feature flags for shipped features, or abstractions that serve a single caller.
+- Ask for explicit authorization before keeping backward compatibility.
+
 ## Debugging
 
 - Read code before explaining. Prove with direct evidence: failing test, reproduced run, or concrete probe.
