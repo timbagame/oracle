@@ -150,7 +150,7 @@ function loadConfig(): OracleRuntimeConfig {
   );
 
   const useEphemeralKeypair = shouldUseEphemeralKeypair();
-  const botInternalUrl = readEnv("BOT_INTERNAL_URL") ?? null;
+  const botInternalUrl = readEnv("BOT_INTERNAL_URL") ?? "http://bot:3002";
 
   return {
     solanaNetwork,
