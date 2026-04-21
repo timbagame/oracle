@@ -244,7 +244,7 @@ export class GameCompletionManager {
 
       this.finalizeSuccessfulCompletion(gameAddress);
 
-      return { success: true, txHash };
+      return { success: true, txHash, winnerAddress: winnerAddress.toBase58() };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       return this.recordCompletionFailure(gameAddress, message);

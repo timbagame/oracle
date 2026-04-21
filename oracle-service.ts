@@ -545,9 +545,46 @@ export class OracleService {
   ): Promise<GameCompletionResult | null> {
     const complete = this.completeGame.bind(this);
 
-    return this.completion.attemptGameCompletion(options, {
-      completeGame: complete,
+    return this.completion.attemptGameCompletion(
+      {
+        ...options,
+        onResult: (result) => {
+          if (result.success && result.winnerAddress) {
+            this.notifyBotOfCompletion(options.gameAddress, result).catch((error) => {
+              logger.warning("Failed to notify bot of completion:", error);
+            });
+          }
+        },
+      },
+      {
+        completeGame: complete,
+      },
+    );
+  }
+
+  private async notifyBotOfCompletion(
+    gameAddress: string,
+    result: GameCompletionResult,
+  ): Promise<void> {
+    const botUrl = getConfig().botInternalUrl;
+    if (!botUrl) {
+      return;
+    }
+
+    const response = await fetch(`${botUrl}/internal/completed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        gameAddress,
+        winnerAddress: result.winnerAddress,
+        winnerTxSignature: result.txHash,
+      }),
     });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      logger.warning(`Bot notification failed (${response.status}): ${text}`);
+    }
   }
 
   private mapResetFailure(result: ResetCompletionAttemptsResult & { success: false }): RequeueGameFailureReason {

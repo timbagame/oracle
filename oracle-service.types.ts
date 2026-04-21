@@ -22,6 +22,7 @@ export interface GameCompletionResult {
   notReady?: boolean;
   error?: string;
   txHash?: string;
+  winnerAddress?: string;
 }
 
 export interface GameSecrets {

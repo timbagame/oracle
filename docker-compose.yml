@@ -6,6 +6,7 @@ services:
     environment:
       SOLANA_NETWORK: ${SOLANA_NETWORK}
       ORACLE_PORT: "3001"
+      BOT_INTERNAL_URL: ${BOT_INTERNAL_URL:-http://host.docker.internal:3002}
     volumes:
       # Read-only keypair; required for on-chain actions
       - ./admin-keypair.json:/app/admin-keypair.json:ro

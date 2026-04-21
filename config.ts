@@ -99,6 +99,7 @@ export interface OracleRuntimeConfig {
   readonly disableBatchTransactions: boolean;
   readonly useEphemeralKeypair: boolean;
   readonly environment: string;
+  readonly botInternalUrl: string | null;
 }
 
 let cachedConfig: OracleRuntimeConfig | null = null;
@@ -149,6 +150,7 @@ function loadConfig(): OracleRuntimeConfig {
   );
 
   const useEphemeralKeypair = shouldUseEphemeralKeypair();
+  const botInternalUrl = readEnv("BOT_INTERNAL_URL") ?? null;
 
   return {
     solanaNetwork,
@@ -164,6 +166,7 @@ function loadConfig(): OracleRuntimeConfig {
     disableBatchTransactions,
     useEphemeralKeypair,
     environment,
+    botInternalUrl,
   } as const;
 }
 
