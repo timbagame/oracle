@@ -23,6 +23,7 @@ export interface GameCompletionResult {
   error?: string;
   txHash?: string;
   winnerAddress?: string;
+  totalPot?: number;
 }
 
 export interface GameSecrets {

@@ -578,6 +578,7 @@ export class OracleService {
         gameAddress,
         winnerAddress: result.winnerAddress,
         winnerTxSignature: result.txHash,
+        totalPot: result.totalPot,
       }),
     });
 

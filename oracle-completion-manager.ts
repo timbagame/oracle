@@ -13,7 +13,7 @@ import {
   type ReadinessResolution,
 } from "./oracle-service.types.ts";
 import type { TimbaGameAccount } from "./types/timba.ts";
-import { coercePublicKey, ensurePublicKey, generateUnbiasedRandom } from "./solana-utils.ts";
+import { coercePublicKey, ensurePublicKey, generateUnbiasedRandom, resolveNumericLike } from "./solana-utils.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 import { GAME_SEED } from "./oracle-accounts.ts";
 import { logger } from "./logger.ts";
@@ -244,7 +244,9 @@ export class GameCompletionManager {
 
       this.finalizeSuccessfulCompletion(gameAddress);
 
-      return { success: true, txHash, winnerAddress: winnerAddress.toBase58() };
+      const totalPot = resolveNumericLike(gameAccount.totalAmount);
+
+      return { success: true, txHash, winnerAddress: winnerAddress.toBase58(), totalPot };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       return this.recordCompletionFailure(gameAddress, message);

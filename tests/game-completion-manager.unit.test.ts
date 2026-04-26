@@ -241,6 +241,52 @@ describe("GameCompletionManager.evaluateGameReadiness", () => {
   });
 });
 
+describe("GameCompletionManager.completeGame", () => {
+  it("includes the raw game total amount in successful completion results", async () => {
+    const { manager, players, secretStore } = createManager();
+    const winner = Keypair.generate().publicKey;
+    const gameAddress = "total-pot-game";
+    const gameAccount = createGameAccountStub({
+      ticketsCount: 1,
+      lastSlot: 99,
+      totalAmount: { toNumber: () => 12_345 },
+    } as Partial<TimbaGameAccount>);
+    const context: GameOnChainContext = {
+      gamePda: Keypair.generate().publicKey,
+      randomHashBuffer: Buffer.alloc(32),
+      secretData: {
+        secretKey: "11".repeat(32),
+        randomHash: "22".repeat(32),
+      },
+    };
+
+    players.set(gameAddress, [winner.toBase58()]);
+    secretStore.set(gameAddress, context.secretData!);
+
+    const resolveSpy = spyOn(manager as any, "resolveContextAndReadiness").mockResolvedValue({
+      status: "ready",
+      context,
+      readiness: { ready: true, gameAccount },
+      prefetchScheduled: false,
+    });
+    const executeSpy = spyOn(manager as any, "executeGameCompletion").mockResolvedValue("tx-ok");
+
+    try {
+      const result = await manager.completeGame(gameAddress);
+
+      expect(result).toEqual({
+        success: true,
+        txHash: "tx-ok",
+        winnerAddress: winner.toBase58(),
+        totalPot: 12_345,
+      });
+    } finally {
+      resolveSpy.mockRestore();
+      executeSpy.mockRestore();
+    }
+  });
+});
+
 describe("GameCompletionManager.calculateWinnerIndex", () => {
   let manager: ReturnType<typeof createManager>["manager"];
 
