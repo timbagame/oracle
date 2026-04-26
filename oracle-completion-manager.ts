@@ -244,7 +244,7 @@ export class GameCompletionManager {
 
       this.finalizeSuccessfulCompletion(gameAddress);
 
-      const totalPot = resolveNumericLike(gameAccount.totalAmount);
+      const totalPot = resolveNumericLike(gameAccount["totalAmount"]);
 
       return { success: true, txHash, winnerAddress: winnerAddress.toBase58(), totalPot };
     } catch (error: unknown) {
