@@ -457,6 +457,24 @@ export class OracleService {
     return this.completion.completeGame(gameAddress, cachedReadiness, sharedContext);
   }
 
+  public async completeGameNow(gameAddress: string): Promise<GameCompletionResult | null> {
+    const normalized = gameAddress.trim();
+    if (!normalized) {
+      return {
+        success: false,
+        error: "gameAddress is required",
+      };
+    }
+
+    return this.attemptGameCompletion({
+      gameAddress: normalized,
+      gameKey: this.ensureGameKey(normalized),
+      successLog: () => `🎯 Completed game ${normalized} after bot wake-up`,
+      failureLog: (_address, error) =>
+        `❌ Bot-triggered completion failed: ${error ?? "Unknown error"}`,
+    });
+  }
+
   public requeueGame(gameAddress: string): RequeueGameResult {
     const normalized = gameAddress.trim();
     if (!normalized) {

@@ -6,7 +6,7 @@ import {
 } from "./oracle-service.ts";
 import { getEnvironmentMode, isTestEnvironment } from "./env.ts";
 import { getConfig, DEFAULT_ORACLE_PORT } from "./config.ts";
-import type { CompletionStats } from "./oracle-service.types.ts";
+import type { CompletionStats, GameCompletionResult } from "./oracle-service.types.ts";
 import type { ToggleAutoCompleteResult } from "./database.ts";
 import { logger } from "./logger.ts";
 import { normalizeGameType } from "./game-type.ts";
@@ -200,6 +200,7 @@ export interface OracleApi {
   close: () => ReturnType<OracleService["close"]>;
   cleanupOldRecords: OracleService["cleanupOldRecords"];
   requeueGame: (gameAddress: string) => RequeueGameResult;
+  completeGameNow: (gameAddress: string) => Promise<GameCompletionResult | null>;
   setAutoCompleteDisabled: (
     gameAddress: string,
     disabled: boolean,
@@ -317,6 +318,54 @@ export function buildHandlers(oracle: OracleApi) {
         return createSuccessResponse({ gameAddress: providedAddress, status: "queued" });
       } catch (error: unknown) {
         logger.failure("Error requeuing game:", error);
+        return createInternalServerErrorResponse();
+      }
+    },
+
+    async handleCompleteGameNow(request?: Request): Promise<Response> {
+      try {
+        if (!request) {
+          return createErrorResponse("Request body required", 400);
+        }
+
+        const { body, parseError } = await readJsonBody(request);
+        if (parseError) {
+          return createErrorResponse(parseError, 400);
+        }
+
+        const providedValue = body ? body["gameAddress"] : undefined;
+        const providedAddress =
+          typeof providedValue === "string" ? providedValue.trim() : "";
+
+        if (!providedAddress) {
+          return createErrorResponse("gameAddress is required", 400);
+        }
+
+        const result = await oracle.completeGameNow(providedAddress);
+        if (result === null) {
+          return createSuccessResponse({ gameAddress: providedAddress, status: "in-flight" });
+        }
+
+        if (result.success) {
+          return createSuccessResponse({
+            gameAddress: providedAddress,
+            status: "completed",
+            txHash: result.txHash,
+            winnerAddress: result.winnerAddress,
+            totalPot: result.totalPot,
+          });
+        }
+
+        if (result.notReady) {
+          return createSuccessResponse({ gameAddress: providedAddress, status: "not-ready" });
+        }
+
+        return createErrorResponse(
+          result.error ?? `Game ${providedAddress} could not be completed`,
+          409,
+        );
+      } catch (error: unknown) {
+        logger.failure("Error completing game now:", error);
         return createInternalServerErrorResponse();
       }
     },
@@ -439,6 +488,13 @@ export const ROUTE_METADATA: ReadonlyArray<RouteDocumentation> = [
     method: "POST",
     handler: "handleRequeueGame",
     summary: "Reset completion attempts so a pending game can be scanned again",
+    requestExample: '{ "gameAddress": "Ht8Kup..." }',
+  },
+  {
+    path: "/games/complete-now",
+    method: "POST",
+    handler: "handleCompleteGameNow",
+    summary: "Attempt immediate completion for one tracked game",
     requestExample: '{ "gameAddress": "Ht8Kup..." }',
   },
   {
@@ -602,6 +658,7 @@ if (!IS_TEST_ENV) {
     close: () => realOracle.close(),
     cleanupOldRecords: (hoursOld) => realOracle.cleanupOldRecords(hoursOld),
     requeueGame: (gameAddress) => realOracle.requeueGame(gameAddress),
+    completeGameNow: (gameAddress) => realOracle.completeGameNow(gameAddress),
     setAutoCompleteDisabled: (gameAddress, disabled) =>
       realOracle.setAutoCompleteDisabled(gameAddress, disabled),
   };

@@ -16,6 +16,7 @@ export interface FakeOracleOptions {
   close?: OracleApi["close"];
   cleanupOldRecords?: OracleApi["cleanupOldRecords"];
   requeueGame?: OracleApi["requeueGame"];
+  completeGameNow?: OracleApi["completeGameNow"];
   setAutoCompleteDisabled?: OracleApi["setAutoCompleteDisabled"];
 }
 
@@ -45,6 +46,7 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
     close,
     cleanupOldRecords,
     requeueGame,
+    completeGameNow,
     setAutoCompleteDisabled,
   } = options;
 
@@ -62,6 +64,7 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
     close: close ?? (async () => {}),
     cleanupOldRecords: cleanupOldRecords ?? (() => ({ ...DEFAULT_CLEANUP_STATS })),
     requeueGame: requeueGame ?? (() => ({ success: true })),
+    completeGameNow: completeGameNow ?? (async () => ({ success: false, notReady: true })),
     setAutoCompleteDisabled:
       setAutoCompleteDisabled ?? (() => ({ success: true, autoCompleteDisabled: false })),
   };

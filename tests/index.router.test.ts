@@ -253,6 +253,118 @@ describe("index router", () => {
     }
   });
 
+  test("POST /games/complete-now attempts immediate completion", async () => {
+    const completeCalls: string[] = [];
+    const completeContext = await createIndexRouterTestContext("index-router-complete-now", {
+      completeGameNow: async (gameAddress) => {
+        completeCalls.push(gameAddress);
+        return {
+          success: true,
+          txHash: "tx123",
+          winnerAddress: "winner123",
+          totalPot: 42,
+        };
+      },
+    });
+
+    try {
+      const { response, json } = await executeJsonRequest(
+        completeContext.router,
+        "/games/complete-now",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameAddress: "game123" }),
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect((json as any).success).toBe(true);
+      expect((json as any).status).toBe("completed");
+      expect((json as any).txHash).toBe("tx123");
+      expect(completeCalls).toEqual(["game123"]);
+    } finally {
+      completeContext.testEnv.cleanup();
+    }
+  });
+
+  test("POST /games/complete-now reports non-terminal outcomes", async () => {
+    const notReadyContext = await createIndexRouterTestContext("index-router-complete-not-ready", {
+      completeGameNow: async () => ({ success: false, notReady: true }),
+    });
+    const inFlightContext = await createIndexRouterTestContext("index-router-complete-in-flight", {
+      completeGameNow: async () => null,
+    });
+
+    try {
+      const notReady = await executeJsonRequest(
+        notReadyContext.router,
+        "/games/complete-now",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameAddress: "game123" }),
+        },
+      );
+      expect(notReady.response.status).toBe(200);
+      expect((notReady.json as any).status).toBe("not-ready");
+
+      const inFlight = await executeJsonRequest(
+        inFlightContext.router,
+        "/games/complete-now",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameAddress: "game123" }),
+        },
+      );
+      expect(inFlight.response.status).toBe(200);
+      expect((inFlight.json as any).status).toBe("in-flight");
+    } finally {
+      notReadyContext.testEnv.cleanup();
+      inFlightContext.testEnv.cleanup();
+    }
+  });
+
+  test("POST /games/complete-now validates payload and propagates failures", async () => {
+    const calls: string[] = [];
+    const failingContext = await createIndexRouterTestContext("index-router-complete-fail", {
+      completeGameNow: async (address) => {
+        calls.push(address);
+        return { success: false, error: "missing secret" };
+      },
+    });
+
+    try {
+      const missingBody = await executeJsonRequest(
+        failingContext.router,
+        "/games/complete-now",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      );
+      expect(missingBody.response.status).toBe(400);
+      expect((missingBody.json as any).error).toContain("gameAddress");
+
+      const failure = await executeJsonRequest(
+        failingContext.router,
+        "/games/complete-now",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameAddress: "game123" }),
+        },
+      );
+      expect(failure.response.status).toBe(409);
+      expect((failure.json as any).error).toBe("missing secret");
+      expect(calls).toEqual(["game123"]);
+    } finally {
+      failingContext.testEnv.cleanup();
+    }
+  });
+
   test("POST /games/auto-complete toggles auto-complete state", async () => {
     const toggleCalls: Array<{ address: string; disabled: boolean }> = [];
     const toggleContext = await createIndexRouterTestContext("index-router-toggle", {
@@ -543,6 +655,7 @@ describe("index router", () => {
         handleGenerateHash: async (_request: Request) => new Response("ok"),
         handleStats: async (_request: Request) => new Response("ok"),
         handleRequeueGame: async (_request: Request) => new Response("ok"),
+        handleCompleteGameNow: async (_request: Request) => new Response("ok"),
         handleToggleAutoComplete: async (_request: Request) => new Response("ok"),
       });
 
