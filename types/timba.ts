@@ -1,4 +1,4 @@
-import type * as anchor from "@coral-xyz/anchor";
+import type * as anchor from "@anchor-lang/core";
 import type { PublicKeyLike } from "../solana-utils.ts";
 
 export type NumericLike =

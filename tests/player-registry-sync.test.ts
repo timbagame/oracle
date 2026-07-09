@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import type * as anchor from "@coral-xyz/anchor";
+import type * as anchor from "@anchor-lang/core";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { PlayerRegistrySync, type PlayerRegistrySyncOptions } from "../player-registry-sync.ts";
 

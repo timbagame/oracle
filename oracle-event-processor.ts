@@ -1,4 +1,4 @@
-import type * as anchor from "@coral-xyz/anchor";
+import type * as anchor from "@anchor-lang/core";
 import type { Timba } from "./idl/idlType.ts";
 import type { OracleDatabase } from "./database.ts";
 import type { TimbaEventMap, TimbaEvent, TimbaPlayerEvent, TimbaGameStatusEvent, TimbaGameInitializedEvent } from "./types/timba.ts";

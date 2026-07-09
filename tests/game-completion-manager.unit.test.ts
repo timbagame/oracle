@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, spyOn } from "bun:test";
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import { GameCompletionManager } from "../oracle-completion-manager.ts";
 import type { GameCompletionManagerOptions } from "../oracle-completion-manager.ts";
 import { Keypair, PublicKey, type BlockhashWithExpiryBlockHeight } from "@solana/web3.js";

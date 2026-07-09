@@ -1,4 +1,4 @@
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import { createHash } from "crypto";
 import { PublicKey, type BlockhashWithExpiryBlockHeight } from "@solana/web3.js";
 

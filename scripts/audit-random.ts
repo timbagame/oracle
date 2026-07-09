@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import type * as anchor from "@coral-xyz/anchor";
+import type * as anchor from "@anchor-lang/core";
 import type { Connection, PublicKey } from "@solana/web3.js";
 import { OracleDatabase } from "../database.ts";
 import { OracleService } from "../oracle-service.ts";

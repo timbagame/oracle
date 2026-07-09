@@ -1,4 +1,4 @@
-import type * as anchor from "@coral-xyz/anchor";
+import type * as anchor from "@anchor-lang/core";
 import type { PublicKey } from "@solana/web3.js";
 import type { TimbaEventMap, TimbaGameAccount } from "./types/timba.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";

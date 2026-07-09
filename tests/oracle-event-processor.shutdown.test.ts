@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import type * as anchor from "@coral-xyz/anchor";
+import type * as anchor from "@anchor-lang/core";
 import type { OracleDatabase } from "../database.ts";
 import type { Timba } from "../idl/idlType.ts";
 import {

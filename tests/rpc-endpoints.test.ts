@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import type { ActiveEndpointChange } from "../rpc-endpoints.ts";
 import {
   DEFAULT_MAINNET_ENDPOINT,

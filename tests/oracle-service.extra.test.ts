@@ -2,7 +2,7 @@ import { beforeAll, afterAll, describe, it, expect, spyOn } from "bun:test";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import { createTestEnv } from "./helpers/create-test-env.ts";
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import {
   Keypair,
   PublicKey,
