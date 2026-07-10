@@ -2,7 +2,7 @@ import * as anchor from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
 import type { Timba } from "./idl/idlType.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
-import { ensurePublicKey, resolveNumericLike } from "./solana-utils.ts";
+import { ensurePublicKey, resolveNumericLike, toBase58 } from "./solana-utils.ts";
 import { logger } from "./logger.ts";
 import {
   analyzeRegistryState,
@@ -102,7 +102,7 @@ export class PlayerRegistrySync {
 
     type RegistryEvent =
       | { kind: "join"; ticketIndex: number; playerAddress: string }
-      | { kind: "unjoin"; ticketIndex: number };
+      | { kind: "unjoin"; ticketIndex: number; movedParticipant?: string };
 
     const parseEventsFromLogs = (logs: string[] | null | undefined): RegistryEvent[] => {
       if (!logs?.length) {
@@ -143,7 +143,9 @@ export class PlayerRegistrySync {
         }
 
         if (name === "playerUnjoined") {
-          events.push({ kind: "unjoin", ticketIndex });
+          const movedValue = data["movedParticipant"] ?? data["moved_participant"];
+          const movedParticipant = movedValue ? toBase58(movedValue as PublicKeyLike) ?? undefined : undefined;
+          events.push({ kind: "unjoin", ticketIndex, movedParticipant });
           continue;
         }
 
@@ -188,6 +190,9 @@ export class PlayerRegistrySync {
       for (const event of events) {
         if (event.kind === "unjoin") {
           ticketAssignments.delete(event.ticketIndex);
+          if (event.movedParticipant) {
+            ticketAssignments.set(event.ticketIndex, event.movedParticipant);
+          }
           sawUnjoinEvent = true;
           continue;
         }

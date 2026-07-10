@@ -708,10 +708,12 @@ describe("OracleService event handling", () => {
     const service = createService(db, programStub);
 
     const gameKey = Keypair.generate().publicKey.toBase58();
+    const movedParticipant = Keypair.generate().publicKey;
     const event = {
       gameKey,
       player: { toString: () => "player-as-string" },
       ticket_index: { toNumber: () => 5 },
+      moved_participant: movedParticipant,
     };
 
     const data = service.events.extractEventData(event);
@@ -719,6 +721,7 @@ describe("OracleService event handling", () => {
     expect(data.gameAddress).toBe(gameKey);
     expect(data.playerAddress).toBe("player-as-string");
     expect(data.ticketIndex).toBe(5);
+    expect(data.movedParticipant).toBe(movedParticipant.toBase58());
   });
 
   it("extracts event data from wrapped public key helpers", () => {

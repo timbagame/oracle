@@ -20,6 +20,8 @@ export interface TimbaPlayerEvent extends TimbaEventPayload {
   playerAddress?: PublicKeyLike;
   ticketIndex?: NumericLike;
   ticket_index?: NumericLike;
+  movedParticipant?: PublicKeyLike | null;
+  moved_participant?: PublicKeyLike | null;
 }
 
 export interface TimbaGameInitializedEvent extends TimbaEventPayload {

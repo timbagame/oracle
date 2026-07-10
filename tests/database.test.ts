@@ -336,6 +336,20 @@ describe("OracleDatabase", () => {
     expect(db.getGamePlayers(game)).toEqual(["player-d", "player-c"]);
   });
 
+  it("atomically applies the participant moved by swap removal", () => {
+    const db = OracleDatabase.getInstance();
+    const game = "game-swap-remove";
+
+    db.applyPlayerMutations(game, [
+      { action: "joined", playerAddress: "player-a", ticketIndex: 0 },
+      { action: "joined", playerAddress: "player-b", ticketIndex: 1 },
+      { action: "joined", playerAddress: "player-c", ticketIndex: 2 },
+      { action: "unjoined", ticketIndex: 1, movedParticipant: "player-c" },
+    ]);
+
+    expect(db.getGamePlayers(game)).toEqual(["player-a", "player-c"]);
+  });
+
   it("reports connection info and reopens after close", () => {
     const db = OracleDatabase.getInstance();
 

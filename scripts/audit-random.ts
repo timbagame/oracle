@@ -21,7 +21,7 @@ export type CliOptions = {
 
 export type PlayerMutation =
   | { action: "joined"; playerAddress: string; ticketIndex: number }
-  | { action: "unjoined"; ticketIndex: number };
+  | { action: "unjoined"; ticketIndex: number; movedParticipant?: string };
 
 type LastJoinSnapshot = {
   playerAddress: string;
@@ -171,7 +171,12 @@ export function extractPlayerMutation(
   }
 
   if (action === "unjoined") {
-    return { gameAddress, mutation: { action: "unjoined", ticketIndex } };
+    const movedValue = event.movedParticipant ?? event.moved_participant;
+    const movedParticipant = movedValue ? toBase58(movedValue) : undefined;
+    return {
+      gameAddress,
+      mutation: { action: "unjoined", ticketIndex, movedParticipant },
+    };
   }
 
   const legacyPlayerKey = (event as Record<string, unknown>)["player_address"];
@@ -212,7 +217,7 @@ export function applyMutationToPlayersCache(
     playersCache[mutation.ticketIndex] = mutation.playerAddress;
     return;
   }
-  playersCache[mutation.ticketIndex] = undefined;
+  playersCache[mutation.ticketIndex] = mutation.movedParticipant;
 }
 
 export function materializePlayersCache(playersCache: (string | undefined)[]): string[] {

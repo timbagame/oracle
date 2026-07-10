@@ -32,6 +32,8 @@ const SQL_STATEMENTS = Object.freeze({
     "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)",
   deleteGamePlayerByTicket:
     "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?",
+  deleteGamePlayerByAddress:
+    "DELETE FROM game_players WHERE game_address = ? AND player_address = ?",
   updateGameMetadata:
     "UPDATE game_tracking SET game_type = ?, last_checked = ? WHERE game_address = ?",
   markGameDesynced:
@@ -940,11 +942,20 @@ export class OracleDatabase {
     );
   }
 
+  public removePlayerAddressFromGame(gameAddress: string, playerAddress: string): void {
+    this.runStatement(
+      SQL_STATEMENTS.deleteGamePlayerByAddress,
+      "Failed to remove moved player from its previous index",
+      gameAddress,
+      playerAddress,
+    );
+  }
+
   public applyPlayerMutations(
     gameAddress: string,
     operations: ReadonlyArray<
       | { action: "joined"; playerAddress: string; ticketIndex: number }
-      | { action: "unjoined"; ticketIndex: number }
+      | { action: "unjoined"; ticketIndex: number; movedParticipant?: string }
     >,
   ): void {
     if (operations.length === 0) {
@@ -973,6 +984,22 @@ export class OracleDatabase {
             gameAddress,
             op.ticketIndex,
           );
+          if (op.movedParticipant) {
+            this.runStatement(
+              SQL_STATEMENTS.deleteGamePlayerByAddress,
+              "Failed to remove moved player from its previous index",
+              gameAddress,
+              op.movedParticipant,
+            );
+            this.runStatement(
+              SQL_STATEMENTS.upsertGamePlayer,
+              "Failed to move player after unjoin",
+              gameAddress,
+              op.movedParticipant,
+              op.ticketIndex,
+              baseTimestamp + index,
+            );
+          }
         });
       },
       `Failed to apply player mutations for game ${gameAddress}`,

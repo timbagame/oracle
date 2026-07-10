@@ -8,9 +8,9 @@ export type Timba = {
   "address": "32Jr4JnXWvqq9GqPQynkooHsszaucUUvZfNLh2hdX2L5",
   "metadata": {
     "name": "timba",
-    "version": "0.1.3",
+    "version": "0.2.0",
     "spec": "0.1.0",
-    "description": "Created with Anchor"
+    "description": "Timba on-chain game contracts built with Anchor"
   },
   "instructions": [
     {
@@ -192,12 +192,12 @@ export type Timba = {
               },
               {
                 "kind": "account",
-                "path": "game_token_ctx.token_program",
+                "path": "gameTokenCtx.tokenProgram",
                 "account": "gameTokenContext"
               },
               {
                 "kind": "account",
-                "path": "game_token_ctx.token_mint",
+                "path": "gameTokenCtx.tokenMint",
                 "account": "gameTokenContext"
               }
             ],
@@ -612,12 +612,12 @@ export type Timba = {
               },
               {
                 "kind": "account",
-                "path": "game_token_ctx.token_program",
+                "path": "gameTokenCtx.tokenProgram",
                 "account": "gameTokenContext"
               },
               {
                 "kind": "account",
-                "path": "game_token_ctx.token_mint",
+                "path": "gameTokenCtx.tokenMint",
                 "account": "gameTokenContext"
               }
             ],
@@ -887,12 +887,12 @@ export type Timba = {
               },
               {
                 "kind": "account",
-                "path": "game_token_ctx.token_program",
+                "path": "gameTokenCtx.tokenProgram",
                 "account": "gameTokenContext"
               },
               {
                 "kind": "account",
-                "path": "game_token_ctx.token_mint",
+                "path": "gameTokenCtx.tokenMint",
                 "account": "gameTokenContext"
               }
             ],
@@ -999,6 +999,17 @@ export type Timba = {
           "name": "oracleOperator",
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "upgradeAuthority",
+          "signer": true
+        },
+        {
+          "name": "program",
+          "address": "32Jr4JnXWvqq9GqPQynkooHsszaucUUvZfNLh2hdX2L5"
+        },
+        {
+          "name": "programData"
         },
         {
           "name": "systemProgram",
@@ -1356,12 +1367,12 @@ export type Timba = {
               },
               {
                 "kind": "account",
-                "path": "game_token_ctx.token_program",
+                "path": "gameTokenCtx.tokenProgram",
                 "account": "gameTokenContext"
               },
               {
                 "kind": "account",
-                "path": "game_token_ctx.token_mint",
+                "path": "gameTokenCtx.tokenMint",
                 "account": "gameTokenContext"
               }
             ],
@@ -1611,12 +1622,12 @@ export type Timba = {
               },
               {
                 "kind": "account",
-                "path": "game_token_ctx.token_program",
+                "path": "gameTokenCtx.tokenProgram",
                 "account": "gameTokenContext"
               },
               {
                 "kind": "account",
-                "path": "game_token_ctx.token_mint",
+                "path": "gameTokenCtx.tokenMint",
                 "account": "gameTokenContext"
               }
             ],
@@ -1976,12 +1987,12 @@ export type Timba = {
               },
               {
                 "kind": "account",
-                "path": "game_token_ctx.token_program",
+                "path": "gameTokenCtx.tokenProgram",
                 "account": "gameTokenContext"
               },
               {
                 "kind": "account",
-                "path": "game_token_ctx.token_mint",
+                "path": "gameTokenCtx.tokenMint",
                 "account": "gameTokenContext"
               }
             ],
@@ -2306,8 +2317,8 @@ export type Timba = {
     },
     {
       "code": 7204,
-      "name": "winnerPubkeyHashMismatch",
-      "msg": "Winner hash mismatch"
+      "name": "winnerPubkeyMismatch",
+      "msg": "Winner mismatch"
     },
     {
       "code": 7205,
@@ -2318,6 +2329,21 @@ export type Timba = {
       "code": 7206,
       "name": "randomnessGenerationFailed",
       "msg": "Randomness failed"
+    },
+    {
+      "code": 7207,
+      "name": "participantNotFound",
+      "msg": "Participant not found"
+    },
+    {
+      "code": 7208,
+      "name": "participantIndexOutOfRange",
+      "msg": "Participant index out of range"
+    },
+    {
+      "code": 7209,
+      "name": "arithmeticOverflow",
+      "msg": "Arithmetic overflow"
     },
     {
       "code": 7300,
@@ -2373,6 +2399,11 @@ export type Timba = {
       "code": 7404,
       "name": "tokenFeesOutstanding",
       "msg": "Token fees outstanding"
+    },
+    {
+      "code": 7405,
+      "name": "unsupportedTokenExtension",
+      "msg": "Token extension unsupported"
     }
   ],
   "types": [
@@ -2470,12 +2501,12 @@ export type Timba = {
             "type": "u64"
           },
           {
-            "name": "participantHashes",
+            "name": "participants",
             "docs": [
-              "Exact participant hash list (first 8 bytes of SHA256(\"timba:part:v1\" || game_key || pubkey))"
+              "Exact participant public keys in canonical current-vector order"
             ],
             "type": {
-              "vec": "u64"
+              "vec": "pubkey"
             }
           }
         ]
@@ -2783,7 +2814,7 @@ export type Timba = {
           {
             "name": "feePercentage",
             "docs": [
-              "Percentage of game amount taken as fee (0-100)"
+              "Percentage of game amount taken as fee (0-10)"
             ],
             "type": "u8"
           },
@@ -2829,7 +2860,7 @@ export type Timba = {
           {
             "name": "feePercentage",
             "docs": [
-              "Fee percentage taken from game winnings (0-100)"
+              "Fee percentage taken from game winnings (0-10)"
             ],
             "type": "u8"
           },
@@ -2882,7 +2913,7 @@ export type Timba = {
           {
             "name": "feePercentage",
             "docs": [
-              "Fee percentage taken from game winnings (0-100)"
+              "Fee percentage taken from game winnings (0-10)"
             ],
             "type": "u8"
           },
@@ -3079,6 +3110,15 @@ export type Timba = {
               "Ticket index associated with this unjoin operation"
             ],
             "type": "u32"
+          },
+          {
+            "name": "movedParticipant",
+            "docs": [
+              "Participant moved into `ticket_index` by O(1) removal, if any"
+            ],
+            "type": {
+              "option": "pubkey"
+            }
           },
           {
             "name": "lastSlot",
