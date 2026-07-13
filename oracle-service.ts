@@ -2,10 +2,17 @@ import * as anchor from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
 import { randomBytes, createHash } from "crypto";
 import * as fs from "fs";
-import { OracleDatabase, type ResetCompletionAttemptsResult, type ToggleAutoCompleteResult } from "./database.ts";
+import {
+  OracleDatabase,
+  type ResetCompletionAttemptsResult,
+  type ToggleAutoCompleteResult,
+} from "./database.ts";
 import { getConfig, type OracleRuntimeConfig } from "./config.ts";
 import { getOracleMetrics, type OracleMetrics } from "./metrics.ts";
-import { OracleEventProcessor, EVENT_HANDLER_CONFIG } from "./oracle-event-processor.ts";
+import {
+  OracleEventProcessor,
+  EVENT_HANDLER_CONFIG,
+} from "./oracle-event-processor.ts";
 import { GameCompletionManager } from "./oracle-completion-manager.ts";
 import { ScanLoopRunner } from "./oracle-scan-runner.ts";
 import { logger } from "./logger.ts";
@@ -23,8 +30,12 @@ import { coercePublicKey, confirmTransaction } from "./solana-utils.ts";
 import { PlayerRegistrySync } from "./player-registry-sync.ts";
 import type { Timba } from "./idl/idlType.ts";
 import idl from "./idl/idl.json" with { type: "json" };
+import { ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
-export { deriveGameAccounts, type DerivedGameAccounts } from "./oracle-accounts.ts";
+export {
+  deriveGameAccounts,
+  type DerivedGameAccounts,
+} from "./oracle-accounts.ts";
 export {
   createEmptyCompletionStats,
   type CompletionStats,
@@ -34,7 +45,8 @@ export {
 
 const SECRET_KEY_LENGTH = 32;
 const MAX_COMPLETION_ATTEMPTS = 5;
-export const EVENT_LISTENER_FAILURE_MESSAGE = "❌ Failed to start event listeners:";
+export const EVENT_LISTENER_FAILURE_MESSAGE =
+  "❌ Failed to start event listeners:";
 const NO_SECRET_KEY_MESSAGE = "No secret key found";
 
 export type RequeueGameFailureReason =
@@ -45,8 +57,7 @@ export type RequeueGameFailureReason =
   | "unchanged";
 
 export type RequeueGameResult =
-  | { success: true }
-  | { success: false; reason: RequeueGameFailureReason };
+  { success: true } | { success: false; reason: RequeueGameFailureReason };
 
 export class OracleService {
   private static instance: OracleService;
@@ -138,7 +149,11 @@ export class OracleService {
       getProgram: () => this.program,
       db: this.db,
       tryAutoComplete: (gameKey, gameAddress, trigger) =>
-        this.tryAutoComplete(gameKey ?? this.ensureGameKey(gameAddress), gameAddress, trigger),
+        this.tryAutoComplete(
+          gameKey ?? this.ensureGameKey(gameAddress),
+          gameAddress,
+          trigger,
+        ),
       config: EVENT_HANDLER_CONFIG,
       clearTokenProgramCache: () => this.completion.clearTokenProgramCache(),
       syncPlayerRegistry: (options) => this.syncPlayerRegistry(options),
@@ -158,7 +173,8 @@ export class OracleService {
         resolveContextAndReadiness: (address, options) =>
           this.completion.resolveContextAndReadiness(address, options),
         attemptGameCompletion: (options) => this.attemptGameCompletion(options),
-        consumeReadiness: (address) => this.completion.consumeReadiness(address),
+        consumeReadiness: (address) =>
+          this.completion.consumeReadiness(address),
         getBlockchainTime: () => this.completion.getBlockchainTime(),
       },
       interGameDelayMs: this.interGameDelayMs,
@@ -168,20 +184,24 @@ export class OracleService {
   }
 
   private registerRpcEndpointFailoverListener(): void {
-    this.rpcEndpointManager.onActiveEndpointChange(async ({ endpoint, previousEndpoint }) => {
-      if (!this.eventProcessor.isListening()) {
-        return;
-      }
+    this.rpcEndpointManager.onActiveEndpointChange(
+      async ({ endpoint, previousEndpoint }) => {
+        if (!this.eventProcessor.isListening()) {
+          return;
+        }
 
-      logger.warning(
-        `RPC endpoint changed from ${previousEndpoint} to ${endpoint}; restarting event listeners.`,
-      );
+        logger.warning(
+          `RPC endpoint changed from ${previousEndpoint} to ${endpoint}; restarting event listeners.`,
+        );
 
-      await this.restartEventListenersWithRetries(endpoint);
-    });
+        await this.restartEventListenersWithRetries(endpoint);
+      },
+    );
   }
 
-  private async restartEventListenersWithRetries(endpoint: string): Promise<void> {
+  private async restartEventListenersWithRetries(
+    endpoint: string,
+  ): Promise<void> {
     const maxAttempts = 3;
     const baseDelayMs = 250;
     let lastError: unknown;
@@ -224,12 +244,15 @@ export class OracleService {
       await this.eventProcessor.stopListening();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      logger.warn(`Failed to stop event listeners before RPC restart: ${message}`);
+      logger.warn(
+        `Failed to stop event listeners before RPC restart: ${message}`,
+      );
     }
   }
 
   private loadAdminKeypair(): anchor.web3.Keypair {
-    const { adminKeypairPath, adminKeypairSource, useEphemeralKeypair } = this.config;
+    const { adminKeypairPath, adminKeypairSource, useEphemeralKeypair } =
+      this.config;
     const { keypair, error } = this.readAdminKeypairFromFile(adminKeypairPath);
 
     if (keypair) {
@@ -250,14 +273,17 @@ export class OracleService {
     throw new Error(details);
   }
 
-  private readAdminKeypairFromFile(
-    path: string,
-  ): { keypair?: anchor.web3.Keypair; error?: unknown } {
+  private readAdminKeypairFromFile(path: string): {
+    keypair?: anchor.web3.Keypair;
+    error?: unknown;
+  } {
     try {
       const stats = fs.statSync(path);
       const mode = stats.mode & 0o777;
       if ((mode & 0o077) !== 0) {
-        throw new Error(`Admin keypair file ${path} has insecure permissions (${mode.toString(8)}). It must be accessible only by the owner (e.g. 600).`);
+        throw new Error(
+          `Admin keypair file ${path} has insecure permissions (${mode.toString(8)}). It must be accessible only by the owner (e.g. 600).`,
+        );
       }
 
       const content = fs.readFileSync(path, "utf-8");
@@ -268,15 +294,21 @@ export class OracleService {
 
       const numbers = parsed.map((value) => {
         if (typeof value !== "number" || !Number.isInteger(value)) {
-          throw new Error("Admin keypair file must contain integer byte values");
+          throw new Error(
+            "Admin keypair file must contain integer byte values",
+          );
         }
         if (value < 0 || value > 255) {
-          throw new Error("Admin keypair file contains byte values outside the 0-255 range");
+          throw new Error(
+            "Admin keypair file contains byte values outside the 0-255 range",
+          );
         }
         return value;
       });
 
-      const keypair = anchor.web3.Keypair.fromSecretKey(new Uint8Array(numbers));
+      const keypair = anchor.web3.Keypair.fromSecretKey(
+        new Uint8Array(numbers),
+      );
       return { keypair };
     } catch (error: unknown) {
       return { error };
@@ -288,12 +320,14 @@ export class OracleService {
       return false;
     }
 
-    const code = "code" in error ? (error as { code?: string }).code : undefined;
+    const code =
+      "code" in error ? (error as { code?: string }).code : undefined;
     if (code === "ENOENT") {
       return true;
     }
 
-    const message = "message" in error ? (error as { message?: unknown }).message : undefined;
+    const message =
+      "message" in error ? (error as { message?: unknown }).message : undefined;
     return typeof message === "string" && message.includes("ENOENT");
   }
 
@@ -302,12 +336,14 @@ export class OracleService {
       return false;
     }
 
-    const code = "code" in error ? (error as { code?: string }).code : undefined;
+    const code =
+      "code" in error ? (error as { code?: string }).code : undefined;
     if (code === "EACCES" || code === "EPERM") {
       return true;
     }
 
-    const message = "message" in error ? (error as { message?: unknown }).message : undefined;
+    const message =
+      "message" in error ? (error as { message?: unknown }).message : undefined;
     return typeof message === "string" && /permission denied/i.test(message);
   }
 
@@ -325,7 +361,10 @@ export class OracleService {
     return `${source} could not be loaded: ${message}`;
   }
 
-  private createEphemeralAdminKeypair(source: string, reason?: string): anchor.web3.Keypair {
+  private createEphemeralAdminKeypair(
+    source: string,
+    reason?: string,
+  ): anchor.web3.Keypair {
     const keypair = anchor.web3.Keypair.generate();
     logger.warning(
       `Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${reason ?? `${source} was not found.`}`,
@@ -344,11 +383,9 @@ export class OracleService {
 
   private initProgram(): anchor.Program<Timba> {
     const adminWallet = new anchor.Wallet(this.adminKeypair);
-    const provider = new anchor.AnchorProvider(
-      this.connection,
-      adminWallet,
-      { commitment: "confirmed" },
-    );
+    const provider = new anchor.AnchorProvider(this.connection, adminWallet, {
+      commitment: "confirmed",
+    });
     anchor.setProvider(provider);
     return new anchor.Program(idl as Timba, provider) as anchor.Program<Timba>;
   }
@@ -435,7 +472,11 @@ export class OracleService {
     const gamePda = this.completion.getGamePDA(randomHash);
     const gameAddress = gamePda.toBase58();
 
-    this.db.saveSecretKey(gameAddress, secretKey.toString("hex"), randomHash.toString("hex"));
+    this.db.saveSecretKey(
+      gameAddress,
+      secretKey.toString("hex"),
+      randomHash.toString("hex"),
+    );
     try {
       this.db.trackGame(gameAddress, options.gameType);
     } catch (error) {
@@ -449,15 +490,128 @@ export class OracleService {
     };
   }
 
+  public signGameTransaction(txBase64: string): string {
+    if (!txBase64 || txBase64.length > 4_000) {
+      throw new Error("Invalid transaction payload");
+    }
+
+    const transaction = anchor.web3.Transaction.from(
+      Buffer.from(txBase64, "base64"),
+    );
+    const feePayer = transaction.feePayer;
+    if (!feePayer || !transaction.recentBlockhash) {
+      throw new Error(
+        "Transaction must include a fee payer and recent blockhash",
+      );
+    }
+
+    const programInstructions = transaction.instructions.filter((instruction) =>
+      instruction.programId.equals(this.program.programId),
+    );
+    if (programInstructions.length !== 1) {
+      throw new Error("Transaction must contain exactly one Timba instruction");
+    }
+
+    const initialize = programInstructions[0]!;
+    const decoded = new anchor.BorshInstructionCoder(this.program.idl).decode(
+      initialize.data,
+    );
+    if (!decoded || decoded.name !== "initializeGame") {
+      throw new Error("Oracle only signs game initialization transactions");
+    }
+    if (initialize.keys.length !== 12) {
+      throw new Error("Invalid initialize-game account list");
+    }
+
+    const game = initialize.keys[0]!;
+    const creator = initialize.keys[1]!;
+    const oracle = initialize.keys[2]!;
+    const oracleOperator = initialize.keys[3]!;
+    if (
+      !creator.pubkey.equals(feePayer) ||
+      !creator.isSigner ||
+      !creator.isWritable
+    ) {
+      throw new Error("Creator must be the transaction fee payer and signer");
+    }
+    if (!oracleOperator.isSigner || oracleOperator.isWritable) {
+      throw new Error("Invalid oracle operator account");
+    }
+    oracleOperator.pubkey = this.adminKeypair.publicKey;
+
+    const expectedOracle = PublicKey.findProgramAddressSync(
+      [Buffer.from("oracle")],
+      this.program.programId,
+    )[0];
+    if (
+      !oracle.pubkey.equals(expectedOracle) ||
+      oracle.isSigner ||
+      oracle.isWritable
+    ) {
+      throw new Error("Invalid oracle account");
+    }
+
+    const instructionData = decoded.data as Record<string, unknown>;
+    const randomHashValue =
+      instructionData["randomHash"] ?? instructionData["_randomHash"];
+    const randomHash = Buffer.from(randomHashValue as number[]);
+    if (randomHash.length !== 32) {
+      throw new Error("Invalid random hash");
+    }
+
+    const expectedGame = this.completion.getGamePDA(randomHash);
+    if (!game.pubkey.equals(expectedGame) || !game.isWritable) {
+      throw new Error("Game account does not match the committed random hash");
+    }
+
+    const secret = this.db.getSecretKeyInfo(expectedGame.toBase58());
+    if (
+      !secret ||
+      secret.used ||
+      secret.randomHash !== randomHash.toString("hex")
+    ) {
+      throw new Error("Random hash is not an unused oracle commitment");
+    }
+
+    for (const instruction of transaction.instructions) {
+      if (instruction === initialize) continue;
+      if (!instruction.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID)) {
+        throw new Error(
+          "Only associated-token setup may accompany game initialization",
+        );
+      }
+      if (
+        instruction.keys.some(({ pubkey }) =>
+          pubkey.equals(this.adminKeypair.publicKey),
+        )
+      ) {
+        throw new Error(
+          "Oracle operator cannot be referenced by setup instructions",
+        );
+      }
+    }
+
+    transaction.partialSign(this.adminKeypair);
+    return transaction
+      .serialize({ requireAllSignatures: false })
+      .toString("base64");
+  }
+
   public async completeGame(
     gameAddress: string,
     cachedReadiness?: GameReadinessSnapshot,
     sharedContext?: GameOnChainContext,
   ): Promise<GameCompletionResult> {
-    return this.completion.completeGame(gameAddress, cachedReadiness, sharedContext);
+    return this.completion.completeGame(
+      gameAddress,
+      cachedReadiness,
+      sharedContext,
+    );
   }
 
-  public async completeGameNow(gameAddress: string): Promise<GameCompletionResult | null> {
+  public async completeGameNow(
+    gameAddress: string,
+  ): Promise<GameCompletionResult | null> {
     const normalized = gameAddress.trim();
     if (!normalized) {
       return {
@@ -497,7 +651,8 @@ export class OracleService {
     let reactivatedSecret = false;
 
     if (!secret) {
-      reactivatedSecret = this.db.reactivateSecretKey(normalized) || reactivatedSecret;
+      reactivatedSecret =
+        this.db.reactivateSecretKey(normalized) || reactivatedSecret;
       if (reactivatedSecret) {
         secret = this.db.getSecretKey(normalized);
       }
@@ -548,7 +703,8 @@ export class OracleService {
     await this.attemptGameCompletion({
       gameAddress,
       gameKey,
-      successLog: () => `🎯 Auto-completed game ${gameAddress} after ${trigger}`,
+      successLog: () =>
+        `🎯 Auto-completed game ${gameAddress} after ${trigger}`,
       failureLog: (_address, error) =>
         `❌ Auto-completion failed: ${error ?? "Unknown error"}`,
     });
@@ -568,9 +724,11 @@ export class OracleService {
         ...options,
         onResult: (result) => {
           if (result.success && result.winnerAddress) {
-            this.notifyBotOfCompletion(options.gameAddress, result).catch((error) => {
-              logger.warning("Failed to notify bot of completion:", error);
-            });
+            this.notifyBotOfCompletion(options.gameAddress, result).catch(
+              (error) => {
+                logger.warning("Failed to notify bot of completion:", error);
+              },
+            );
           }
         },
       },
@@ -606,7 +764,9 @@ export class OracleService {
     }
   }
 
-  private mapResetFailure(result: ResetCompletionAttemptsResult & { success: false }): RequeueGameFailureReason {
+  private mapResetFailure(
+    result: ResetCompletionAttemptsResult & { success: false },
+  ): RequeueGameFailureReason {
     switch (result.reason) {
       case "not-found":
         return "not-found";

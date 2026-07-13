@@ -50,8 +50,13 @@ curl http://localhost:3001/health
 
 Check Bun logs to confirm event listeners attach successfully and no subscription errors occur.
 
+Game creation clients also call `POST /sign-game-transaction`. The endpoint only signs a single
+`initialize_game` instruction tied to an unused oracle commitment; it permits only an optional
+associated-token-account setup instruction alongside it. Keep the service behind the same TLS
+reverse proxy and request limits used for the other API endpoints.
+
 ## 5. Ongoing Operations
 
-- Keep the oracle wallet funded to pay for transaction fees.
+- Keep the oracle wallet funded to pay for completion transactions. Game creators pay initialization fees.
 - Monitor `/stats` to track completions and fallback scans.
 - When updating the program IDL, copy the new JSON file into `idl/idl.json` prior to restarting.

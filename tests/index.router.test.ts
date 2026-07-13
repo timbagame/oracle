@@ -14,7 +14,10 @@ let context: IndexRouterTestContext;
 describe("index router", () => {
   beforeAll(async () => {
     context = await createIndexRouterTestContext("index-router", {
-      generateGameSecrets: (_options) => ({ randomHash: "abc", gameAddress: "game123" }),
+      generateGameSecrets: (_options) => ({
+        randomHash: "abc",
+        gameAddress: "game123",
+      }),
       getStats: () => ({
         ...createBasicStats(),
         recentCompletions: 0,
@@ -29,7 +32,9 @@ describe("index router", () => {
   });
 
   test("OPTIONS preflight returns CORS headers", async () => {
-    const response = await context.router(buildRequest("/health", { method: "OPTIONS" }));
+    const response = await context.router(
+      buildRequest("/health", { method: "OPTIONS" }),
+    );
     expect(response.status).toBe(200);
     expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
   });
@@ -44,40 +49,91 @@ describe("index router", () => {
     expect(response.headers.get("Access-Control-Allow-Methods")).toBe(
       "GET, POST, OPTIONS",
     );
-    expect(response.headers.get("Access-Control-Allow-Headers")).toBe("Content-Type");
+    expect(response.headers.get("Access-Control-Allow-Headers")).toBe(
+      "Content-Type",
+    );
     expect(response.headers.get("Content-Type")).toBe("application/json");
   });
 
   test("GET /health returns JSON", async () => {
-    const { response, json } = await executeJsonRequest(context.router, "/health", {
-      method: "GET",
-    });
+    const { response, json } = await executeJsonRequest(
+      context.router,
+      "/health",
+      {
+        method: "GET",
+      },
+    );
     expect(response.status).toBe(200);
     expect((json as any).success).toBe(true);
     expect((json as any).status).toBe("healthy");
   });
 
   test("POST /generate-hash returns secrets", async () => {
-    const { response, json } = await executeJsonRequest(context.router, "/generate-hash", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ gameType: "coinflip" }),
-    });
+    const { response, json } = await executeJsonRequest(
+      context.router,
+      "/generate-hash",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ gameType: "coinflip" }),
+      },
+    );
     expect(response.status).toBe(200);
     expect((json as any).success).toBe(true);
     expect((json as any).randomHash).toBe("abc");
   });
 
+  test("POST /sign-game-transaction returns the oracle-signed transaction", async () => {
+    const signingContext = await createIndexRouterTestContext(
+      "index-router-sign",
+      {
+        signGameTransaction: (txBase64) => `signed:${txBase64}`,
+      },
+    );
+    try {
+      const { response, json } = await executeJsonRequest(
+        signingContext.router,
+        "/sign-game-transaction",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ txBase64: "unsigned" }),
+        },
+      );
+      expect(response.status).toBe(200);
+      expect((json as any).txBase64).toBe("signed:unsigned");
+    } finally {
+      signingContext.testEnv.cleanup();
+    }
+  });
+
+  test("POST /sign-game-transaction requires a transaction", async () => {
+    const { response, json } = await executeJsonRequest(
+      context.router,
+      "/sign-game-transaction",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      },
+    );
+    expect(response.status).toBe(503);
+    expect((json as any).success).toBe(false);
+  });
+
   test("POST /generate-hash rejects overly large game type payloads", async () => {
     const calls: string[] = [];
-    const rejectingContext = await createIndexRouterTestContext("index-router-large", {
-      generateGameSecrets: (options) => {
-        if (options?.gameType) {
-          calls.push(options.gameType);
-        }
-        return { randomHash: "abc", gameAddress: "game123" };
+    const rejectingContext = await createIndexRouterTestContext(
+      "index-router-large",
+      {
+        generateGameSecrets: (options) => {
+          if (options?.gameType) {
+            calls.push(options.gameType);
+          }
+          return { randomHash: "abc", gameAddress: "game123" };
+        },
       },
-    });
+    );
 
     try {
       const payload = "x".repeat(512);
@@ -102,14 +158,17 @@ describe("index router", () => {
 
   test("POST /generate-hash rejects invalid JSON payloads", async () => {
     const calls: string[] = [];
-    const rejectingContext = await createIndexRouterTestContext("index-router-invalid-json", {
-      generateGameSecrets: (options) => {
-        if (options?.gameType) {
-          calls.push(options.gameType);
-        }
-        return { randomHash: "abc", gameAddress: "game123" };
+    const rejectingContext = await createIndexRouterTestContext(
+      "index-router-invalid-json",
+      {
+        generateGameSecrets: (options) => {
+          if (options?.gameType) {
+            calls.push(options.gameType);
+          }
+          return { randomHash: "abc", gameAddress: "game123" };
+        },
       },
-    });
+    );
 
     try {
       const { response, json } = await executeJsonRequest(
@@ -132,9 +191,15 @@ describe("index router", () => {
   });
 
   test("POST /generate-hash rejects non-string game types", async () => {
-    const rejectingContext = await createIndexRouterTestContext("index-router-type-check", {
-      generateGameSecrets: () => ({ randomHash: "abc", gameAddress: "game123" }),
-    });
+    const rejectingContext = await createIndexRouterTestContext(
+      "index-router-type-check",
+      {
+        generateGameSecrets: () => ({
+          randomHash: "abc",
+          gameAddress: "game123",
+        }),
+      },
+    );
 
     try {
       const { response, json } = await executeJsonRequest(
@@ -157,14 +222,17 @@ describe("index router", () => {
 
   test("POST /generate-hash accepts max-length game type", async () => {
     const calls: string[] = [];
-    const acceptingContext = await createIndexRouterTestContext("index-router-max-length", {
-      generateGameSecrets: (options) => {
-        if (options?.gameType) {
-          calls.push(options.gameType);
-        }
-        return { randomHash: "abc", gameAddress: "game123" };
+    const acceptingContext = await createIndexRouterTestContext(
+      "index-router-max-length",
+      {
+        generateGameSecrets: (options) => {
+          if (options?.gameType) {
+            calls.push(options.gameType);
+          }
+          return { randomHash: "abc", gameAddress: "game123" };
+        },
       },
-    });
+    );
 
     const maxType = "z".repeat(128);
 
@@ -188,9 +256,13 @@ describe("index router", () => {
   });
 
   test("GET /stats returns stats", async () => {
-    const { response, json } = await executeJsonRequest(context.router, "/stats", {
-      method: "GET",
-    });
+    const { response, json } = await executeJsonRequest(
+      context.router,
+      "/stats",
+      {
+        method: "GET",
+      },
+    );
     expect(response.status).toBe(200);
     expect((json as any).success).toBe(true);
     expect((json as any).stats).toBeDefined();
@@ -198,12 +270,15 @@ describe("index router", () => {
 
   test("POST /games/requeue queues the game", async () => {
     const requeueCalls: string[] = [];
-    const requeueContext = await createIndexRouterTestContext("index-router-requeue", {
-      requeueGame: (gameAddress) => {
-        requeueCalls.push(gameAddress);
-        return { success: true };
+    const requeueContext = await createIndexRouterTestContext(
+      "index-router-requeue",
+      {
+        requeueGame: (gameAddress) => {
+          requeueCalls.push(gameAddress);
+          return { success: true };
+        },
       },
-    });
+    );
 
     try {
       const { response, json } = await executeJsonRequest(
@@ -226,24 +301,35 @@ describe("index router", () => {
   });
 
   test("POST /games/requeue validates payload and propagates failures", async () => {
-    const failingContext = await createIndexRouterTestContext("index-router-requeue-fail", {
-      requeueGame: () => ({ success: false, reason: "not-found" }),
-    });
+    const failingContext = await createIndexRouterTestContext(
+      "index-router-requeue-fail",
+      {
+        requeueGame: () => ({ success: false, reason: "not-found" }),
+      },
+    );
 
     try {
-      const missingBody = await executeJsonRequest(failingContext.router, "/games/requeue", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
-      });
+      const missingBody = await executeJsonRequest(
+        failingContext.router,
+        "/games/requeue",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      );
       expect(missingBody.response.status).toBe(400);
       expect((missingBody.json as any).error).toContain("gameAddress");
 
-      const failure = await executeJsonRequest(failingContext.router, "/games/requeue", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ gameAddress: "unknown" }),
-      });
+      const failure = await executeJsonRequest(
+        failingContext.router,
+        "/games/requeue",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameAddress: "unknown" }),
+        },
+      );
 
       expect(failure.response.status).toBe(404);
       expect((failure.json as any).success).toBe(false);
@@ -255,17 +341,20 @@ describe("index router", () => {
 
   test("POST /games/complete-now attempts immediate completion", async () => {
     const completeCalls: string[] = [];
-    const completeContext = await createIndexRouterTestContext("index-router-complete-now", {
-      completeGameNow: async (gameAddress) => {
-        completeCalls.push(gameAddress);
-        return {
-          success: true,
-          txHash: "tx123",
-          winnerAddress: "winner123",
-          totalPot: 42,
-        };
+    const completeContext = await createIndexRouterTestContext(
+      "index-router-complete-now",
+      {
+        completeGameNow: async (gameAddress) => {
+          completeCalls.push(gameAddress);
+          return {
+            success: true,
+            txHash: "tx123",
+            winnerAddress: "winner123",
+            totalPot: 42,
+          };
+        },
       },
-    });
+    );
 
     try {
       const { response, json } = await executeJsonRequest(
@@ -289,12 +378,18 @@ describe("index router", () => {
   });
 
   test("POST /games/complete-now reports non-terminal outcomes", async () => {
-    const notReadyContext = await createIndexRouterTestContext("index-router-complete-not-ready", {
-      completeGameNow: async () => ({ success: false, notReady: true }),
-    });
-    const inFlightContext = await createIndexRouterTestContext("index-router-complete-in-flight", {
-      completeGameNow: async () => null,
-    });
+    const notReadyContext = await createIndexRouterTestContext(
+      "index-router-complete-not-ready",
+      {
+        completeGameNow: async () => ({ success: false, notReady: true }),
+      },
+    );
+    const inFlightContext = await createIndexRouterTestContext(
+      "index-router-complete-in-flight",
+      {
+        completeGameNow: async () => null,
+      },
+    );
 
     try {
       const notReady = await executeJsonRequest(
@@ -328,12 +423,15 @@ describe("index router", () => {
 
   test("POST /games/complete-now validates payload and propagates failures", async () => {
     const calls: string[] = [];
-    const failingContext = await createIndexRouterTestContext("index-router-complete-fail", {
-      completeGameNow: async (address) => {
-        calls.push(address);
-        return { success: false, error: "missing secret" };
+    const failingContext = await createIndexRouterTestContext(
+      "index-router-complete-fail",
+      {
+        completeGameNow: async (address) => {
+          calls.push(address);
+          return { success: false, error: "missing secret" };
+        },
       },
-    });
+    );
 
     try {
       const missingBody = await executeJsonRequest(
@@ -367,12 +465,15 @@ describe("index router", () => {
 
   test("POST /games/auto-complete toggles auto-complete state", async () => {
     const toggleCalls: Array<{ address: string; disabled: boolean }> = [];
-    const toggleContext = await createIndexRouterTestContext("index-router-toggle", {
-      setAutoCompleteDisabled: (address, disabled) => {
-        toggleCalls.push({ address, disabled });
-        return { success: true, autoCompleteDisabled: disabled };
+    const toggleContext = await createIndexRouterTestContext(
+      "index-router-toggle",
+      {
+        setAutoCompleteDisabled: (address, disabled) => {
+          toggleCalls.push({ address, disabled });
+          return { success: true, autoCompleteDisabled: disabled };
+        },
       },
-    });
+    );
 
     try {
       const { response, json } = await executeJsonRequest(
@@ -381,7 +482,10 @@ describe("index router", () => {
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ gameAddress: "game123", autoCompleteDisabled: true }),
+          body: JSON.stringify({
+            gameAddress: "game123",
+            autoCompleteDisabled: true,
+          }),
         },
       );
 
@@ -395,9 +499,15 @@ describe("index router", () => {
   });
 
   test("POST /games/auto-complete validates payload and propagates failures", async () => {
-    const failingContext = await createIndexRouterTestContext("index-router-toggle-fail", {
-      setAutoCompleteDisabled: () => ({ success: false, reason: "not-found" }),
-    });
+    const failingContext = await createIndexRouterTestContext(
+      "index-router-toggle-fail",
+      {
+        setAutoCompleteDisabled: () => ({
+          success: false,
+          reason: "not-found",
+        }),
+      },
+    );
 
     try {
       const missingBody = await executeJsonRequest(
@@ -418,7 +528,10 @@ describe("index router", () => {
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ gameAddress: "game123", autoCompleteDisabled: "yes" }),
+          body: JSON.stringify({
+            gameAddress: "game123",
+            autoCompleteDisabled: "yes",
+          }),
         },
       );
       expect(badBoolean.response.status).toBe(400);
@@ -430,7 +543,10 @@ describe("index router", () => {
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ gameAddress: "unknown", autoCompleteDisabled: true }),
+          body: JSON.stringify({
+            gameAddress: "unknown",
+            autoCompleteDisabled: true,
+          }),
         },
       );
 
@@ -444,12 +560,15 @@ describe("index router", () => {
 
   test("POST /games/requeue rejects whitespace-only addresses", async () => {
     const calls: string[] = [];
-    const rejectingContext = await createIndexRouterTestContext("index-router-requeue-whitespace", {
-      requeueGame: (address) => {
-        calls.push(address);
-        return { success: true };
+    const rejectingContext = await createIndexRouterTestContext(
+      "index-router-requeue-whitespace",
+      {
+        requeueGame: (address) => {
+          calls.push(address);
+          return { success: true };
+        },
       },
-    });
+    );
 
     try {
       const { response, json } = await executeJsonRequest(
@@ -476,8 +595,16 @@ describe("index router", () => {
       status: number;
       messageFragment: string;
     }> = [
-      { reason: "missing-secret", status: 409, messageFragment: "missing its secret key" },
-      { reason: "finalized", status: 409, messageFragment: "already finalized" },
+      {
+        reason: "missing-secret",
+        status: 409,
+        messageFragment: "missing its secret key",
+      },
+      {
+        reason: "finalized",
+        status: 409,
+        messageFragment: "already finalized",
+      },
       { reason: "unchanged", status: 409, messageFragment: "already queued" },
     ];
 
@@ -510,9 +637,12 @@ describe("index router", () => {
   });
 
   test("POST /games/requeue sanitizes error messages", async () => {
-    const failingContext = await createIndexRouterTestContext("index-router-requeue-sanitize", {
-      requeueGame: () => ({ success: false, reason: "not-found" }),
-    });
+    const failingContext = await createIndexRouterTestContext(
+      "index-router-requeue-sanitize",
+      {
+        requeueGame: () => ({ success: false, reason: "not-found" }),
+      },
+    );
 
     try {
       const maliciousAddress = "<script>alert('xss')</script>";
@@ -536,9 +666,12 @@ describe("index router", () => {
   });
 
   test("POST /games/requeue strips control characters from error payloads", async () => {
-    const failingContext = await createIndexRouterTestContext("index-router-requeue-crlf", {
-      requeueGame: () => ({ success: false, reason: "not-found" }),
-    });
+    const failingContext = await createIndexRouterTestContext(
+      "index-router-requeue-crlf",
+      {
+        requeueGame: () => ({ success: false, reason: "not-found" }),
+      },
+    );
 
     try {
       const maliciousAddress = "evil\r\nSet-Cookie: attack";
@@ -591,7 +724,8 @@ describe("index router", () => {
     const html = context.module.generateDocumentationHtml([
       {
         path: "/<b>danger</b>",
-        method: 'POST" onclick="alert(1)' as unknown as typeof context.routeMetadata[number]["method"],
+        method:
+          'POST" onclick="alert(1)' as unknown as (typeof context.routeMetadata)[number]["method"],
         handler: "handleHealth",
         summary: maliciousSummary,
         requestExample: maliciousExample,
@@ -607,20 +741,27 @@ describe("index router", () => {
   });
 
   test("unknown route returns 404", async () => {
-    const { response, json } = await executeJsonRequest(context.router, "/unknown", {
-      method: "GET",
-    });
+    const { response, json } = await executeJsonRequest(
+      context.router,
+      "/unknown",
+      {
+        method: "GET",
+      },
+    );
     expect(response.status).toBe(404);
     expect((json as any).success).toBe(false);
     expect((json as any).service?.name).toBe("oracle-api");
   });
 
   test("router catches handler errors and returns 500", async () => {
-    const failingContext = await createIndexRouterTestContext("index-router-error", {
-      generateGameSecrets: () => {
-        throw new Error("boom");
+    const failingContext = await createIndexRouterTestContext(
+      "index-router-error",
+      {
+        generateGameSecrets: () => {
+          throw new Error("boom");
+        },
       },
-    });
+    );
 
     try {
       const { response, json } = await executeJsonRequest(
@@ -653,10 +794,13 @@ describe("index router", () => {
           throw new Error("explode");
         },
         handleGenerateHash: async (_request: Request) => new Response("ok"),
+        handleSignGameTransaction: async (_request: Request) =>
+          new Response("ok"),
         handleStats: async (_request: Request) => new Response("ok"),
         handleRequeueGame: async (_request: Request) => new Response("ok"),
         handleCompleteGameNow: async (_request: Request) => new Response("ok"),
-        handleToggleAutoComplete: async (_request: Request) => new Response("ok"),
+        handleToggleAutoComplete: async (_request: Request) =>
+          new Response("ok"),
       });
 
       const { response, json } = await executeJsonRequest(router, "/health", {
@@ -684,7 +828,8 @@ describe("index router", () => {
       >;
       delete (incompleteHandlers as any).handleStats;
       incompleteHandlers.handleRequeueGame = async () => new Response("ok");
-      incompleteHandlers.handleToggleAutoComplete = async () => new Response("ok");
+      incompleteHandlers.handleToggleAutoComplete = async () =>
+        new Response("ok");
       const router = context.module.buildFetchRouter(incompleteHandlers as any);
 
       const { response, json } = await executeJsonRequest(router, "/stats", {
@@ -693,7 +838,9 @@ describe("index router", () => {
       expect(response.status).toBe(500);
       expect((json as any).error).toBe("Internal server error");
       expect((json as any).success).toBe(false);
-      expect(errors.some((entry) => entry.includes("Handler not implemented"))).toBe(true);
+      expect(
+        errors.some((entry) => entry.includes("Handler not implemented")),
+      ).toBe(true);
     } finally {
       console.error = originalError;
     }

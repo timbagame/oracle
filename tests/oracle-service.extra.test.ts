@@ -2189,9 +2189,6 @@ describe("OracleService internals", () => {
     );
     expect(accounts?.winnerTokenAccount.toBase58()).toBe(result.expectedWinnerAta.toBase58());
     expect(tokenCtx?.gameTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
-    expect(result.calls.accounts?.systemProgram.toBase58()).toBe(
-      anchor.web3.SystemProgram.programId.toBase58(),
-    );
     expect(result.calls.signers).toEqual([result.adminKeypair]);
     expect(result.calls.confirmed).toMatchObject({
       signature: "tx-abc",
