@@ -5,6 +5,7 @@ A robust Oracle service for Solana-based games that generates cryptographic secr
 ## ✨ Features
 
 - **🔑 Cryptographic Secret Generation**: Secure random secret generation for new games
+- **✍️ Initialization Approval**: Validates and partially signs creator-funded game transactions
 - **🎯 Game Type Support**: Supports Coinflip and Giveaway games
 - **🎧 Event-Driven Completion**: Real-time game completion via Solana event listeners
 - **🔄 Fallback Scanning**: Periodic scanning as backup for missed events
@@ -32,12 +33,16 @@ The Oracle service uses a hybrid approach with performance optimizations:
 
 ## 📡 API Endpoints
 
-| Endpoint         | Method | Description                    | Body Parameters       |
-| ---------------- | ------ | ------------------------------ | --------------------- |
-| `/health`        | GET    | System health and status       | None                  |
-| `/generate-hash` | POST   | Generate secrets for new games | `gameType` (optional) |
-| `/stats`         | GET    | Oracle statistics and metrics  | None                  |
-| `/`              | GET    | API documentation              | None                  |
+| Endpoint                  | Method | Description                                      | Body Parameters                              |
+| ------------------------- | ------ | ------------------------------------------------ | -------------------------------------------- |
+| `/health`                 | GET    | Service health                                   | None                                         |
+| `/generate-hash`          | POST   | Generate and retain a secret; return commitment  | `gameType` (optional)                        |
+| `/sign-game-transaction`  | POST   | Validate and partially sign game initialization  | `txBase64`                                   |
+| `/stats`                  | GET    | Oracle statistics and metrics                    | None                                         |
+| `/games/requeue`          | POST   | Reset completion attempts for a pending game     | `gameAddress`                                |
+| `/games/complete-now`     | POST   | Attempt immediate completion of one tracked game | `gameAddress`                                |
+| `/games/auto-complete`    | POST   | Toggle automatic completion for a tracked game   | `gameAddress`, `autoCompleteDisabled`         |
+| `/`                       | GET    | Generated API documentation                      | None                                         |
 
 ### Game Types Supported
 
@@ -194,7 +199,9 @@ curl http://localhost:3001/stats
 
 2. **Game Creation**
 
-   - Client creates game on-chain using the provided hash
+   - The creator builds the transaction with itself as signer and fee payer
+   - The oracle validates the unused commitment and transaction accounts, then partially signs through `/sign-game-transaction`
+   - The creator adds its signature and submits the same transaction; neither private key leaves its device
    - Oracle detects `GameInitialized` event and starts tracking
 
 3. **Player Joining**
@@ -260,7 +267,7 @@ Run the test suite, optionally with coverage, and TypeScript checks to verify ch
 ```bash
 bun test
 bun test --coverage  # view coverage
-bunx tsc --noEmit
+bun run typecheck
 ```
 
 ### Key Improvements
