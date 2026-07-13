@@ -2246,22 +2246,22 @@ export type Timba = {
       "msg": "Active players remain"
     },
     {
-      "code": 7106,
+      "code": 7104,
       "name": "gameExpired",
       "msg": "Game expired"
     },
     {
-      "code": 7107,
+      "code": 7105,
       "name": "gameAlreadyCompleted",
       "msg": "Game already settled"
     },
     {
-      "code": 7108,
+      "code": 7106,
       "name": "oracleBufferNotExpired",
       "msg": "Oracle buffer active"
     },
     {
-      "code": 7109,
+      "code": 7107,
       "name": "participantStorageExceeded",
       "msg": "Participant store full"
     },
@@ -2336,7 +2336,7 @@ export type Timba = {
       "msg": "Secret key mismatch"
     },
     {
-      "code": 7305,
+      "code": 7304,
       "name": "invalidOracleBufferTime",
       "msg": "Invalid oracle buffer time"
     },

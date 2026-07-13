@@ -2240,22 +2240,22 @@
       "msg": "Active players remain"
     },
     {
-      "code": 7106,
+      "code": 7104,
       "name": "GameExpired",
       "msg": "Game expired"
     },
     {
-      "code": 7107,
+      "code": 7105,
       "name": "GameAlreadyCompleted",
       "msg": "Game already settled"
     },
     {
-      "code": 7108,
+      "code": 7106,
       "name": "OracleBufferNotExpired",
       "msg": "Oracle buffer active"
     },
     {
-      "code": 7109,
+      "code": 7107,
       "name": "ParticipantStorageExceeded",
       "msg": "Participant store full"
     },
@@ -2330,7 +2330,7 @@
       "msg": "Secret key mismatch"
     },
     {
-      "code": 7305,
+      "code": 7304,
       "name": "InvalidOracleBufferTime",
       "msg": "Invalid oracle buffer time"
     },
