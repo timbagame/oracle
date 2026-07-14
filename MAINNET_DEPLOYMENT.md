@@ -51,21 +51,18 @@ loginctl enable-linger "$USER"
 
 If the checkout lives elsewhere, edit `WorkingDirectory` in the copied unit. Do not run rootless Podman commands with `sudo`.
 
-### Migrating an existing Docker deployment
+### Migrating an existing container deployment
 
-Stop Docker only after confirming the Podman deployment user can read both repositories and their mode-`600` secrets. The SQLite databases remain in place because both deployments use the same bind-mounted files.
+Stop the legacy containers only after confirming the Podman deployment user can read both repositories and their mode-`600` secrets. The SQLite databases remain in place because both deployments use the same bind-mounted files.
 
 ```bash
-# Run from each repository while Docker still owns the old deployment.
-docker compose down
-
-# Then run as the unprivileged Podman deployment user.
+# Run as the unprivileged Podman deployment user after stopping the old services.
 podman network exists timba || podman network create timba
 cd ~/timba/oracle && podman compose -f compose.yml up -d
 cd ~/timba/bot && podman compose -f compose.yml up -d
 ```
 
-Never run Docker and Podman copies simultaneously: both would write the same SQLite files and process the same games. After validation, disable the old Docker systemd service before enabling the Podman user services.
+Never run old and new container copies simultaneously: both would write the same SQLite files and process the same games. After validation, disable the legacy systemd services before enabling the Podman user services.
 
 ## 3. Validate Health
 

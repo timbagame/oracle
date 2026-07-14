@@ -1,0 +1,60 @@
+name: Publish OCI image
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  push:
+    branches: ["main"]
+    tags: ["v*.*.*"]
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes podman
+
+      - name: Select image tag
+        shell: bash
+        run: |
+          image="${REGISTRY}/${GITHUB_REPOSITORY,,}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="main"
+          fi
+          echo "IMAGE=${image}" >> "${GITHUB_ENV}"
+          echo "IMAGE_TAG=${image}:${tag}" >> "${GITHUB_ENV}"
+
+      - name: Log into registry
+        shell: bash
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "${REGISTRY_TOKEN}" | podman login "${REGISTRY}" --username "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Build OCI image
+        run: podman build --platform linux/amd64 --format oci --file Containerfile --tag "${IMAGE_TAG}" .
+
+      - name: Push OCI image
+        run: podman push --digestfile /tmp/image-digest "${IMAGE_TAG}"
+
+      - name: Sign published image
+        env:
+          COSIGN_YES: "true"
+        run: cosign sign "${IMAGE}@$(cat /tmp/image-digest)"
