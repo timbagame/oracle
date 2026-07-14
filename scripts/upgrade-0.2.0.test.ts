@@ -10,8 +10,7 @@ import {
   extractVerificationJobId,
   nextIncompletePhase,
   remoteVerificationSucceeded,
-  readEnvValue,
-  selectEnv,
+  setEnvValue,
   sha256,
   stableJson,
   validateReleaseBundle,
@@ -49,7 +48,7 @@ function state(phases: ReleaseState["phases"] = {}): ReleaseState {
 }
 
 describe("upgrade state", () => {
-  it("requires first IDL publication and both verification phases before migration", () => {
+  it("requires IDL publication and verification before client activation", () => {
     expect(PHASES).toEqual([
       "local-preflight",
       "prepare",
@@ -62,12 +61,14 @@ describe("upgrade state", () => {
       "verify-source",
       "verify-remote",
       "release-clients",
-      "migrate-clients",
+      "activate-web",
+      "activate-clients",
       "smoke-test",
     ]);
     expect(PHASE_HOST["deploy-contract"]).toBe("local");
     expect(PHASE_HOST["release-clients"]).toBe("local");
-    expect(PHASE_HOST["migrate-clients"]).toBe("vps");
+    expect(PHASE_HOST["activate-web"]).toBe("local");
+    expect(PHASE_HOST["activate-clients"]).toBe("vps");
   });
 
   it("resumes at the first incomplete phase", () => {
@@ -145,30 +146,24 @@ describe("legacy Game drain guard", () => {
   });
 });
 
-describe("legacy Compose environment migration", () => {
-  const legacy = [
-    "TELEGRAM_TOKEN=telegram",
-    'MNEMONIC="one two three"',
-    "SOLANA_NETWORK=https://rpc.example",
-    "ORACLE_PORT=3001",
-    "ORACLE_API_TOKEN=old-token",
-    "",
-  ].join("\n");
-
-  it("extracts a quoted mnemonic without exposing it in migrated env files", () => {
-    expect(readEnvValue(legacy, "MNEMONIC")).toBe("one two three");
-    const migrated = selectEnv(legacy, (key) => key !== "MNEMONIC" && key !== "ORACLE_API_TOKEN");
-    expect(migrated).toContain("TELEGRAM_TOKEN=telegram");
-    expect(migrated).not.toContain("one two three");
-    expect(migrated).not.toContain("old-token");
+describe("Podman contract ABI activation", () => {
+  it("replaces the existing version without changing other settings", () => {
+    const current = "SOLANA_NETWORK=https://rpc.example\nTIMBA_CONTRACT_VERSION=0.1.3\n";
+    expect(setEnvValue(current, "TIMBA_CONTRACT_VERSION", "0.2.0")).toBe(
+      "SOLANA_NETWORK=https://rpc.example\nTIMBA_CONTRACT_VERSION=0.2.0\n",
+    );
   });
 
-  it("builds a least-privilege oracle environment", () => {
-    const migrated = selectEnv(
-      legacy,
-      (key) =>
-        key === "SOLANA_NETWORK" || (key.startsWith("ORACLE_") && key !== "ORACLE_API_TOKEN"),
+  it("adds a missing version and removes duplicate definitions", () => {
+    expect(setEnvValue("A=1\n", "TIMBA_CONTRACT_VERSION", "0.2.0")).toBe(
+      "A=1\nTIMBA_CONTRACT_VERSION=0.2.0\n",
     );
-    expect(migrated).toBe("SOLANA_NETWORK=https://rpc.example\nORACLE_PORT=3001\n");
+    expect(
+      setEnvValue(
+        "TIMBA_CONTRACT_VERSION=0.1.3\nexport TIMBA_CONTRACT_VERSION=0.1.3\n",
+        "TIMBA_CONTRACT_VERSION",
+        "0.2.0",
+      ),
+    ).toBe("TIMBA_CONTRACT_VERSION=0.2.0\n");
   });
 });

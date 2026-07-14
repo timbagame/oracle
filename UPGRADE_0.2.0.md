@@ -1,6 +1,6 @@
 # Timba 0.2.0 Mainnet Upgrade
 
-This private runbook upgrades the existing mainnet program from 0.1.3 to 0.2.0 and migrates the production oracle and bot from Docker Compose to rootless Podman Quadlets.
+This private runbook upgrades the existing mainnet program from 0.1.3 to 0.2.0 and activates the already-deployed rootless Podman oracle, bot, and Cloudflare web clients.
 
 Program ID:
 
@@ -13,51 +13,39 @@ The guide and orchestrator live in the private `oracle` repository. Do not copy 
 ## Current production state
 
 - The deployed contract is 0.1.3, with no uploaded IDL and no reproducible verification record.
-- The VPS oracle and bot are 0.1.3-compatible Docker Compose containers.
+- Oracle and bot already run as signed rootless Podman Quadlets compatible with 0.1.3.
+- Their data, configuration, keypairs, and secrets already live below `~/timba`.
+- Docker, its repository, its old deployment, and the migration backups have been removed.
 - The upgrade preserves the program ID and existing oracle account.
-- Every 0.1.3 game must be settled before deploying 0.2.0; empty creator-owned accounts may remain inert.
-- The new Podman services start in oracle → bot order.
+- Every funded or joined 0.1.3 game must be settled before deploying 0.2.0. Empty creator-owned accounts may remain inert.
 
 Never initialize a new program, run `anchor migrate`, or reinitialize the oracle.
 
 ## Automatic defaults
 
-No environment configuration is required.
-
-On the trusted machine, the command automatically derives the Timba workspace from the `oracle` repository. On the VPS, `--host vps` automatically uses the actual production layout:
+No shell exports are required. The orchestrator derives the local workspace and uses these VPS defaults:
 
 ```text
-new Podman data root:  ~/timba
-old Compose root:      ~/docker/timba
-release state:          ~/timba-release-0.2.0/release-state.json
-handoff bundle:         ~/timba-release-0.2.0/release-state.bundle.json
-RPC:                    https://api.mainnet-beta.solana.com
-client branch:          contracts-0.2.0-compat
+Podman data root:  ~/timba
+release state:     ~/timba-release-0.2.0/release-state.json
+handoff bundle:    ~/timba-release-0.2.0/release-state.bundle.json
+RPC:               https://api.mainnet-beta.solana.com
 ```
 
-Only two values cannot be inferred:
+Only the local upgrade-authority path and the SSH destination used for file transfer must be supplied. The authority must remain on the trusted machine as a regular mode-`400` or mode-`600` file.
 
-- the local upgrade-authority path when signing;
-- the SSH destination used to copy the orchestrator and state bundle.
+## Phase locations
 
-The authority file must be regular, not a symlink, and have mode `400` or `600`. Never transfer it to the VPS.
+| Phase                                                                                                          | Machine         |
+| -------------------------------------------------------------------------------------------------------------- | --------------- |
+| `local-preflight`, `prepare`                                                                                   | Trusted machine |
+| `vps-preflight`, `drain`, `backup`                                                                             | VPS             |
+| `build`, `deploy-contract`, `publish-idl`, `verify-source`, `verify-remote`, `release-clients`, `activate-web` | Trusted machine |
+| `activate-clients`, `smoke-test`                                                                               | VPS             |
 
-## Where phases run
+Every phase is dry-run-first. Use `--execute` only after reviewing its commands. Mainnet-impacting phases also require the exact `--approve <phase>` token.
 
-| Phase                                                                                          | Machine         |
-| ---------------------------------------------------------------------------------------------- | --------------- |
-| `local-preflight`, `prepare`                                                                   | Trusted machine |
-| `vps-preflight`, `drain`, `backup`                                                             | VPS             |
-| `build`, `deploy-contract`, `publish-idl`, `verify-source`, `verify-remote`, `release-clients` | Trusted machine |
-| `migrate-clients`, `smoke-test`                                                                | VPS             |
-
-Executing a phase requires the matching `--host local` or `--host vps`. The CLI refuses the wrong machine.
-
-All phases are dry-run-first. Add `--execute` only after reviewing the printed operations. Mainnet-impacting phases additionally require their exact `--approve <phase>` token.
-
-## 1. Trusted machine: prepare
-
-The compatibility branches default to the deployed `0.1.3` ABI. They can be merged and deployed before the maintenance window so application changes settle independently of the contract upgrade. Keep `TIMBA_CONTRACT_VERSION=0.1.3` (and `NEXT_PUBLIC_TIMBA_CONTRACT_VERSION=0.1.3` for Cloudflare) until the on-chain upgrade succeeds. The final Podman migration writes `0.2.0` automatically.
+## 1. Trusted machine: freeze and test the release
 
 From the private Oracle repository:
 
@@ -69,66 +57,58 @@ bun run upgrade:0.2.0 prepare --host local
 bun run upgrade:0.2.0 prepare --host local --execute
 ```
 
-This verifies the pinned toolchain, clean and pushed repositories, all project tests/builds, exact commits, and identical 0.2.0 IDLs. Authority and deployed-program matching are checked later when the authority path is supplied for signing.
+This checks the pinned Anchor and Solana tools, clean and pushed repositories, all project tests/builds, exact commits, and identical 0.2.0 IDLs. Production remains on ABI 0.1.3.
 
-Create the VPS release directory, export state, and copy the private orchestrator, bootstrap, Quadlets, and bundle. Replace `user@vps` with the real SSH destination:
+Copy only the private orchestrator and verified state bundle to the VPS:
 
 ```bash
-ssh user@vps 'mkdir -p ~/timba-release-0.2.0/quadlet'
+ssh user@vps 'mkdir -p ~/timba-release-0.2.0'
 bun run upgrade:0.2.0 export-bundle
-scp scripts/upgrade-0.2.0.ts scripts/vps-bootstrap-0.2.0.sh \
+scp scripts/upgrade-0.2.0.ts \
   "$HOME/timba-release-0.2.0/release-state.bundle.json" \
   user@vps:~/timba-release-0.2.0/
-scp deploy/quadlet/timba.network deploy/quadlet/timba-oracle.container \
-  user@vps:~/timba-release-0.2.0/quadlet/
-scp ../bot/deploy/quadlet/timba-bot.container \
-  user@vps:~/timba-release-0.2.0/quadlet/
 ```
 
-Once, before the first VPS phase, install the audited host prerequisites. This is the only step requiring sudo and it also enables user lingering before any Quadlet starts:
+The Quadlets, secrets, databases, Podman authentication, Cosign 3.0.6, lingering, and auto-update timer are already installed. Do not restage them.
+
+## 2. VPS: drain and stop 0.1.3
 
 ```bash
-ssh -t user@vps 'bash ~/timba-release-0.2.0/vps-bootstrap-0.2.0.sh'
+"$HOME/.local/bin/bun" run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" import-bundle
+
+"$HOME/.local/bin/bun" run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" vps-preflight --host vps
+"$HOME/.local/bin/bun" run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" vps-preflight --host vps --execute
 ```
 
-## 2. VPS: drain and back up 0.1.3
+The preflight requires both healthy, auto-updating Quadlets to be active on ABI 0.1.3. It verifies rootless Podman, service files, database files, restricted secret modes, and the shared oracle API token.
+
+Announce maintenance and enable the static web maintenance response. Keep the services running while existing games settle:
 
 ```bash
-bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" import-bundle
-
-bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" vps-preflight --host vps
-bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" vps-preflight --host vps --execute
+"$HOME/.local/bin/bun" run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" drain --host vps
+"$HOME/.local/bin/bun" run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" drain --host vps --execute --approve drain
 ```
 
-The VPS needs no Git checkouts. The old deployment remains in `~/docker/timba`; the orchestrator runs the drain scripts inside its existing containers.
+The phase disables supported tokens, runs the oracle shutdown scan inside the existing Podman containers, and independently queries finalized mainnet accounts. It blocks the upgrade if any legacy game still has tickets, participant hashes, or funds.
 
-Before draining, announce maintenance and enable the static web maintenance response. Keep the old services running while existing games settle.
+Stop the clients and create the release checkpoint:
 
 ```bash
-bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" drain --host vps
-bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" drain --host vps --execute --approve drain
+"$HOME/.local/bin/bun" run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" backup --host vps
+"$HOME/.local/bin/bun" run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" backup --host vps --execute
+"$HOME/.local/bin/bun" run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" export-bundle
 ```
 
-The phase disables supported tokens, runs the shutdown scan inside the existing Docker oracle, and then queries mainnet RPC itself. It blocks the release if any 0.1.3 game still has tickets, participant hashes, or funds. Empty old-sized game accounts may remain because only their creators can close them; they are recorded as inert release evidence and must not be offered to 0.2.0 clients.
+This records both Podman container identities, stops bot before oracle, verifies both services are inactive, checkpoints and integrity-checks the four SQLite databases, and stores copies plus hashes below the release directory.
 
-```bash
-bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" backup --host vps
-bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" backup --host vps --execute
-bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" export-bundle
-```
-
-This records Docker identities, stops bot before oracle, proves both are stopped, integrity-checks and copies the SQLite databases, and records their hashes.
-
-From the trusted machine, retrieve the updated bundle:
+Retrieve the updated bundle:
 
 ```bash
 scp user@vps:~/timba-release-0.2.0/release-state.bundle.json \
   "$HOME/timba-release-0.2.0/"
 ```
 
-## 3. Trusted machine: upgrade and verify
-
-From the Oracle repository:
+## 3. Trusted machine: upgrade, publish, and verify
 
 ```bash
 bun run upgrade:0.2.0 import-bundle
@@ -137,9 +117,9 @@ bun run upgrade:0.2.0 build --host local
 bun run upgrade:0.2.0 build --host local --execute
 ```
 
-Before deployment, have a second person verify the mainnet cluster, existing program ID, frozen commit and executable hash, authority, expected SOL cost, absence of token transfers, and preservation of the existing oracle account.
+Before deployment, have a second person verify the mainnet cluster, existing program ID, frozen commit and executable hash, upgrade authority, expected SOL cost, absence of token transfers, and preservation of the existing oracle account.
 
-Replace `/secure/path/to/upgrade-authority.json` with the real local path:
+Replace the example authority path with the real local file:
 
 ```bash
 bun run upgrade:0.2.0 deploy-contract --host local \
@@ -149,9 +129,9 @@ bun run upgrade:0.2.0 deploy-contract --host local --execute \
   --authority /secure/path/to/upgrade-authority.json
 ```
 
-The phase compares executable hashes, safely recognizes an already successful deployment, otherwise deploys with `--verifiable --no-idl`, dumps the program, and requires an exact hash match.
+The phase compares executable hashes, safely recognizes an already-successful deployment, otherwise upgrades with `--verifiable --no-idl`, dumps the deployed program, and requires an exact hash match.
 
-Create the first canonical IDL:
+Publish the program's first canonical IDL:
 
 ```bash
 bun run upgrade:0.2.0 publish-idl --host local \
@@ -161,12 +141,11 @@ bun run upgrade:0.2.0 publish-idl --host local --execute \
   --authority /secure/path/to/upgrade-authority.json
 ```
 
-Complete reproducible verification:
+Complete both reproducible verification paths:
 
 ```bash
 bun run upgrade:0.2.0 verify-source --host local
-bun run upgrade:0.2.0 verify-source --host local --execute \
-  --approve verify-source
+bun run upgrade:0.2.0 verify-source --host local --execute --approve verify-source
 
 bun run upgrade:0.2.0 verify-remote --host local \
   --authority /secure/path/to/upgrade-authority.json
@@ -177,14 +156,23 @@ bun run upgrade:0.2.0 verify-remote --host local --execute \
 
 Remote verification must report success before continuing.
 
-Merge the reviewed oracle, bot, and web compatibility branches into `main` and wait for the two signed image workflows plus the Cloudflare deployment. Then freeze the released commits:
+Freeze the tested client commits already released on `main`:
 
 ```bash
 bun run upgrade:0.2.0 release-clients --host local
 bun run upgrade:0.2.0 release-clients --host local --execute
 ```
 
-Export and send the final VPS handoff:
+Activate and deploy the Cloudflare client with ABI 0.2.0:
+
+```bash
+bun run upgrade:0.2.0 activate-web --host local
+bun run upgrade:0.2.0 activate-web --host local --execute --approve activate-web
+```
+
+This sets the private GitHub repository variable consumed by the deployment workflow and dispatches `deploy.yml`. Wait for that workflow to succeed before starting the VPS clients.
+
+Send the final state to the VPS:
 
 ```bash
 bun run upgrade:0.2.0 export-bundle
@@ -193,46 +181,39 @@ scp scripts/upgrade-0.2.0.ts \
   user@vps:~/timba-release-0.2.0/
 ```
 
-## 4. VPS: migrate to Podman
+## 4. VPS: activate 0.2.0 clients
 
 ```bash
-bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" import-bundle
+"$HOME/.local/bin/bun" run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" import-bundle
 
-bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" migrate-clients --host vps
-bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" migrate-clients --host vps --execute \
-  --approve migrate-clients
+"$HOME/.local/bin/bun" run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" activate-clients --host vps
+"$HOME/.local/bin/bun" run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" activate-clients --host vps --execute \
+  --approve activate-clients
 ```
 
-This refuses active Docker services; verifies the signed Oracle and Bot images; copies the stopped databases and keypairs into `~/timba`; removes the mnemonic from `.env`; creates permission-checked mnemonic and shared API-token files; installs the bundled Podman network and Quadlets; starts oracle before bot; and validates health, authentication, image digests, supervision, logs, and continued Docker shutdown.
+This requires both services to still be stopped, verifies and pulls the signed Oracle and Bot images, changes only `TIMBA_CONTRACT_VERSION` in their existing mode-`600` environment files, starts oracle before bot, and validates ABI version, health, authentication, image digests, Quadlet supervision, logs, and the auto-update timer.
 
-Keep maintenance enabled and run the controlled lifecycle:
+Keep maintenance enabled for the controlled lifecycle:
 
 ```bash
-bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" smoke-test --host vps
-bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" smoke-test --host vps --execute \
+"$HOME/.local/bin/bun" run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" smoke-test --host vps
+"$HOME/.local/bin/bun" run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" smoke-test --host vps --execute \
   --approve smoke-test
 ```
 
-Using controlled wallets, create, join, optionally unjoin, and complete one low-value game. Confirm contract state, oracle registry, bot result, and web result agree. Inspect all logs before removing maintenance.
-
-Finally, enable image updates (lingering was already enabled by the bootstrap):
-
-```bash
-systemctl --user enable --now podman-auto-update.timer
-```
+Using controlled wallets, create, join, optionally unjoin, and complete one low-value game. Confirm contract state, oracle registry, bot result, and web result agree before removing maintenance.
 
 ## Failure boundaries
 
-Before contract deployment, keep tokens disabled, restore the checkpointed databases, and restart the retained Docker services in oracle → bot order:
+Before contract deployment, restore the checkpointed databases if needed, keep both environment files on `TIMBA_CONTRACT_VERSION=0.1.3`, and restart the existing Podman services in order:
 
 ```bash
-cd "$HOME/docker/timba" && docker compose up -d oracle bot
+systemctl --user start timba-oracle.service
+systemctl --user start timba-bot.service
 ```
 
-Never run Docker and Podman against the same databases.
-
-After deploying 0.2.0, the old Docker clients are incompatible and must not be restarted. IDL, verification, and Podman failures are roll-forward-only while games remain disabled.
+After deploying 0.2.0, never restart clients with ABI 0.1.3. IDL, verification, web deployment, and client activation failures are roll-forward-only while games remain disabled and maintenance remains enabled.
 
 ## Evidence
 
-Archive the final state and bundle with database hashes, Docker identities, binary and IDL hashes, program output before/after, deployment signatures, verification result, Podman image digests, health/authentication evidence, controlled-game signatures, and final SOL cost.
+Archive the final state and bundle with database hashes, pre-upgrade Podman identities, binary and IDL hashes, program output before/after, deployment signatures, verification results, final Podman image digests, health/authentication evidence, Cloudflare deployment run, controlled-game signatures, and final SOL cost.

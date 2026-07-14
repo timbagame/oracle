@@ -1,5 +1,5 @@
-import { createHash, randomBytes } from "node:crypto";
-import { chmod, copyFile, lstat, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, copyFile, lstat, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 export const PROGRAM_ID = "32Jr4JnXWvqq9GqPQynkooHsszaucUUvZfNLh2hdX2L5";
@@ -125,7 +125,8 @@ export const PHASES = [
   "verify-source",
   "verify-remote",
   "release-clients",
-  "migrate-clients",
+  "activate-web",
+  "activate-clients",
   "smoke-test",
 ] as const;
 
@@ -143,7 +144,8 @@ export const PHASE_HOST: Record<Phase, ReleaseHost> = {
   "verify-source": "local",
   "verify-remote": "local",
   "release-clients": "local",
-  "migrate-clients": "vps",
+  "activate-web": "local",
+  "activate-clients": "vps",
   "smoke-test": "vps",
 };
 type SpecialCommand = "status" | "resume" | "export-bundle" | "import-bundle";
@@ -165,12 +167,10 @@ interface Options {
   approvals: Set<string>;
   sourceRoot: string;
   deployRoot: string;
-  legacyDeployRoot: string;
   releaseDir: string;
   stateFile: string;
   rpcUrl: string;
   authority?: string;
-  clientBranch: string;
   contractsCommit?: string;
   verificationJobId?: string;
   bundleFile: string;
@@ -245,11 +245,6 @@ function parseArgs(argv: string[]): Options {
   const deployRoot = resolve(
     value("--deploy-root") ?? process.env["DEPLOY_ROOT"] ?? join(home, "timba"),
   );
-  const legacyDeployRoot = resolve(
-    value("--legacy-deploy-root") ??
-      process.env["LEGACY_DEPLOY_ROOT"] ??
-      join(home, "docker/timba"),
-  );
   const releaseDir = resolve(
     value("--release-dir") ??
       process.env["RELEASE_DIR"] ??
@@ -261,13 +256,10 @@ function parseArgs(argv: string[]): Options {
     approvals,
     sourceRoot,
     deployRoot,
-    legacyDeployRoot,
     releaseDir,
     stateFile: resolve(value("--state") ?? join(releaseDir, "release-state.json")),
     rpcUrl: value("--rpc-url") ?? process.env["RPC_URL"] ?? "https://api.mainnet-beta.solana.com",
     authority: value("--authority") ?? process.env["UPGRADE_AUTHORITY"],
-    clientBranch:
-      value("--client-branch") ?? process.env["CLIENT_BRANCH"] ?? "contracts-0.2.0-compat",
     contractsCommit: value("--contracts-commit") ?? process.env["CONTRACTS_COMMIT"],
     verificationJobId: value("--verification-job-id") ?? process.env["VERIFICATION_JOB_ID"],
     bundleFile: resolve(value("--bundle") ?? join(releaseDir, "release-state.bundle.json")),
@@ -285,9 +277,8 @@ Irreversible phases additionally require --approve <phase>.
 
 Common options:
   --execute
-  --approve drain|deploy-contract|publish-idl|verify-source|verify-remote|migrate-clients|smoke-test
+  --approve drain|deploy-contract|publish-idl|verify-source|verify-remote|activate-web|activate-clients|smoke-test
   --source-root PATH   --deploy-root PATH   --release-dir PATH
-  --legacy-deploy-root PATH
   --authority PATH     --rpc-url URL         --state PATH
   --bundle PATH
   --host local|vps
@@ -384,7 +375,16 @@ async function run(command: Command, options: Options, state: ReleaseState): Pro
   if (!executable) throw new Error("Cannot execute an empty command");
   const child = Bun.spawn([executable, ...command.argv.slice(1)], {
     cwd,
-    env: { ...process.env, NO_DNA: "1", ...command.env },
+    env: {
+      ...process.env,
+      PATH: [
+        join(process.env["HOME"] ?? "", ".local/bin"),
+        join(process.env["HOME"] ?? "", ".bun/bin"),
+        process.env["PATH"] ?? "",
+      ].join(":"),
+      NO_DNA: "1",
+      ...command.env,
+    },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -421,101 +421,37 @@ async function assertFileMode(file: string): Promise<void> {
   }
 }
 
-function envEntries(input: string): Array<{ key: string; line: string }> {
-  return input
-    .split(/\r?\n/)
-    .map((line) => ({
-      line,
-      match: line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/),
-    }))
-    .filter((entry): entry is { line: string; match: RegExpMatchArray } => Boolean(entry.match))
-    .map(({ line, match }) => ({ key: match[1]!, line }));
-}
-
-export function readEnvValue(input: string, key: string): string | undefined {
-  const entry = envEntries(input).find((candidate) => candidate.key === key);
-  if (!entry) return undefined;
-  let value = entry.line.slice(entry.line.indexOf("=") + 1).trim();
-  if (
-    value.length >= 2 &&
-    ((value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'")))
-  )
-    value = value.slice(1, -1);
-  return value;
-}
-
-export function selectEnv(input: string, include: (key: string) => boolean): string {
-  const lines = envEntries(input)
-    .filter(({ key }) => include(key))
-    .map(({ line }) => line);
-  return `${lines.join("\n")}\n`;
-}
-
-async function stagePodmanDeployment(options: Options): Promise<void> {
-  const legacyEnv = await readFile(join(options.legacyDeployRoot, ".env"), "utf8");
-  const mnemonic = readEnvValue(legacyEnv, "MNEMONIC");
-  if (!mnemonic) throw new Error("Legacy Compose .env has no MNEMONIC to migrate");
-
-  const oracleRoot = join(options.deployRoot, "oracle");
-  const botRoot = join(options.deployRoot, "bot");
-  const oracleSecrets = join(oracleRoot, "secrets");
-  const botSecrets = join(botRoot, "secrets");
-  await mkdir(oracleSecrets, { recursive: true });
-  await mkdir(botSecrets, { recursive: true });
-
-  const oracleEnv = selectEnv(
-    legacyEnv,
-    (key) => key === "SOLANA_NETWORK" || (key.startsWith("ORACLE_") && key !== "ORACLE_API_TOKEN"),
-  );
-  const botEnv = selectEnv(legacyEnv, (key) => key !== "MNEMONIC" && key !== "ORACLE_API_TOKEN");
-  const upgradedAbi = "TIMBA_CONTRACT_VERSION=0.2.0\n";
-  await writeFile(join(oracleRoot, ".env"), oracleEnv + upgradedAbi, {
-    mode: 0o600,
-  });
-  await writeFile(join(botRoot, ".env"), botEnv + upgradedAbi, {
-    mode: 0o600,
-  });
-
-  for (const [project, name] of [
-    ["oracle", "admin-keypair.json"],
-    ["oracle", "oracle.sqlite"],
-    ["bot", "admin-keypair.json"],
-    ["bot", "chat-settings.sqlite"],
-    ["bot", "games.sqlite"],
-    ["bot", "tokens.sqlite"],
-  ] as const) {
-    await copyFile(
-      join(options.legacyDeployRoot, project, name),
-      join(options.deployRoot, project, name),
-    );
+export function setEnvValue(input: string, key: string, value: string): string {
+  const replacement = `${key}=${value}`;
+  const lines = input.replace(/\r\n/g, "\n").split("\n");
+  let replaced = false;
+  const output: string[] = [];
+  for (const line of lines) {
+    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+    if (match?.[1] !== key) output.push(line);
+    else if (!replaced) {
+      output.push(replacement);
+      replaced = true;
+    }
   }
+  if (!replaced) output.splice(output.at(-1) === "" ? -1 : output.length, 0, replacement);
+  return `${output.join("\n").replace(/\n+$/, "")}\n`;
+}
 
-  const token = `${randomBytes(32).toString("hex")}\n`;
-  const oracleToken = join(oracleSecrets, "oracle-api-token");
-  const botToken = join(botSecrets, "oracle-api-token");
-  const botMnemonic = join(botSecrets, "bot-mnemonic");
-  await writeFile(oracleToken, token, { mode: 0o600 });
-  await writeFile(botToken, token, { mode: 0o600 });
-  await writeFile(botMnemonic, `${mnemonic}\n`, { mode: 0o600 });
-
-  for (const file of [
-    join(oracleRoot, ".env"),
-    join(botRoot, ".env"),
-    join(oracleRoot, "admin-keypair.json"),
-    join(botRoot, "admin-keypair.json"),
-    oracleToken,
-    botToken,
-    botMnemonic,
-  ])
-    await chmod(file, 0o600);
+async function setContractVersion(file: string, version: string): Promise<void> {
+  const updated = setEnvValue(await readFile(file, "utf8"), "TIMBA_CONTRACT_VERSION", version);
+  const temporary = `${file}.tmp`;
+  await writeFile(temporary, updated, { mode: 0o600 });
+  await chmod(temporary, 0o600);
+  await rename(temporary, file);
+  await chmod(file, 0o600);
 }
 
 async function localPreflight(options: Options, state: ReleaseState): Promise<void> {
   for (const project of ["contracts", "oracle", "bot", "timba-web-cf"]) {
     await stat(path(options, project));
   }
-  for (const tool of ["anchor", "solana", "solana-verify", "bun", "jq", "sha256sum"]) {
+  for (const tool of ["anchor", "solana", "solana-verify", "bun", "gh", "jq", "sha256sum"]) {
     await run(
       { argv: ["sh", "-c", `command -v ${tool}`], captureAs: `tool.${tool}` },
       options,
@@ -579,14 +515,23 @@ async function localPreflight(options: Options, state: ReleaseState): Promise<vo
 }
 
 async function vpsPreflight(options: Options, state: ReleaseState): Promise<void> {
-  await stat(join(options.legacyDeployRoot, "docker-compose.yml"));
+  const registryAuthFile = join(process.env["HOME"] ?? "", ".config/containers/auth.json");
+  for (const file of [
+    join(options.deployRoot, "oracle/.env"),
+    join(options.deployRoot, "oracle/oracle.sqlite"),
+    join(options.deployRoot, "bot/.env"),
+    join(options.deployRoot, "bot/chat-settings.sqlite"),
+    join(options.deployRoot, "bot/games.sqlite"),
+    join(options.deployRoot, "bot/tokens.sqlite"),
+  ])
+    await stat(file);
   for (const tool of [
     "cosign",
-    "docker",
     "podman",
     "bun",
     "sqlite3",
     "sha256sum",
+    "timeout",
     "cmp",
     "systemctl",
     "journalctl",
@@ -600,14 +545,6 @@ async function vpsPreflight(options: Options, state: ReleaseState): Promise<void
       state,
     );
   }
-  await run(
-    {
-      argv: ["docker", "compose", "version"],
-      captureAs: "docker.compose.version",
-    },
-    options,
-    state,
-  );
   const rootless = await run(
     {
       argv: ["podman", "info", "--format", "{{.Host.Security.Rootless}}"],
@@ -618,11 +555,65 @@ async function vpsPreflight(options: Options, state: ReleaseState): Promise<void
   );
   if (options.execute && rootless !== "true")
     throw new Error("Podman must run rootless on the VPS");
+  const cosignVersion = await run(
+    { argv: ["cosign", "version"], captureAs: "cosign.version" },
+    options,
+    state,
+  );
+  if (options.execute && !/GitVersion:\s+v3\./.test(cosignVersion))
+    throw new Error("Cosign 3.x is required to verify OCI 1.1 image signatures");
+  for (const service of ["timba-oracle.service", "timba-bot.service"])
+    await run({ argv: ["systemctl", "--user", "is-active", service] }, options, state);
+  for (const container of ["oracle", "bot"]) {
+    const inspected = await run(
+      {
+        argv: [
+          "podman",
+          "inspect",
+          "--format",
+          '{{.ImageName}} {{.ImageDigest}} {{.State.Health.Status}} {{.OCIRuntime}} {{index .Config.Labels "PODMAN_SYSTEMD_UNIT"}} {{index .Config.Labels "io.containers.autoupdate"}}',
+          container,
+        ],
+        captureAs: `podman.${container}.preflight`,
+      },
+      options,
+      state,
+    );
+    if (
+      options.execute &&
+      (!inspected.includes(" healthy ") ||
+        !inspected.includes(" crun ") ||
+        !inspected.includes(`timba-${container}.service`) ||
+        !inspected.endsWith("registry"))
+    )
+      throw new Error(`${container} is not a healthy crun-backed auto-updating Quadlet`);
+    const version = await run(
+      { argv: ["podman", "exec", container, "sh", "-c", 'printf %s "$TIMBA_CONTRACT_VERSION"'] },
+      options,
+      state,
+    );
+    if (options.execute && version !== "0.1.3")
+      throw new Error(`${container} must use contract ABI 0.1.3 before the upgrade`);
+  }
+  for (const file of [
+    join(options.deployRoot, "oracle/.env"),
+    join(options.deployRoot, "oracle/admin-keypair.json"),
+    join(options.deployRoot, "oracle/secrets/oracle-api-token"),
+    join(options.deployRoot, "bot/.env"),
+    join(options.deployRoot, "bot/admin-keypair.json"),
+    join(options.deployRoot, "bot/secrets/oracle-api-token"),
+    join(options.deployRoot, "bot/secrets/bot-mnemonic"),
+    registryAuthFile,
+  ])
+    if (options.execute) await assertFileMode(file);
   await run(
     {
-      argv: ["docker", "compose", "ps", "--format", "json"],
-      cwd: options.legacyDeployRoot,
-      captureAs: "docker.compose.preflight",
+      argv: [
+        "cmp",
+        "--silent",
+        join(options.deployRoot, "oracle/secrets/oracle-api-token"),
+        join(options.deployRoot, "bot/secrets/oracle-api-token"),
+      ],
     },
     options,
     state,
@@ -708,34 +699,14 @@ async function drain(options: Options, state: ReleaseState): Promise<void> {
   );
   await run(
     {
-      argv: [
-        "docker",
-        "compose",
-        "exec",
-        "-T",
-        "bot",
-        "bun",
-        "run",
-        "scripts/disable-game-tokens.ts",
-      ],
-      cwd: options.legacyDeployRoot,
+      argv: ["podman", "exec", "bot", "bun", "run", "scripts/disable-game-tokens.ts"],
     },
     options,
     state,
   );
   await run(
     {
-      argv: [
-        "docker",
-        "compose",
-        "exec",
-        "-T",
-        "oracle",
-        "bun",
-        "run",
-        "scripts/manual-shutdown.ts",
-      ],
-      cwd: options.legacyDeployRoot,
+      argv: ["podman", "exec", "oracle", "bun", "run", "scripts/manual-shutdown.ts"],
       captureAs: "drain.report",
     },
     options,
@@ -745,39 +716,30 @@ async function drain(options: Options, state: ReleaseState): Promise<void> {
 }
 
 async function backup(options: Options, state: ReleaseState): Promise<void> {
+  for (const container of ["oracle", "bot"])
+    await run(
+      {
+        argv: ["podman", "inspect", container],
+        captureAs: `podman.${container}.before`,
+      },
+      options,
+      state,
+    );
   await run(
     {
-      argv: ["docker", "compose", "ps", "--format", "json"],
-      cwd: options.legacyDeployRoot,
-      captureAs: "docker.containers.before",
+      argv: ["systemctl", "--user", "stop", "timba-bot.service", "timba-oracle.service"],
     },
     options,
     state,
   );
-  await run(
-    {
-      argv: ["docker", "compose", "images", "--format", "json"],
-      cwd: options.legacyDeployRoot,
-      captureAs: "docker.images.before",
-    },
-    options,
-    state,
-  );
-  await run(
-    {
-      argv: ["docker", "compose", "stop", "bot", "oracle"],
-      cwd: options.legacyDeployRoot,
-    },
-    options,
-    state,
-  );
-  const running = await run(
-    { argv: ["docker", "compose", "ps", "-q"], cwd: options.legacyDeployRoot },
-    options,
-    state,
-  );
-  if (options.execute && running)
-    throw new Error("Legacy Docker Compose containers are still running");
+  for (const service of ["timba-bot.service", "timba-oracle.service"]) {
+    const active = await run(
+      { argv: ["systemctl", "--user", "show", service, "--property", "ActiveState", "--value"] },
+      options,
+      state,
+    );
+    if (options.execute && active !== "inactive") throw new Error(`${service} is still active`);
+  }
   const databases = [
     ["oracle", "oracle.sqlite"],
     ["bot", "chat-settings.sqlite"],
@@ -796,7 +758,7 @@ async function backup(options: Options, state: ReleaseState): Promise<void> {
   const destination = join(options.releaseDir, "databases");
   await mkdir(destination, { recursive: true });
   for (const [project, name] of databases) {
-    const source = join(options.legacyDeployRoot, project, name);
+    const source = join(options.deployRoot, project, name);
     const integrity = await run(
       {
         argv: ["sqlite3", source, "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA integrity_check;"],
@@ -810,7 +772,7 @@ async function backup(options: Options, state: ReleaseState): Promise<void> {
     state.evidence[`database.${name}.sha256`] = sha256(await readFile(join(destination, name)));
   }
   state.evidence["rollback.command"] =
-    `restore databases; cd ${options.legacyDeployRoot}; docker compose up -d oracle bot`;
+    `restore databases to ${options.deployRoot}; keep TIMBA_CONTRACT_VERSION=0.1.3; systemctl --user start timba-oracle.service timba-bot.service`;
 }
 
 async function build(options: Options, state: ReleaseState): Promise<void> {
@@ -1133,27 +1095,62 @@ async function releaseClients(options: Options, state: ReleaseState): Promise<vo
   );
 }
 
-async function migrateClients(options: Options, state: ReleaseState): Promise<void> {
+async function activateWeb(options: Options, state: ReleaseState): Promise<void> {
   requireApproval(
     options,
-    "migrate-clients",
-    "migrate the stopped 0.1.3 Docker services to 0.2.0 Podman Quadlets in oracle, bot order",
+    "activate-web",
+    "build and deploy the web client with contract ABI 0.2.0",
   );
-  const expectedDeployRoot = join(process.env["HOME"] ?? "", "timba");
-  if (resolve(options.deployRoot) !== resolve(expectedDeployRoot))
-    throw new Error(
-      `Quadlet mounts require DEPLOY_ROOT=${expectedDeployRoot}; got ${options.deployRoot}`,
-    );
-  const dockerRunning = await run(
+  const repository = "timbagame/timba-web-cf";
+  await run(
     {
-      argv: ["docker", "compose", "ps", "-q"],
-      cwd: options.legacyDeployRoot,
+      argv: [
+        "gh",
+        "variable",
+        "set",
+        "TIMBA_CONTRACT_VERSION",
+        "--body",
+        RELEASE_VERSION,
+        "--repo",
+        repository,
+      ],
     },
     options,
     state,
   );
-  if (options.execute && dockerRunning)
-    throw new Error("Refusing migration while legacy Docker containers run");
+  await run(
+    {
+      argv: ["gh", "workflow", "run", "deploy.yml", "--repo", repository, "--ref", "main"],
+      captureAs: "web.deployment.dispatch",
+    },
+    options,
+    state,
+  );
+  state.evidence["web.contractVersion"] = RELEASE_VERSION;
+  console.log("Wait for the dispatched Cloudflare deployment to succeed before client activation.");
+}
+
+async function activateClients(options: Options, state: ReleaseState): Promise<void> {
+  requireApproval(
+    options,
+    "activate-clients",
+    "switch the stopped Podman oracle and bot from contract ABI 0.1.3 to 0.2.0",
+  );
+  const expectedDeployRoot = join(process.env["HOME"] ?? "", "timba");
+  const registryAuthFile = join(process.env["HOME"] ?? "", ".config/containers/auth.json");
+  if (resolve(options.deployRoot) !== resolve(expectedDeployRoot))
+    throw new Error(
+      `Quadlet mounts require DEPLOY_ROOT=${expectedDeployRoot}; got ${options.deployRoot}`,
+    );
+  for (const service of ["timba-bot.service", "timba-oracle.service"]) {
+    const active = await run(
+      { argv: ["systemctl", "--user", "show", service, "--property", "ActiveState", "--value"] },
+      options,
+      state,
+    );
+    if (options.execute && active !== "inactive")
+      throw new Error(`Refusing client activation while ${service} is ${active}`);
+  }
   for (const project of ["oracle", "bot"]) {
     const commit = state.evidence[`${project}.commit`];
     const releaseCommit = state.evidence[`${project}.releaseCommit`];
@@ -1163,6 +1160,30 @@ async function migrateClients(options: Options, state: ReleaseState): Promise<vo
   for (const image of ["oracle", "bot"]) {
     await run(
       {
+        argv: ["podman", "pull", `ghcr.io/timbagame/${image}:main`],
+        env: { REGISTRY_AUTH_FILE: registryAuthFile },
+        captureAs: `podman.${image}.pull`,
+      },
+      options,
+      state,
+    );
+    const digest = await run(
+      {
+        argv: [
+          "podman",
+          "image",
+          "inspect",
+          "--format",
+          "{{.Digest}}",
+          `ghcr.io/timbagame/${image}:main`,
+        ],
+        captureAs: `podman.${image}.digest`,
+      },
+      options,
+      state,
+    );
+    await run(
+      {
         argv: [
           "cosign",
           "verify",
@@ -1170,15 +1191,14 @@ async function migrateClients(options: Options, state: ReleaseState): Promise<vo
           `https://github.com/timbagame/${image}/.github/workflows/container-publish.yml@refs/heads/main`,
           "--certificate-oidc-issuer",
           "https://token.actions.githubusercontent.com",
-          `ghcr.io/timbagame/${image}:main`,
+          `ghcr.io/timbagame/${image}@${digest || "<digest>"}`,
         ],
+        env: { REGISTRY_AUTH_FILE: registryAuthFile },
       },
       options,
       state,
     );
-    await run({ argv: ["podman", "pull", `ghcr.io/timbagame/${image}:main`] }, options, state);
   }
-  if (options.execute) await stagePodmanDeployment(options);
   for (const file of [
     join(options.deployRoot, "oracle/admin-keypair.json"),
     join(options.deployRoot, "oracle/secrets/oracle-api-token"),
@@ -1199,27 +1219,19 @@ async function migrateClients(options: Options, state: ReleaseState): Promise<vo
     options,
     state,
   );
-  const quadletDir = join(process.env["HOME"] ?? "", ".config/containers/systemd");
   if (options.execute) {
-    await mkdir(quadletDir, { recursive: true });
-    await copyFile(
-      join(options.releaseDir, "quadlet/timba.network"),
-      join(quadletDir, "timba.network"),
-    );
-    await copyFile(
-      join(options.releaseDir, "quadlet/timba-oracle.container"),
-      join(quadletDir, "timba-oracle.container"),
-    );
-    await copyFile(
-      join(options.releaseDir, "quadlet/timba-bot.container"),
-      join(quadletDir, "timba-bot.container"),
-    );
+    await setContractVersion(join(options.deployRoot, "oracle/.env"), RELEASE_VERSION);
+    await setContractVersion(join(options.deployRoot, "bot/.env"), RELEASE_VERSION);
   } else {
-    console.log(`Would install the network and two Quadlet files in ${quadletDir}`);
+    console.log(`Would set TIMBA_CONTRACT_VERSION=${RELEASE_VERSION} in both service env files`);
   }
-  await run({ argv: ["systemctl", "--user", "daemon-reload"] }, options, state);
   await run({ argv: ["systemctl", "--user", "start", "timba-oracle.service"] }, options, state);
   await run({ argv: ["systemctl", "--user", "is-active", "timba-oracle.service"] }, options, state);
+  await run(
+    { argv: ["timeout", "120", "podman", "wait", "--condition", "healthy", "oracle"] },
+    options,
+    state,
+  );
   const oracleInspect = await run(
     {
       argv: [
@@ -1268,8 +1280,20 @@ async function migrateClients(options: Options, state: ReleaseState): Promise<vo
     options,
     state,
   );
+  const oracleVersion = await run(
+    { argv: ["podman", "exec", "oracle", "sh", "-c", 'printf %s "$TIMBA_CONTRACT_VERSION"'] },
+    options,
+    state,
+  );
+  if (options.execute && oracleVersion !== RELEASE_VERSION)
+    throw new Error(`Oracle started with contract ABI ${oracleVersion}`);
   await run({ argv: ["systemctl", "--user", "start", "timba-bot.service"] }, options, state);
   await run({ argv: ["systemctl", "--user", "is-active", "timba-bot.service"] }, options, state);
+  await run(
+    { argv: ["timeout", "120", "podman", "wait", "--condition", "healthy", "bot"] },
+    options,
+    state,
+  );
   await run(
     {
       argv: [
@@ -1303,6 +1327,13 @@ async function migrateClients(options: Options, state: ReleaseState): Promise<vo
     (!botInspect.includes("timba-bot.service") || !botInspect.endsWith("registry"))
   )
     throw new Error("Bot is not supervised by the expected auto-updating Quadlet");
+  const botVersion = await run(
+    { argv: ["podman", "exec", "bot", "sh", "-c", 'printf %s "$TIMBA_CONTRACT_VERSION"'] },
+    options,
+    state,
+  );
+  if (options.execute && botVersion !== RELEASE_VERSION)
+    throw new Error(`Bot started with contract ABI ${botVersion}`);
   for (const service of ["timba-oracle.service", "timba-bot.service"]) {
     await run(
       {
@@ -1313,16 +1344,11 @@ async function migrateClients(options: Options, state: ReleaseState): Promise<vo
       state,
     );
   }
-  const dockerRestarted = await run(
-    {
-      argv: ["docker", "compose", "ps", "-q"],
-      cwd: options.legacyDeployRoot,
-    },
+  await run(
+    { argv: ["systemctl", "--user", "is-active", "podman-auto-update.timer"] },
     options,
     state,
   );
-  if (options.execute && dockerRestarted)
-    throw new Error("A legacy Docker service restarted during migration");
   console.log(
     "Confirm the Cloudflare workflow deployed the recorded web main commit before continuing.",
   );
@@ -1359,7 +1385,8 @@ const handlers: Record<Phase, (options: Options, state: ReleaseState) => Promise
   "verify-source": verifySource,
   "verify-remote": verifyRemote,
   "release-clients": releaseClients,
-  "migrate-clients": migrateClients,
+  "activate-web": activateWeb,
+  "activate-clients": activateClients,
   "smoke-test": smokeTest,
 };
 
