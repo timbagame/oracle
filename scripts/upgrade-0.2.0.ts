@@ -138,27 +138,23 @@ function parseArgs(argv: string[]): Options {
     if (arg === "--approve" && approval) approvals.add(approval);
   });
 
+  const host = value("--host");
+  if (host && host !== "local" && host !== "vps") usage();
+  const home = process.env["HOME"] ?? "";
+  const defaultSourceRoot =
+    host === "vps" ? join(home, "timba") : resolve(import.meta.dir, "../..");
+
   const sourceRoot = resolve(
-    value("--source-root") ??
-      process.env["SOURCE_ROOT"] ??
-      resolve(import.meta.dir, "../.."),
+    value("--source-root") ?? process.env["SOURCE_ROOT"] ?? defaultSourceRoot,
   );
   const deployRoot = resolve(
-    value("--deploy-root") ??
-      process.env["DEPLOY_ROOT"] ??
-      join(process.env["HOME"] ?? "", "timba"),
+    value("--deploy-root") ?? process.env["DEPLOY_ROOT"] ?? join(home, "timba"),
   );
   const releaseDir = resolve(
     value("--release-dir") ??
       process.env["RELEASE_DIR"] ??
-      join(
-        process.env["HOME"] ?? sourceRoot,
-        `timba-release-${RELEASE_VERSION}`,
-      ),
+      join(home || sourceRoot, `timba-release-${RELEASE_VERSION}`),
   );
-  const host = value("--host");
-  if (host && host !== "local" && host !== "vps") usage();
-
   return {
     command,
     execute: argv.includes("--execute"),
@@ -778,13 +774,36 @@ async function deployContract(
   if (!options.authority)
     throw new Error("--authority or UPGRADE_AUTHORITY is required");
   await assertFileMode(options.authority);
+  const authorityAddress = await run(
+    {
+      argv: ["solana", "address", "-k", options.authority],
+      captureAs: "authority.address",
+    },
+    options,
+    state,
+  );
+  await run(
+    {
+      argv: [
+        "solana",
+        "balance",
+        "-k",
+        options.authority,
+        "--url",
+        options.rpcUrl,
+      ],
+      captureAs: "authority.balance",
+    },
+    options,
+    state,
+  );
   const deployedBinary = join(options.releaseDir, "timba-mainnet-program.so");
   const localBinary = join(
     path(options, "contracts"),
     "target/verifiable/timba.so",
   );
   if (options.execute) await mkdir(options.releaseDir, { recursive: true });
-  await run(
+  const programBefore = await run(
     {
       argv: ["solana", "program", "show", PROGRAM_ID, "--url", options.rpcUrl],
       captureAs: "program.before",
@@ -792,6 +811,10 @@ async function deployContract(
     options,
     state,
   );
+  if (options.execute && !programBefore.includes(authorityAddress))
+    throw new Error(
+      `Program upgrade authority does not match ${authorityAddress}`,
+    );
   await run(
     {
       argv: [
