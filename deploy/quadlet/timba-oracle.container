@@ -17,7 +17,7 @@ Volume=%h/timba/oracle/oracle.sqlite:/app/oracle.sqlite:Z
 NoNewPrivileges=true
 DropCapability=all
 PidsLimit=256
-HealthCmd=bun -e "const response = await fetch('http://127.0.0.1:3001/health'); if (!response.ok) process.exit(1)"
+HealthCmd=bun -e process.exit\(\(await\(fetch\(String.fromCharCode\(104,116,116,112,58,47,47,49,50,55,46,48,46,48,46,49,58,51,48,48,49,47,104,101,97,108,116,104\)\)\)\).ok?0:1\)
 HealthInterval=30s
 HealthTimeout=5s
 HealthRetries=3
