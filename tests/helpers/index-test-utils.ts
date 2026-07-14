@@ -31,7 +31,9 @@ export async function createIndexRouterTestContext(
   const testEnv = await createTestEnv({ prefix });
   const module = indexModule;
   const handlers = module.buildHandlers(createBasicOracle(oracleOptions));
-  const router = module.buildFetchRouter(handlers);
+  const router = module.buildFetchRouter(handlers, {
+    enableAdminRoutesForTesting: true,
+  });
   return {
     testEnv,
     module,

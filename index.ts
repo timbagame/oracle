@@ -13,6 +13,12 @@ import type {
 import type { ToggleAutoCompleteResult } from "./database.ts";
 import { logger } from "./logger.ts";
 import { normalizeGameType } from "./game-type.ts";
+import {
+  MAX_REQUEST_BODY_BYTES,
+  createRouteRateLimiter,
+  hasValidBearerToken,
+  type RateLimitResult,
+} from "./api-security.ts";
 
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
 const IS_TEST_ENV = isTestEnvironment();
@@ -21,13 +27,15 @@ const EVENT_LISTENER_SHUTDOWN_TIMEOUT_MS = IS_TEST_ENV ? 50 : 5000;
 const INTERNAL_SERVER_ERROR_MESSAGE = "Internal server error";
 const GAME_TYPE_FIELD = "gameType";
 
-// CORS headers configuration
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+const JSON_HEADERS = {
   "Content-Type": "application/json",
 };
+const PROTECTED_ROUTES = new Set([
+  "/generate-hash",
+  "/sign-game-transaction",
+  "/stats",
+  "/games/complete-now",
+]);
 
 type HttpMethod = "GET" | "POST";
 
@@ -111,12 +119,12 @@ async function stopServer(oracle: OracleApi, exitCode?: number): Promise<void> {
 // Response helpers
 function createResponse(data: unknown, status: number = 200): Response {
   if (data === null || data === undefined) {
-    return new Response(null, { status, headers: CORS_HEADERS });
+    return new Response(null, { status, headers: JSON_HEADERS });
   }
 
   const jsonInput = data as Parameters<typeof JSON.stringify>[0];
   const body = typeof data === "string" ? data : JSON.stringify(jsonInput);
-  return new Response(body, { status, headers: CORS_HEADERS });
+  return new Response(body, { status, headers: JSON_HEADERS });
 }
 
 function createServiceResponse({
@@ -225,6 +233,11 @@ async function readJsonBody(
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType && !contentType.toLowerCase().includes("application/json")) {
     return { body: null };
+  }
+
+  const contentLength = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
+    return { body: null, parseError: "Request body too large" };
   }
 
   try {
@@ -547,26 +560,26 @@ export const ROUTE_METADATA: ReadonlyArray<RouteDocumentation> = [
     summary: "Detailed statistics and metrics about the oracle service",
   },
   {
-    path: "/games/requeue",
-    method: "POST",
-    handler: "handleRequeueGame",
-    summary: "Reset completion attempts so a pending game can be scanned again",
-    requestExample: '{ "gameAddress": "Ht8Kup..." }',
-  },
-  {
     path: "/games/complete-now",
     method: "POST",
     handler: "handleCompleteGameNow",
     summary: "Attempt immediate completion for one tracked game",
     requestExample: '{ "gameAddress": "Ht8Kup..." }',
   },
+];
+
+const ADMIN_ROUTE_METADATA: ReadonlyArray<RouteDocumentation> = [
+  {
+    path: "/games/requeue",
+    method: "POST",
+    handler: "handleRequeueGame",
+    summary: "CLI-only requeue operation",
+  },
   {
     path: "/games/auto-complete",
     method: "POST",
     handler: "handleToggleAutoComplete",
-    summary: "Enable or disable automatic completion for a tracked game",
-    requestExample:
-      '{ "gameAddress": "Ht8Kup...", "autoCompleteDisabled": true | false }',
+    summary: "CLI-only auto-complete operation",
   },
 ];
 
@@ -673,23 +686,58 @@ export function generateDocumentationHtml(
 const API_DOCUMENTATION = generateDocumentationHtml(ROUTE_METADATA);
 
 // Build a reusable fetch router for easier testing
-export function buildFetchRouter(handlers: ReturnType<typeof buildHandlers>) {
+export interface RouterSecurityOptions {
+  apiToken?: string | null;
+  checkRateLimit?: (path: string) => RateLimitResult;
+  enableAdminRoutesForTesting?: boolean;
+}
+
+export function buildFetchRouter(
+  handlers: ReturnType<typeof buildHandlers>,
+  security: RouterSecurityOptions = {},
+) {
+  const checkRateLimit = security.checkRateLimit ?? createRouteRateLimiter();
+
   return async function fetchRouter(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method.toUpperCase();
 
-    // CORS preflight
-    if (method === "OPTIONS") return createResponse(null, 200);
-
     if (path === "/" && method === "GET") {
       return createHtmlResponse(API_DOCUMENTATION);
+    }
+
+    if (PROTECTED_ROUTES.has(path) && security.apiToken !== undefined) {
+      if (
+        !security.apiToken ||
+        !hasValidBearerToken(
+          request.headers.get("authorization"),
+          security.apiToken,
+        )
+      ) {
+        return createErrorResponse("Unauthorized", 401);
+      }
+
+      const rateLimit = checkRateLimit(path);
+      if (!rateLimit.allowed) {
+        const response = createErrorResponse("Too many requests", 429);
+        response.headers.set(
+          "Retry-After",
+          String(rateLimit.retryAfterSeconds ?? 1),
+        );
+        return response;
+      }
     }
 
     try {
       const route = ROUTE_METADATA.find(
         (entry) => entry.path === path && entry.method === method,
-      );
+      ) ??
+        (security.enableAdminRoutesForTesting
+          ? ADMIN_ROUTE_METADATA.find(
+              (entry) => entry.path === path && entry.method === method,
+            )
+          : undefined);
 
       if (!route) {
         return createErrorResponse("Endpoint not found", 404);
@@ -716,6 +764,9 @@ export function buildFetchRouter(handlers: ReturnType<typeof buildHandlers>) {
 if (!IS_TEST_ENV) {
   const config = getConfig();
   const port = config.oraclePort ?? DEFAULT_ORACLE_PORT;
+  if (!config.apiToken) {
+    throw new Error("ORACLE_API_TOKEN is required to start the oracle API");
+  }
 
   const realOracle = OracleService.getInstance();
   const oracleApi: OracleApi = {
@@ -733,9 +784,10 @@ if (!IS_TEST_ENV) {
       realOracle.setAutoCompleteDisabled(gameAddress, disabled),
   };
   const handlers = buildHandlers(oracleApi);
-  const fetchRouter = buildFetchRouter(handlers);
+  const fetchRouter = buildFetchRouter(handlers, { apiToken: config.apiToken });
   server = Bun.serve({
     port,
+    maxRequestBodySize: MAX_REQUEST_BODY_BYTES,
     fetch: fetchRouter,
   });
 

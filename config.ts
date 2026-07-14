@@ -1,6 +1,7 @@
 import * as path from "path";
 import { getEnvironmentMode, readEnv, shouldUseEphemeralKeypair } from "./env.ts";
 import { parseRpcEndpointList } from "./rpc-endpoints.ts";
+import * as fs from "node:fs";
 
 export const DEFAULT_ORACLE_PORT = 3001;
 const DEFAULT_DATABASE_FILE = "oracle.sqlite";
@@ -85,6 +86,18 @@ function resolvePath(relativeOrAbsolute: string): string {
     : path.join(process.cwd(), relativeOrAbsolute);
 }
 
+function readProtectedSecret(filePath: string, label: string): string {
+  const resolved = resolvePath(filePath);
+  const stats = fs.lstatSync(resolved);
+  if (!stats.isFile() || stats.isSymbolicLink()) throw new Error(`${label} must be a regular file, not a symlink`);
+  if (stats.size <= 0 || stats.size > 4096) throw new Error(`${label} has an invalid size`);
+  const mode = stats.mode & 0o777;
+  if ((mode & 0o077) !== 0) throw new Error(`${label} has insecure permissions (${mode.toString(8)}); use 400 or 600`);
+  const value = fs.readFileSync(resolved, "utf8").trim();
+  if (!value) throw new Error(`${label} is empty`);
+  return value;
+}
+
 export interface OracleRuntimeConfig {
   readonly solanaNetwork: string;
   readonly solanaNetworks: readonly string[];
@@ -100,6 +113,7 @@ export interface OracleRuntimeConfig {
   readonly useEphemeralKeypair: boolean;
   readonly environment: string;
   readonly botInternalUrl: string | null;
+  readonly apiToken: string | null;
 }
 
 let cachedConfig: OracleRuntimeConfig | null = null;
@@ -151,6 +165,10 @@ function loadConfig(): OracleRuntimeConfig {
 
   const useEphemeralKeypair = shouldUseEphemeralKeypair();
   const botInternalUrl = readEnv("BOT_INTERNAL_URL") ?? "http://bot:3002";
+  const apiTokenFile = readEnv("ORACLE_API_TOKEN_FILE")?.trim();
+  const apiToken = apiTokenFile
+    ? readProtectedSecret(apiTokenFile, "Oracle API token file")
+    : readEnv("ORACLE_API_TOKEN")?.trim() || null;
 
   return {
     solanaNetwork,
@@ -167,6 +185,7 @@ function loadConfig(): OracleRuntimeConfig {
     useEphemeralKeypair,
     environment,
     botInternalUrl,
+    apiToken,
   } as const;
 }
 

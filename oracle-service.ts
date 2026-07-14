@@ -592,9 +592,11 @@ export class OracleService {
     }
 
     transaction.partialSign(this.adminKeypair);
-    return transaction
+    const serialized = transaction
       .serialize({ requireAllSignatures: false })
       .toString("base64");
+    this.db.markSecretKeySigned(expectedGame.toBase58());
+    return serialized;
   }
 
   public async completeGame(
@@ -780,6 +782,9 @@ export class OracleService {
 
   public cleanupOldRecords(hoursOld: number = 48) {
     const result = this.db.cleanupOldRecords(hoursOld);
+    const deletedUnsignedCommitments =
+      hoursOld > 0 ? this.db.cleanupUnsignedCommitments(10) : 0;
+    result.deletedSecrets += deletedUnsignedCommitments;
     this.metrics.recordCleanupSweep({
       hoursOld,
       deletedSecrets: result.deletedSecrets,

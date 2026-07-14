@@ -31,27 +31,23 @@ describe("index router", () => {
     context.testEnv.cleanup();
   });
 
-  test("OPTIONS preflight returns CORS headers", async () => {
+  test("does not expose CORS preflight handling", async () => {
     const response = await context.router(
       buildRequest("/health", { method: "OPTIONS" }),
     );
-    expect(response.status).toBe(200);
-    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(response.status).toBe(404);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
   });
 
-  test("OPTIONS handlers expose the full documented CORS headers", async () => {
+  test("does not emit permissive CORS headers", async () => {
     const response = await context.router(
       buildRequest("/generate-hash", { method: "OPTIONS" }),
     );
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
-    expect(response.headers.get("Access-Control-Allow-Methods")).toBe(
-      "GET, POST, OPTIONS",
-    );
-    expect(response.headers.get("Access-Control-Allow-Headers")).toBe(
-      "Content-Type",
-    );
+    expect(response.status).toBe(404);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    expect(response.headers.get("Access-Control-Allow-Methods")).toBeNull();
+    expect(response.headers.get("Access-Control-Allow-Headers")).toBeNull();
     expect(response.headers.get("Content-Type")).toBe("application/json");
   });
 
@@ -66,6 +62,38 @@ describe("index router", () => {
     expect(response.status).toBe(200);
     expect((json as any).success).toBe(true);
     expect((json as any).status).toBe("healthy");
+  });
+
+  test("requires authentication for service routes", async () => {
+    const securedRouter = context.module.buildFetchRouter(context.handlers, {
+      apiToken: "service-secret",
+    });
+
+    const unauthorized = await securedRouter(
+      buildRequest("/generate-hash", { method: "POST" }),
+    );
+    expect(unauthorized.status).toBe(401);
+
+    const authorized = await securedRouter(
+      buildRequest("/generate-hash", {
+        method: "POST",
+        headers: { authorization: "Bearer service-secret" },
+      }),
+    );
+    expect(authorized.status).toBe(200);
+  });
+
+  test("does not expose administrative HTTP routes", async () => {
+    const productionRouter = context.module.buildFetchRouter(context.handlers, {
+      apiToken: "service-secret",
+    });
+    const response = await productionRouter(
+      buildRequest("/games/auto-complete", {
+        method: "POST",
+        headers: { authorization: "Bearer service-secret" },
+      }),
+    );
+    expect(response.status).toBe(404);
   });
 
   test("POST /generate-hash returns secrets", async () => {

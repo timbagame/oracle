@@ -3,6 +3,7 @@
   "scripts": {
     "start": "bun run index.ts",
     "dev": "bun run --watch index.ts",
+    "admin": "bun run scripts/oracle-admin.ts",
     "typecheck": "bun x tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

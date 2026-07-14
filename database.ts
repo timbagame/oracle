@@ -10,6 +10,8 @@ const SQL_STATEMENTS = Object.freeze({
   insertSecretKey:
     "INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)",
   markSecretKeyUsed: "UPDATE secret_keys SET used = TRUE WHERE game_address = ?",
+  markSecretKeySigned:
+    "UPDATE secret_keys SET signed_at = COALESCE(signed_at, ?) WHERE game_address = ? AND used = FALSE",
   reactivateSecretKey: "UPDATE secret_keys SET used = FALSE WHERE game_address = ?",
   deleteSecretKey: "DELETE FROM secret_keys WHERE game_address = ?",
   upsertGameTracking:
@@ -129,6 +131,7 @@ const TABLE_DEFINITIONS: ReadonlyArray<{
         secret_key TEXT NOT NULL,
         random_hash TEXT NOT NULL,
         created_at INTEGER NOT NULL,
+        signed_at INTEGER,
         used BOOLEAN DEFAULT FALSE
       )
     `,
@@ -288,9 +291,30 @@ export class OracleDatabase {
 
   private createTables(): void {
     this.executeSchemaSteps(TABLE_DEFINITIONS);
+    this.ensureSecretSchema();
     this.ensureTicketSchema();
     this.ensureTrackingSchema();
     this.ensureTrackingIndexes();
+  }
+
+  private ensureSecretSchema(): void {
+    const tableInfo = this.db
+      .query("PRAGMA table_info('secret_keys')")
+      .all() as Array<{ name: string }>;
+    if (!tableInfo.some((column) => column.name === "signed_at")) {
+      this.executeSchemaSteps([
+        {
+          sql: "ALTER TABLE secret_keys ADD COLUMN signed_at INTEGER",
+          log: "Adding signed_at column to secret_keys",
+          error: "Failed to add signed_at column to secret_keys",
+        },
+        {
+          sql: "UPDATE secret_keys SET signed_at = created_at WHERE signed_at IS NULL",
+          log: "Preserving existing commitments as signed",
+          error: "Failed to preserve existing commitments",
+        },
+      ]);
+    }
   }
 
   private ensureTicketSchema(): void {
@@ -473,6 +497,56 @@ export class OracleDatabase {
       "Failed to mark secret key as used",
       gameAddress,
     );
+  }
+
+  public markSecretKeySigned(gameAddress: string): void {
+    this.runStatement(
+      SQL_STATEMENTS.markSecretKeySigned,
+      "Failed to mark secret key as signed",
+      Date.now(),
+      gameAddress,
+    );
+  }
+
+  public cleanupUnsignedCommitments(minutesOld: number = 10): number {
+    if (minutesOld <= 0) return 0;
+    const cutoffTime = Date.now() - minutesOld * 60 * 1000;
+
+    return this.executeDbOperation(() => {
+      const cleanup = this.db.transaction(() => {
+        this.db
+          .query(
+            `DELETE FROM game_players
+             WHERE game_address IN (
+               SELECT game_address FROM secret_keys
+               WHERE signed_at IS NULL AND used = FALSE AND created_at < ?
+             )`,
+          )
+          .run(cutoffTime);
+        this.db
+          .query(
+            `DELETE FROM game_tracking
+             WHERE status = ? AND game_address IN (
+               SELECT game_address FROM secret_keys
+               WHERE signed_at IS NULL AND used = FALSE AND created_at < ?
+             )`,
+          )
+          .run(DEFAULT_STATUS, cutoffTime);
+        const result = this.db
+          .query(
+            `DELETE FROM secret_keys
+             WHERE signed_at IS NULL
+               AND used = FALSE
+               AND created_at < ?
+               AND game_address NOT IN (
+                 SELECT game_address FROM game_tracking WHERE status != ?
+               )`,
+          )
+          .run(cutoffTime, DEFAULT_STATUS);
+        return result.changes;
+      });
+      return cleanup();
+    }, "Failed to clean up unsigned commitments", 0);
   }
 
   public reactivateSecretKey(gameAddress: string): boolean {

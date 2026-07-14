@@ -39,10 +39,15 @@ The Oracle service uses a hybrid approach with performance optimizations:
 | `/generate-hash`          | POST   | Generate and retain a secret; return commitment  | `gameType` (optional)                        |
 | `/sign-game-transaction`  | POST   | Validate and partially sign game initialization  | `txBase64`                                   |
 | `/stats`                  | GET    | Oracle statistics and metrics                    | None                                         |
-| `/games/requeue`          | POST   | Reset completion attempts for a pending game     | `gameAddress`                                |
 | `/games/complete-now`     | POST   | Attempt immediate completion of one tracked game | `gameAddress`                                |
-| `/games/auto-complete`    | POST   | Toggle automatic completion for a tracked game   | `gameAddress`, `autoCompleteDisabled`         |
 | `/`                       | GET    | Generated API documentation                      | None                                         |
+
+All endpoints except `/health` and `/` require bearer authentication. Rootless Podman reads the token from the permission-checked `secrets/oracle-api-token` file; local development may use `ORACLE_API_TOKEN`. Administrative requeue and auto-complete controls are intentionally CLI-only:
+
+```bash
+bun run admin requeue <game-address>
+bun run admin auto-complete <game-address> <on|off>
+```
 
 ### Game Types Supported
 
@@ -97,6 +102,7 @@ SOLANA_NETWORK=["https://api.mainnet-beta.solana.com","https://rpc-backup.exampl
 
 # Optional: API server port (default: 3001)
 ORACLE_PORT=3001
+ORACLE_API_TOKEN=<shared-random-secret>
 
 # Optional: allow the service to generate an ephemeral admin keypair when the
 # configured keypair file is missing. This is automatically enabled during tests

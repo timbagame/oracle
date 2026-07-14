@@ -1,0 +1,19 @@
+[Unit]
+Description=Timba oracle (rootless Podman)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/timba/oracle
+ExecStartPre=-/usr/bin/podman network create timba
+ExecStart=/usr/bin/podman compose -f compose.yml up -d
+ExecReload=/usr/bin/podman compose -f compose.yml pull
+ExecReload=/usr/bin/podman compose -f compose.yml up -d
+ExecStop=/usr/bin/podman compose -f compose.yml down
+TimeoutStartSec=0
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target
