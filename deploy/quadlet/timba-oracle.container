@@ -1,0 +1,33 @@
+[Unit]
+Description=Timba oracle
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=ghcr.io/timbagame/oracle:main
+ContainerName=oracle
+AutoUpdate=registry
+Network=timba.network
+EnvironmentFile=%h/timba/oracle/.env
+Environment=ORACLE_PORT=3001
+Environment=ORACLE_API_TOKEN_FILE=/run/secrets/oracle_api_token
+Volume=%h/timba/oracle/admin-keypair.json:/app/admin-keypair.json:ro,Z
+Volume=%h/timba/oracle/secrets/oracle-api-token:/run/secrets/oracle_api_token:ro,Z
+Volume=%h/timba/oracle/oracle.sqlite:/app/oracle.sqlite:Z
+NoNewPrivileges=true
+DropCapability=all
+PidsLimit=256
+HealthCmd=bun -e "const response = await fetch('http://127.0.0.1:3001/health'); if (!response.ok) process.exit(1)"
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=20s
+HealthOnFailure=kill
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

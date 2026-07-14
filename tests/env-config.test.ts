@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as path from "path";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { getEnvironmentMode, isTestEnvironment, shouldUseEphemeralKeypair } from "../env.ts";
 import { getConfig, resetConfigForTesting } from "../config.ts";
 
@@ -21,6 +23,8 @@ function resetEnv() {
     "ORACLE_DISABLE_RPC_BATCH_TRANSACTIONS",
     "DATABASE_FILE",
     "ORACLE_KEYPAIR_PATH",
+    "ORACLE_API_TOKEN",
+    "ORACLE_API_TOKEN_FILE",
   ];
   for (const key of keys) {
     delete process.env[key];
@@ -127,6 +131,33 @@ describe("runtime config", () => {
     resetConfigForTesting();
     process.env["ORACLE_DISABLE_RPC_BATCH_TRANSACTIONS"] = "false";
     expect(getConfig().disableBatchTransactions).toBe(false);
+  });
+
+  it("normalizes the shared API token", () => {
+    process.env["SOLANA_NETWORK"] = "https://rpc";
+    process.env["ORACLE_API_TOKEN"] = "  service-secret  ";
+    expect(getConfig().apiToken).toBe("service-secret");
+
+    resetConfigForTesting();
+    process.env["ORACLE_API_TOKEN"] = "   ";
+    expect(getConfig().apiToken).toBeNull();
+  });
+
+  it("loads the shared API token only from a protected regular file", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "oracle-secret-"));
+    const file = path.join(dir, "token");
+    try {
+      writeFileSync(file, "service-secret\n", { mode: 0o600 });
+      process.env["SOLANA_NETWORK"] = "https://rpc";
+      process.env["ORACLE_API_TOKEN_FILE"] = file;
+      expect(getConfig().apiToken).toBe("service-secret");
+
+      resetConfigForTesting();
+      chmodSync(file, 0o640);
+      expect(() => getConfig()).toThrow("insecure permissions");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("resolves relative paths and caches results until reset", () => {

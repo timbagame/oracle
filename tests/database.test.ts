@@ -336,6 +336,20 @@ describe("OracleDatabase", () => {
     expect(db.getGamePlayers(game)).toEqual(["player-d", "player-c"]);
   });
 
+  it("atomically applies the participant moved by swap removal", () => {
+    const db = OracleDatabase.getInstance();
+    const game = "game-swap-remove";
+
+    db.applyPlayerMutations(game, [
+      { action: "joined", playerAddress: "player-a", ticketIndex: 0 },
+      { action: "joined", playerAddress: "player-b", ticketIndex: 1 },
+      { action: "joined", playerAddress: "player-c", ticketIndex: 2 },
+      { action: "unjoined", ticketIndex: 1, movedParticipant: "player-c" },
+    ]);
+
+    expect(db.getGamePlayers(game)).toEqual(["player-a", "player-c"]);
+  });
+
   it("reports connection info and reopens after close", () => {
     const db = OracleDatabase.getInstance();
 
@@ -429,5 +443,26 @@ describe("finalizeCompletedGame", () => {
         .some((entry) => entry.game_address === gameAddress)
     ).toBe(false);
     expect(db.getGamePlayers(gameAddress)).toEqual([]);
+  });
+});
+
+describe("unsigned commitment cleanup", () => {
+  it("deletes only expired commitments that were never signed", () => {
+    const db = OracleDatabase.getInstance();
+    const unsigned = "unsigned-game";
+    const signed = "signed-game";
+
+    for (const address of [unsigned, signed]) {
+      db.saveSecretKey(address, "aa".repeat(32), "bb".repeat(32));
+      db.trackGame(address);
+    }
+    db.markSecretKeySigned(signed);
+
+    const sqlite = (db as any).db;
+    sqlite.query("UPDATE secret_keys SET created_at = 0").run();
+
+    expect(db.cleanupUnsignedCommitments(10)).toBe(1);
+    expect(db.getSecretKeyInfo(unsigned)).toBeNull();
+    expect(db.getSecretKeyInfo(signed)).not.toBeNull();
   });
 });

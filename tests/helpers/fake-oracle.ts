@@ -9,6 +9,7 @@ type CleanupStats = ReturnType<OracleApi["cleanupOldRecords"]>;
 export interface FakeOracleOptions {
   stats?: Partial<OracleStats>;
   generateGameSecrets?: OracleApi["generateGameSecrets"];
+  signGameTransaction?: NonNullable<OracleApi["signGameTransaction"]>;
   getStats?: OracleApi["getStats"];
   scanAndCompleteActiveGames?: OracleApi["scanAndCompleteActiveGames"];
   startEventListening?: OracleApi["startEventListening"];
@@ -26,7 +27,9 @@ const DEFAULT_CLEANUP_STATS: CleanupStats = {
   deletedPlayers: 0,
 };
 
-export function createBasicStats(overrides: Partial<OracleStats> = {}): OracleStats {
+export function createBasicStats(
+  overrides: Partial<OracleStats> = {},
+): OracleStats {
   return {
     ...createEmptyStats(),
     eventListening: false,
@@ -39,6 +42,7 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
   const {
     stats,
     generateGameSecrets,
+    signGameTransaction,
     getStats,
     scanAndCompleteActiveGames,
     startEventListening,
@@ -52,20 +56,26 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
 
   return {
     generateGameSecrets:
-      generateGameSecrets ?? ((
-        _options?: Parameters<OracleApi["generateGameSecrets"]>[0]
-      ) => ({ randomHash: "test-hash", gameAddress: "game-123" })),
-    getStats:
-      getStats ?? (() => createBasicStats(stats)),
+      generateGameSecrets ??
+      ((_options?: Parameters<OracleApi["generateGameSecrets"]>[0]) => ({
+        randomHash: "test-hash",
+        gameAddress: "game-123",
+      })),
+    signGameTransaction,
+    getStats: getStats ?? (() => createBasicStats(stats)),
     scanAndCompleteActiveGames:
-      scanAndCompleteActiveGames ?? (async () => ({ ...createEmptyCompletionStats() })),
+      scanAndCompleteActiveGames ??
+      (async () => ({ ...createEmptyCompletionStats() })),
     startEventListening: startEventListening ?? (async () => {}),
     stopEventListening: stopEventListening ?? (async () => {}),
     close: close ?? (async () => {}),
-    cleanupOldRecords: cleanupOldRecords ?? (() => ({ ...DEFAULT_CLEANUP_STATS })),
+    cleanupOldRecords:
+      cleanupOldRecords ?? (() => ({ ...DEFAULT_CLEANUP_STATS })),
     requeueGame: requeueGame ?? (() => ({ success: true })),
-    completeGameNow: completeGameNow ?? (async () => ({ success: false, notReady: true })),
+    completeGameNow:
+      completeGameNow ?? (async () => ({ success: false, notReady: true })),
     setAutoCompleteDisabled:
-      setAutoCompleteDisabled ?? (() => ({ success: true, autoCompleteDisabled: false })),
+      setAutoCompleteDisabled ??
+      (() => ({ success: true, autoCompleteDisabled: false })),
   };
 }

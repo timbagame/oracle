@@ -38,7 +38,7 @@ export interface OracleEventProcessorOptions {
 
 type PlayerMutation =
   | { action: "joined"; playerAddress: string; ticketIndex: number }
-  | { action: "unjoined"; ticketIndex: number };
+  | { action: "unjoined"; ticketIndex: number; movedParticipant?: string };
 
 type PendingPlayerMutationBuffer = {
   operations: PlayerMutation[];
@@ -274,7 +274,7 @@ export class OracleEventProcessor {
       return;
     }
 
-    const { gameAddress, playerAddress, ticketIndex } = eventData;
+    const { gameAddress, playerAddress, ticketIndex, movedParticipant } = eventData;
     if (!this.hasActiveSecretKey(gameAddress)) {
       // Hardening: ignore on-chain activity for games that the oracle did not
       // issue secrets for (prevents DB growth from spam/invalid games).
@@ -290,7 +290,7 @@ export class OracleEventProcessor {
       const mutation: PlayerMutation =
         action === "joined"
           ? { action: "joined", playerAddress: playerAddress!, ticketIndex: ticketIndex! }
-          : { action: "unjoined", ticketIndex: ticketIndex! };
+          : { action: "unjoined", ticketIndex: ticketIndex!, movedParticipant };
       await this.enqueuePlayerMutation(gameAddress, mutation, {
         expectedTickets,
         gameKey: event.gameKey,
@@ -610,6 +610,10 @@ export class OracleEventProcessor {
             this.options.db.addPlayerToGame(gameAddress, op.playerAddress, op.ticketIndex);
           } else {
             this.options.db.removePlayerFromGame(gameAddress, op.ticketIndex);
+            if (op.movedParticipant) {
+              this.options.db.removePlayerAddressFromGame?.(gameAddress, op.movedParticipant);
+              this.options.db.addPlayerToGame(gameAddress, op.movedParticipant, op.ticketIndex);
+            }
           }
         }
       }
@@ -701,7 +705,7 @@ export class OracleEventProcessor {
   }
 
   private validateEventData(
-    eventData: { gameAddress: string; playerAddress?: string; ticketIndex?: number },
+    eventData: { gameAddress: string; playerAddress?: string; ticketIndex?: number; movedParticipant?: string },
     eventType: string,
     options: {
       requireTicketIndex?: boolean;
@@ -752,14 +756,16 @@ export class OracleEventProcessor {
     return { valid: true };
   }
 
-  public extractEventData(event: TimbaEvent): { gameAddress: string; playerAddress?: string; ticketIndex?: number } {
+  public extractEventData(event: TimbaEvent): { gameAddress: string; playerAddress?: string; ticketIndex?: number; movedParticipant?: string } {
     const gameKey = (event.gameKey ?? event.gameAddress ?? event.game) as PublicKeyLike | undefined;
     const playerKey = (event.player ?? event.playerAddress) as PublicKeyLike | undefined;
+    const movedKey = (event.movedParticipant ?? event.moved_participant) as PublicKeyLike | null | undefined;
 
     return {
       gameAddress: gameKey ? toBase58(gameKey) ?? "" : "",
       playerAddress: playerKey ? toBase58(playerKey) : undefined,
       ticketIndex: resolveNumericLike(event.ticketIndex ?? event.ticket_index),
+      movedParticipant: movedKey ? toBase58(movedKey) : undefined,
     };
   }
 }

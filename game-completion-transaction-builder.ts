@@ -1,5 +1,5 @@
 import * as anchor from "@anchor-lang/core";
-import { PublicKey, SystemProgram } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
 import { ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import type { Timba } from "./idl/idlType.ts";
 import type { TimbaGameAccount } from "./types/timba.ts";
@@ -14,7 +14,9 @@ export interface GameCompletionTransactionBuilderOptions {
 }
 
 export class GameCompletionTransactionBuilder {
-  constructor(private readonly options: GameCompletionTransactionBuilderOptions) {}
+  constructor(
+    private readonly options: GameCompletionTransactionBuilderOptions,
+  ) {}
 
   public async buildCompletionTransaction(args: {
     gameAccount: TimbaGameAccount;
@@ -27,7 +29,13 @@ export class GameCompletionTransactionBuilder {
     signers: anchor.web3.Keypair[];
   }> {
     const program = this.options.getProgram();
-    const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
+    const {
+      gameAccount,
+      winnerAddress,
+      randomHashBuffer,
+      secretKeyBuffer,
+      winnerIndex,
+    } = args;
 
     const creatorPublicKey = ensurePublicKey(gameAccount.creator);
     const tokenMint = ensurePublicKey(gameAccount.tokenMint);
@@ -36,7 +44,7 @@ export class GameCompletionTransactionBuilder {
       this.options.getConnection(),
       tokenMint,
       gameAccount.tokenProgram,
-      this.options.tokenProgramCache
+      this.options.tokenProgramCache,
     );
 
     const programId = ensurePublicKey(program.programId);
@@ -74,7 +82,6 @@ export class GameCompletionTransactionBuilder {
         winner: winnerAddress,
         creator: creatorPublicKey,
         gameTokenCtx,
-        systemProgram: SystemProgram.programId,
         winnerTokenAccount,
       })
       .signers([this.options.adminKeypair]);

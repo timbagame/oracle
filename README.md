@@ -5,6 +5,7 @@ A robust Oracle service for Solana-based games that generates cryptographic secr
 ## ✨ Features
 
 - **🔑 Cryptographic Secret Generation**: Secure random secret generation for new games
+- **✍️ Initialization Approval**: Validates and partially signs creator-funded game transactions
 - **🎯 Game Type Support**: Supports Coinflip and Giveaway games
 - **🎧 Event-Driven Completion**: Real-time game completion via Solana event listeners
 - **🔄 Fallback Scanning**: Periodic scanning as backup for missed events
@@ -32,12 +33,21 @@ The Oracle service uses a hybrid approach with performance optimizations:
 
 ## 📡 API Endpoints
 
-| Endpoint         | Method | Description                    | Body Parameters       |
-| ---------------- | ------ | ------------------------------ | --------------------- |
-| `/health`        | GET    | System health and status       | None                  |
-| `/generate-hash` | POST   | Generate secrets for new games | `gameType` (optional) |
-| `/stats`         | GET    | Oracle statistics and metrics  | None                  |
-| `/`              | GET    | API documentation              | None                  |
+| Endpoint                  | Method | Description                                      | Body Parameters                              |
+| ------------------------- | ------ | ------------------------------------------------ | -------------------------------------------- |
+| `/health`                 | GET    | Service health                                   | None                                         |
+| `/generate-hash`          | POST   | Generate and retain a secret; return commitment  | `gameType` (optional)                        |
+| `/sign-game-transaction`  | POST   | Validate and partially sign game initialization  | `txBase64`                                   |
+| `/stats`                  | GET    | Oracle statistics and metrics                    | None                                         |
+| `/games/complete-now`     | POST   | Attempt immediate completion of one tracked game | `gameAddress`                                |
+| `/`                       | GET    | Generated API documentation                      | None                                         |
+
+All endpoints except `/health` and `/` require bearer authentication. Rootless Podman reads the token from the permission-checked `secrets/oracle-api-token` file; local development may use `ORACLE_API_TOKEN`. Administrative requeue and auto-complete controls are intentionally CLI-only:
+
+```bash
+bun run admin requeue <game-address>
+bun run admin auto-complete <game-address> <on|off>
+```
 
 ### Game Types Supported
 
@@ -92,6 +102,7 @@ SOLANA_NETWORK=["https://api.mainnet-beta.solana.com","https://rpc-backup.exampl
 
 # Optional: API server port (default: 3001)
 ORACLE_PORT=3001
+ORACLE_API_TOKEN=<shared-random-secret>
 
 # Optional: allow the service to generate an ephemeral admin keypair when the
 # configured keypair file is missing. This is automatically enabled during tests
@@ -194,7 +205,9 @@ curl http://localhost:3001/stats
 
 2. **Game Creation**
 
-   - Client creates game on-chain using the provided hash
+   - The creator builds the transaction with itself as signer and fee payer
+   - The oracle validates the unused commitment and transaction accounts, then partially signs through `/sign-game-transaction`
+   - The creator adds its signature and submits the same transaction; neither private key leaves its device
    - Oracle detects `GameInitialized` event and starts tracking
 
 3. **Player Joining**
@@ -260,7 +273,7 @@ Run the test suite, optionally with coverage, and TypeScript checks to verify ch
 ```bash
 bun test
 bun test --coverage  # view coverage
-bunx tsc --noEmit
+bun run typecheck
 ```
 
 ### Key Improvements
