@@ -15,7 +15,7 @@ The guide and orchestrator live in the private `oracle` repository. Do not copy 
 - The deployed contract is 0.1.3, with no uploaded IDL and no reproducible verification record.
 - The VPS oracle and bot are 0.1.3-compatible Docker Compose containers.
 - The upgrade preserves the program ID and existing oracle account.
-- Every 0.1.3 game must be settled or closed before deploying 0.2.0.
+- Every 0.1.3 game must be settled before deploying 0.2.0; empty creator-owned accounts may remain inert.
 - The new Podman services start in oracle → bot order.
 
 Never initialize a new program, run `anchor migrate`, or reinitialize the oracle.
@@ -24,10 +24,11 @@ Never initialize a new program, run `anchor migrate`, or reinitialize the oracle
 
 No environment configuration is required.
 
-On the trusted machine, the command automatically derives the Timba workspace from the `oracle` repository. On the VPS, `--host vps` automatically uses:
+On the trusted machine, the command automatically derives the Timba workspace from the `oracle` repository. On the VPS, `--host vps` automatically uses the actual production layout:
 
 ```text
-source/deployment root: ~/timba
+new Podman data root:  ~/timba
+old Compose root:      ~/docker/timba
 release state:          ~/timba-release-0.2.0/release-state.json
 handoff bundle:         ~/timba-release-0.2.0/release-state.bundle.json
 RPC:                    https://api.mainnet-beta.solana.com
@@ -68,14 +69,24 @@ bun run upgrade:0.2.0 prepare --host local --execute
 
 This verifies the pinned toolchain, clean and pushed repositories, all project tests/builds, exact commits, and identical 0.2.0 IDLs. Authority and deployed-program matching are checked later when the authority path is supplied for signing.
 
-Create the VPS release directory, export state, and copy the private orchestrator plus bundle. Replace `user@vps` with the real SSH destination:
+Create the VPS release directory, export state, and copy the private orchestrator, bootstrap, Quadlets, and bundle. Replace `user@vps` with the real SSH destination:
 
 ```bash
-ssh user@vps 'mkdir -p ~/timba-release-0.2.0'
+ssh user@vps 'mkdir -p ~/timba-release-0.2.0/quadlet'
 bun run upgrade:0.2.0 export-bundle
-scp scripts/upgrade-0.2.0.ts \
+scp scripts/upgrade-0.2.0.ts scripts/vps-bootstrap-0.2.0.sh \
   "$HOME/timba-release-0.2.0/release-state.bundle.json" \
   user@vps:~/timba-release-0.2.0/
+scp deploy/quadlet/timba.network deploy/quadlet/timba-oracle.container \
+  user@vps:~/timba-release-0.2.0/quadlet/
+scp ../bot/deploy/quadlet/timba-bot.container \
+  user@vps:~/timba-release-0.2.0/quadlet/
+```
+
+Once, before the first VPS phase, install the audited host prerequisites. This is the only step requiring sudo and it also enables user lingering before any Quadlet starts:
+
+```bash
+ssh -t user@vps 'bash ~/timba-release-0.2.0/vps-bootstrap-0.2.0.sh'
 ```
 
 ## 2. VPS: drain and back up 0.1.3
@@ -87,7 +98,7 @@ bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" vps-preflight --host vps
 bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" vps-preflight --host vps --execute
 ```
 
-The VPS needs only `~/timba/oracle` and `~/timba/bot`, including their current Compose deployments.
+The VPS needs no Git checkouts. The old deployment remains in `~/docker/timba`; the orchestrator runs the drain scripts inside its existing containers.
 
 Before draining, announce maintenance and enable the static web maintenance response. Keep the old services running while existing games settle.
 
@@ -190,7 +201,7 @@ bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" migrate-clients --host vps 
   --approve migrate-clients
 ```
 
-This refuses active Docker services; pulls the exact recorded Oracle and Bot commits; validates Cosign identities and secrets; installs the Podman network and Quadlets; starts oracle before bot; and validates health, authentication, image digests, supervision, logs, and continued Docker shutdown.
+This refuses active Docker services; verifies the signed Oracle and Bot images; copies the stopped databases and keypairs into `~/timba`; removes the mnemonic from `.env`; creates permission-checked mnemonic and shared API-token files; installs the bundled Podman network and Quadlets; starts oracle before bot; and validates health, authentication, image digests, supervision, logs, and continued Docker shutdown.
 
 Keep maintenance enabled and run the controlled lifecycle:
 
@@ -202,11 +213,10 @@ bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" smoke-test --host vps --exe
 
 Using controlled wallets, create, join, optionally unjoin, and complete one low-value game. Confirm contract state, oracle registry, bot result, and web result agree. Inspect all logs before removing maintenance.
 
-Finally:
+Finally, enable image updates (lingering was already enabled by the bootstrap):
 
 ```bash
 systemctl --user enable --now podman-auto-update.timer
-loginctl enable-linger "$USER"
 ```
 
 ## Failure boundaries
@@ -214,8 +224,7 @@ loginctl enable-linger "$USER"
 Before contract deployment, keep tokens disabled, restore the checkpointed databases, and restart the retained Docker services in oracle → bot order:
 
 ```bash
-cd "$HOME/timba/oracle" && docker compose up -d oracle
-cd "$HOME/timba/bot" && docker compose up -d bot
+cd "$HOME/docker/timba" && docker compose up -d oracle bot
 ```
 
 Never run Docker and Podman against the same databases.

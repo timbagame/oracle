@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   chmod,
   copyFile,
@@ -187,6 +187,7 @@ interface Options {
   approvals: Set<string>;
   sourceRoot: string;
   deployRoot: string;
+  legacyDeployRoot: string;
   releaseDir: string;
   stateFile: string;
   rpcUrl: string;
@@ -270,6 +271,11 @@ function parseArgs(argv: string[]): Options {
   const deployRoot = resolve(
     value("--deploy-root") ?? process.env["DEPLOY_ROOT"] ?? join(home, "timba"),
   );
+  const legacyDeployRoot = resolve(
+    value("--legacy-deploy-root") ??
+      process.env["LEGACY_DEPLOY_ROOT"] ??
+      join(home, "docker/timba"),
+  );
   const releaseDir = resolve(
     value("--release-dir") ??
       process.env["RELEASE_DIR"] ??
@@ -281,6 +287,7 @@ function parseArgs(argv: string[]): Options {
     approvals,
     sourceRoot,
     deployRoot,
+    legacyDeployRoot,
     releaseDir,
     stateFile: resolve(
       value("--state") ?? join(releaseDir, "release-state.json"),
@@ -317,6 +324,7 @@ Common options:
   --execute
   --approve drain|deploy-contract|publish-idl|verify-source|verify-remote|migrate-clients|smoke-test
   --source-root PATH   --deploy-root PATH   --release-dir PATH
+  --legacy-deploy-root PATH
   --authority PATH     --rpc-url URL         --state PATH
   --bundle PATH
   --host local|vps
@@ -480,6 +488,105 @@ async function assertFileMode(file: string): Promise<void> {
   }
 }
 
+function envEntries(input: string): Array<{ key: string; line: string }> {
+  return input
+    .split(/\r?\n/)
+    .map((line) => ({
+      line,
+      match: line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/),
+    }))
+    .filter((entry): entry is { line: string; match: RegExpMatchArray } =>
+      Boolean(entry.match),
+    )
+    .map(({ line, match }) => ({ key: match[1]!, line }));
+}
+
+export function readEnvValue(input: string, key: string): string | undefined {
+  const entry = envEntries(input).find((candidate) => candidate.key === key);
+  if (!entry) return undefined;
+  let value = entry.line.slice(entry.line.indexOf("=") + 1).trim();
+  if (
+    value.length >= 2 &&
+    ((value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'")))
+  )
+    value = value.slice(1, -1);
+  return value;
+}
+
+export function selectEnv(
+  input: string,
+  include: (key: string) => boolean,
+): string {
+  const lines = envEntries(input)
+    .filter(({ key }) => include(key))
+    .map(({ line }) => line);
+  return `${lines.join("\n")}\n`;
+}
+
+async function stagePodmanDeployment(options: Options): Promise<void> {
+  const legacyEnv = await readFile(
+    join(options.legacyDeployRoot, ".env"),
+    "utf8",
+  );
+  const mnemonic = readEnvValue(legacyEnv, "MNEMONIC");
+  if (!mnemonic)
+    throw new Error("Legacy Compose .env has no MNEMONIC to migrate");
+
+  const oracleRoot = join(options.deployRoot, "oracle");
+  const botRoot = join(options.deployRoot, "bot");
+  const oracleSecrets = join(oracleRoot, "secrets");
+  const botSecrets = join(botRoot, "secrets");
+  await mkdir(oracleSecrets, { recursive: true });
+  await mkdir(botSecrets, { recursive: true });
+
+  const oracleEnv = selectEnv(
+    legacyEnv,
+    (key) =>
+      key === "SOLANA_NETWORK" ||
+      (key.startsWith("ORACLE_") && key !== "ORACLE_API_TOKEN"),
+  );
+  const botEnv = selectEnv(
+    legacyEnv,
+    (key) => key !== "MNEMONIC" && key !== "ORACLE_API_TOKEN",
+  );
+  await writeFile(join(oracleRoot, ".env"), oracleEnv, { mode: 0o600 });
+  await writeFile(join(botRoot, ".env"), botEnv, { mode: 0o600 });
+
+  for (const [project, name] of [
+    ["oracle", "admin-keypair.json"],
+    ["oracle", "oracle.sqlite"],
+    ["bot", "admin-keypair.json"],
+    ["bot", "chat-settings.sqlite"],
+    ["bot", "games.sqlite"],
+    ["bot", "tokens.sqlite"],
+  ] as const) {
+    await copyFile(
+      join(options.legacyDeployRoot, project, name),
+      join(options.deployRoot, project, name),
+    );
+  }
+
+  const token = `${randomBytes(32).toString("hex")}\n`;
+  const oracleToken = join(oracleSecrets, "oracle-api-token");
+  const botToken = join(botSecrets, "oracle-api-token");
+  const botMnemonic = join(botSecrets, "bot-mnemonic");
+  await writeFile(oracleToken, token, { mode: 0o600 });
+  await writeFile(botToken, token, { mode: 0o600 });
+  await writeFile(botMnemonic, `${mnemonic}\n`, { mode: 0o600 });
+
+  for (const file of [
+    join(oracleRoot, ".env"),
+    join(botRoot, ".env"),
+    join(oracleRoot, "admin-keypair.json"),
+    join(botRoot, "admin-keypair.json"),
+    oracleToken,
+    botToken,
+    botMnemonic,
+  ])
+    await chmod(file, 0o600);
+}
+
 async function localPreflight(
   options: Options,
   state: ReleaseState,
@@ -576,12 +683,7 @@ async function vpsPreflight(
   options: Options,
   state: ReleaseState,
 ): Promise<void> {
-  for (const project of ["oracle", "bot"]) {
-    await stat(path(options, project));
-  }
-  for (const project of ["oracle", "bot"]) {
-    await stat(join(options.deployRoot, project, "compose.yml"));
-  }
+  await stat(join(options.legacyDeployRoot, "docker-compose.yml"));
   for (const tool of [
     "cosign",
     "docker",
@@ -620,29 +722,15 @@ async function vpsPreflight(
   );
   if (options.execute && rootless !== "true")
     throw new Error("Podman must run rootless on the VPS");
-  for (const project of ["oracle", "bot"]) {
-    const dirty = await run(
-      {
-        argv: ["git", "status", "--porcelain"],
-        cwd: path(options, project),
-      },
-      options,
-      state,
-    );
-    if (options.execute && dirty)
-      throw new Error(`${project} VPS worktree is not clean`);
-  }
-  for (const project of ["oracle", "bot"]) {
-    await run(
-      {
-        argv: ["docker", "compose", "ps", "--format", "json"],
-        cwd: join(options.deployRoot, project),
-        captureAs: `docker.${project}.preflight`,
-      },
-      options,
-      state,
-    );
-  }
+  await run(
+    {
+      argv: ["docker", "compose", "ps", "--format", "json"],
+      cwd: options.legacyDeployRoot,
+      captureAs: "docker.compose.preflight",
+    },
+    options,
+    state,
+  );
 }
 
 async function prepare(options: Options, state: ReleaseState): Promise<void> {
@@ -732,8 +820,17 @@ async function drain(options: Options, state: ReleaseState): Promise<void> {
   );
   await run(
     {
-      argv: ["bun", "run", "scripts/disable-game-tokens.ts"],
-      cwd: join(options.deployRoot, "bot"),
+      argv: [
+        "docker",
+        "compose",
+        "exec",
+        "-T",
+        "bot",
+        "bun",
+        "run",
+        "scripts/disable-game-tokens.ts",
+      ],
+      cwd: options.legacyDeployRoot,
     },
     options,
     state,
@@ -750,7 +847,7 @@ async function drain(options: Options, state: ReleaseState): Promise<void> {
         "run",
         "scripts/manual-shutdown.ts",
       ],
-      cwd: join(options.deployRoot, "oracle"),
+      cwd: options.legacyDeployRoot,
       captureAs: "drain.report",
     },
     options,
@@ -760,44 +857,39 @@ async function drain(options: Options, state: ReleaseState): Promise<void> {
 }
 
 async function backup(options: Options, state: ReleaseState): Promise<void> {
-  for (const project of ["bot", "oracle"]) {
-    await run(
-      {
-        argv: ["docker", "compose", "ps", "--format", "json"],
-        cwd: join(options.deployRoot, project),
-        captureAs: `docker.${project}.containers.before`,
-      },
-      options,
-      state,
-    );
-    await run(
-      {
-        argv: ["docker", "compose", "images", "--format", "json"],
-        cwd: join(options.deployRoot, project),
-        captureAs: `docker.${project}.images.before`,
-      },
-      options,
-      state,
-    );
-    await run(
-      {
-        argv: ["docker", "compose", "stop"],
-        cwd: join(options.deployRoot, project),
-      },
-      options,
-      state,
-    );
-    const running = await run(
-      {
-        argv: ["docker", "compose", "ps", "-q"],
-        cwd: join(options.deployRoot, project),
-      },
-      options,
-      state,
-    );
-    if (options.execute && running)
-      throw new Error(`${project} Docker Compose container is still running`);
-  }
+  await run(
+    {
+      argv: ["docker", "compose", "ps", "--format", "json"],
+      cwd: options.legacyDeployRoot,
+      captureAs: "docker.containers.before",
+    },
+    options,
+    state,
+  );
+  await run(
+    {
+      argv: ["docker", "compose", "images", "--format", "json"],
+      cwd: options.legacyDeployRoot,
+      captureAs: "docker.images.before",
+    },
+    options,
+    state,
+  );
+  await run(
+    {
+      argv: ["docker", "compose", "stop", "bot", "oracle"],
+      cwd: options.legacyDeployRoot,
+    },
+    options,
+    state,
+  );
+  const running = await run(
+    { argv: ["docker", "compose", "ps", "-q"], cwd: options.legacyDeployRoot },
+    options,
+    state,
+  );
+  if (options.execute && running)
+    throw new Error("Legacy Docker Compose containers are still running");
   const databases = [
     ["oracle", "oracle.sqlite"],
     ["bot", "chat-settings.sqlite"],
@@ -816,7 +908,7 @@ async function backup(options: Options, state: ReleaseState): Promise<void> {
   const destination = join(options.releaseDir, "databases");
   await mkdir(destination, { recursive: true });
   for (const [project, name] of databases) {
-    const source = join(options.deployRoot, project, name);
+    const source = join(options.legacyDeployRoot, project, name);
     const integrity = await run(
       {
         argv: [
@@ -836,7 +928,7 @@ async function backup(options: Options, state: ReleaseState): Promise<void> {
     );
   }
   state.evidence["rollback.command"] =
-    "restore databases; docker compose up -d oracle; docker compose up -d bot";
+    `restore databases; cd ${options.legacyDeployRoot}; docker compose up -d oracle bot`;
 }
 
 async function build(options: Options, state: ReleaseState): Promise<void> {
@@ -1248,56 +1340,22 @@ async function migrateClients(
     throw new Error(
       `Quadlet mounts require DEPLOY_ROOT=${expectedDeployRoot}; got ${options.deployRoot}`,
     );
-  for (const project of ["oracle", "bot"]) {
-    const dockerRunning = await run(
-      {
-        argv: ["docker", "compose", "ps", "-q"],
-        cwd: join(options.deployRoot, project),
-      },
-      options,
-      state,
-    );
-    if (options.execute && dockerRunning)
-      throw new Error(
-        `Refusing migration while ${project} Docker container is running`,
-      );
-  }
+  const dockerRunning = await run(
+    {
+      argv: ["docker", "compose", "ps", "-q"],
+      cwd: options.legacyDeployRoot,
+    },
+    options,
+    state,
+  );
+  if (options.execute && dockerRunning)
+    throw new Error("Refusing migration while legacy Docker containers run");
   for (const project of ["oracle", "bot"]) {
     const commit = state.evidence[`${project}.commit`];
     const releaseCommit = state.evidence[`${project}.releaseCommit`];
     if (!commit) throw new Error(`Missing tested ${project} commit`);
     if (!releaseCommit)
       throw new Error(`Missing released ${project} main commit`);
-    await run(
-      { argv: ["git", "switch", "main"], cwd: path(options, project) },
-      options,
-      state,
-    );
-    await run(
-      {
-        argv: ["git", "pull", "--ff-only", "origin", "main"],
-        cwd: path(options, project),
-      },
-      options,
-      state,
-    );
-    const deployedCheckout = await run(
-      { argv: ["git", "rev-parse", "HEAD"], cwd: path(options, project) },
-      options,
-      state,
-    );
-    if (options.execute && deployedCheckout !== releaseCommit)
-      throw new Error(
-        `${project} VPS checkout ${deployedCheckout} differs from recorded release ${releaseCommit}`,
-      );
-    await run(
-      {
-        argv: ["git", "merge-base", "--is-ancestor", commit, "origin/main"],
-        cwd: path(options, project),
-      },
-      options,
-      state,
-    );
   }
   for (const image of ["oracle", "bot"]) {
     await run(
@@ -1321,6 +1379,7 @@ async function migrateClients(
       state,
     );
   }
+  if (options.execute) await stagePodmanDeployment(options);
   for (const file of [
     join(options.deployRoot, "oracle/admin-keypair.json"),
     join(options.deployRoot, "oracle/secrets/oracle-api-token"),
@@ -1348,15 +1407,15 @@ async function migrateClients(
   if (options.execute) {
     await mkdir(quadletDir, { recursive: true });
     await copyFile(
-      join(path(options, "oracle"), "deploy/quadlet/timba.network"),
+      join(options.releaseDir, "quadlet/timba.network"),
       join(quadletDir, "timba.network"),
     );
     await copyFile(
-      join(path(options, "oracle"), "deploy/quadlet/timba-oracle.container"),
+      join(options.releaseDir, "quadlet/timba-oracle.container"),
       join(quadletDir, "timba-oracle.container"),
     );
     await copyFile(
-      join(path(options, "bot"), "deploy/quadlet/timba-bot.container"),
+      join(options.releaseDir, "quadlet/timba-bot.container"),
       join(quadletDir, "timba-bot.container"),
     );
   } else {
@@ -1490,20 +1549,16 @@ async function migrateClients(
       state,
     );
   }
-  for (const project of ["oracle", "bot"]) {
-    const dockerRunning = await run(
-      {
-        argv: ["docker", "compose", "ps", "-q"],
-        cwd: join(options.deployRoot, project),
-      },
-      options,
-      state,
-    );
-    if (options.execute && dockerRunning)
-      throw new Error(
-        `${project} Docker service restarted during Podman migration`,
-      );
-  }
+  const dockerRestarted = await run(
+    {
+      argv: ["docker", "compose", "ps", "-q"],
+      cwd: options.legacyDeployRoot,
+    },
+    options,
+    state,
+  );
+  if (options.execute && dockerRestarted)
+    throw new Error("A legacy Docker service restarted during migration");
   console.log(
     "Confirm the Cloudflare workflow deployed the recorded web main commit before continuing.",
   );
@@ -1517,8 +1572,14 @@ async function smokeTest(options: Options, state: ReleaseState): Promise<void> {
   );
   await run(
     {
-      argv: ["bun", "run", "scripts/update-token-min-bets.ts"],
-      cwd: join(options.deployRoot, "bot"),
+      argv: [
+        "podman",
+        "exec",
+        "bot",
+        "bun",
+        "run",
+        "scripts/update-token-min-bets.ts",
+      ],
     },
     options,
     state,

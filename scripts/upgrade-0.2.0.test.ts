@@ -10,6 +10,8 @@ import {
   extractVerificationJobId,
   nextIncompletePhase,
   remoteVerificationSucceeded,
+  readEnvValue,
+  selectEnv,
   sha256,
   stableJson,
   validateReleaseBundle,
@@ -160,5 +162,39 @@ describe("legacy Game drain guard", () => {
     expect(() =>
       classifyLegacyGame("wrong-size", legacyGame().subarray(0, 145)),
     ).toThrow("unexpected legacy Game size");
+  });
+});
+
+describe("legacy Compose environment migration", () => {
+  const legacy = [
+    "TELEGRAM_TOKEN=telegram",
+    'MNEMONIC="one two three"',
+    "SOLANA_NETWORK=https://rpc.example",
+    "ORACLE_PORT=3001",
+    "ORACLE_API_TOKEN=old-token",
+    "",
+  ].join("\n");
+
+  it("extracts a quoted mnemonic without exposing it in migrated env files", () => {
+    expect(readEnvValue(legacy, "MNEMONIC")).toBe("one two three");
+    const migrated = selectEnv(
+      legacy,
+      (key) => key !== "MNEMONIC" && key !== "ORACLE_API_TOKEN",
+    );
+    expect(migrated).toContain("TELEGRAM_TOKEN=telegram");
+    expect(migrated).not.toContain("one two three");
+    expect(migrated).not.toContain("old-token");
+  });
+
+  it("builds a least-privilege oracle environment", () => {
+    const migrated = selectEnv(
+      legacy,
+      (key) =>
+        key === "SOLANA_NETWORK" ||
+        (key.startsWith("ORACLE_") && key !== "ORACLE_API_TOKEN"),
+    );
+    expect(migrated).toBe(
+      "SOLANA_NETWORK=https://rpc.example\nORACLE_PORT=3001\n",
+    );
   });
 });
