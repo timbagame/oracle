@@ -12,6 +12,126 @@ import { dirname, join, resolve } from "node:path";
 
 export const PROGRAM_ID = "32Jr4JnXWvqq9GqPQynkooHsszaucUUvZfNLh2hdX2L5";
 export const RELEASE_VERSION = "0.2.0";
+export const LEGACY_GAME_BASE_SIZE = 126;
+export const GAME_DISCRIMINATOR = createHash("sha256")
+  .update("account:Game")
+  .digest()
+  .subarray(0, 8);
+
+export interface LegacyGameStatus {
+  address: string;
+  dataLength: number;
+  maxTickets: number;
+  ticketsCount: number;
+  totalAmount: bigint;
+  participantHashes: number;
+  expectedDataLength: number;
+  inert: boolean;
+}
+
+export function classifyLegacyGame(
+  address: string,
+  data: Uint8Array,
+): LegacyGameStatus {
+  const bytes = Buffer.from(data);
+  if (bytes.length < LEGACY_GAME_BASE_SIZE + 4)
+    throw new Error(`${address}: legacy Game account is truncated`);
+  if (!bytes.subarray(0, 8).equals(GAME_DISCRIMINATOR))
+    throw new Error(`${address}: invalid Game discriminator`);
+
+  const maxTickets = bytes.readUInt32LE(49);
+  const ticketsCount = bytes.readUInt32LE(57);
+  const totalAmount = bytes.readBigUInt64LE(118);
+  const participantHashes = bytes.readUInt32LE(126);
+  const expectedDataLength =
+    LEGACY_GAME_BASE_SIZE + 4 + maxTickets * BigUint64Array.BYTES_PER_ELEMENT;
+  if (bytes.length !== expectedDataLength)
+    throw new Error(
+      `${address}: unexpected legacy Game size ${bytes.length}; expected ${expectedDataLength}`,
+    );
+  if (participantHashes > maxTickets)
+    throw new Error(
+      `${address}: participant hash count ${participantHashes} exceeds max tickets ${maxTickets}`,
+    );
+
+  return {
+    address,
+    dataLength: bytes.length,
+    maxTickets,
+    ticketsCount,
+    totalAmount,
+    participantHashes,
+    expectedDataLength,
+    inert: ticketsCount === 0 && totalAmount === 0n && participantHashes === 0,
+  };
+}
+
+async function verifyLegacyGamesAreInert(
+  options: Options,
+  state: ReleaseState,
+): Promise<void> {
+  const response = await fetch(options.rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "getProgramAccounts",
+      params: [
+        PROGRAM_ID,
+        {
+          encoding: "base64",
+          commitment: "finalized",
+          filters: [
+            {
+              memcmp: {
+                offset: 0,
+                bytes: "G1qmfUpkeRI",
+              },
+            },
+          ],
+        },
+      ],
+    }),
+  });
+  if (!response.ok)
+    throw new Error(`Mainnet RPC returned HTTP ${response.status}`);
+  const payload = (await response.json()) as {
+    error?: { message?: string };
+    result?: Array<{ pubkey: string; account: { data: [string, string] } }>;
+  };
+  if (payload.error)
+    throw new Error(
+      `Mainnet RPC failed: ${payload.error.message ?? "unknown error"}`,
+    );
+  if (!payload.result)
+    throw new Error("Mainnet RPC omitted getProgramAccounts result");
+
+  const games = payload.result.map(({ pubkey, account }) =>
+    classifyLegacyGame(pubkey, Buffer.from(account.data[0], "base64")),
+  );
+  const actionable = games.filter((game) => !game.inert);
+  state.evidence["drain.legacy-games"] = JSON.stringify(
+    games.map((game) => ({
+      ...game,
+      totalAmount: game.totalAmount.toString(),
+    })),
+  );
+  console.log(
+    `Mainnet legacy Game accounts: ${games.length}; inert: ${games.length - actionable.length}; actionable: ${actionable.length}`,
+  );
+  if (actionable.length > 0) {
+    const details = actionable
+      .map(
+        (game) =>
+          `${game.address} (tickets=${game.ticketsCount}, hashes=${game.participantHashes}, total=${game.totalAmount})`,
+      )
+      .join(", ");
+    throw new Error(
+      `Cannot upgrade while legacy games remain actionable: ${details}`,
+    );
+  }
+}
 
 export const PHASES = [
   "local-preflight",
@@ -608,7 +728,7 @@ async function drain(options: Options, state: ReleaseState): Promise<void> {
   requireApproval(
     options,
     "drain",
-    "disable all game tokens and drain every legacy game on mainnet",
+    "disable all game tokens and prove every legacy game on mainnet is inert",
   );
   await run(
     {
@@ -636,9 +756,7 @@ async function drain(options: Options, state: ReleaseState): Promise<void> {
     options,
     state,
   );
-  console.log(
-    "Operator must independently confirm through mainnet RPC that no legacy Game account remains actionable.",
-  );
+  if (options.execute) await verifyLegacyGamesAreInert(options, state);
 }
 
 async function backup(options: Options, state: ReleaseState): Promise<void> {

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import {
   PROGRAM_ID,
+  GAME_DISCRIMINATOR,
+  LEGACY_GAME_BASE_SIZE,
   PHASE_HOST,
   PHASES,
   createReleaseBundle,
+  classifyLegacyGame,
   extractVerificationJobId,
   nextIncompletePhase,
   remoteVerificationSucceeded,
@@ -12,6 +15,24 @@ import {
   validateReleaseBundle,
   type ReleaseState,
 } from "./upgrade-0.2.0";
+
+function legacyGame(
+  overrides: {
+    maxTickets?: number;
+    ticketsCount?: number;
+    totalAmount?: bigint;
+    participantHashes?: number;
+  } = {},
+): Buffer {
+  const maxTickets = overrides.maxTickets ?? 2;
+  const data = Buffer.alloc(LEGACY_GAME_BASE_SIZE + 4 + maxTickets * 8);
+  GAME_DISCRIMINATOR.copy(data, 0);
+  data.writeUInt32LE(maxTickets, 49);
+  data.writeUInt32LE(overrides.ticketsCount ?? 0, 57);
+  data.writeBigUInt64LE(overrides.totalAmount ?? 0n, 118);
+  data.writeUInt32LE(overrides.participantHashes ?? 0, 126);
+  return data;
+}
 
 function state(phases: ReleaseState["phases"] = {}): ReleaseState {
   return {
@@ -108,5 +129,36 @@ describe("release evidence", () => {
     expect(remoteVerificationSucceeded("Status: completed with error")).toBe(
       false,
     );
+  });
+});
+
+describe("legacy Game drain guard", () => {
+  it("accepts an empty old-sized game as inert", () => {
+    expect(classifyLegacyGame("game", legacyGame())).toMatchObject({
+      dataLength: 146,
+      maxTickets: 2,
+      ticketsCount: 0,
+      totalAmount: 0n,
+      participantHashes: 0,
+      inert: true,
+    });
+  });
+
+  it("marks funds, tickets, or participant hashes as actionable", () => {
+    expect(
+      classifyLegacyGame("funded", legacyGame({ totalAmount: 1n })).inert,
+    ).toBe(false);
+    expect(
+      classifyLegacyGame("joined", legacyGame({ ticketsCount: 1 })).inert,
+    ).toBe(false);
+    expect(
+      classifyLegacyGame("hashed", legacyGame({ participantHashes: 1 })).inert,
+    ).toBe(false);
+  });
+
+  it("rejects an account whose allocation is not the legacy layout", () => {
+    expect(() =>
+      classifyLegacyGame("wrong-size", legacyGame().subarray(0, 145)),
+    ).toThrow("unexpected legacy Game size");
   });
 });

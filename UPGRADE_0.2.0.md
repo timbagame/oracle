@@ -96,7 +96,7 @@ bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" drain --host vps
 bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" drain --host vps --execute --approve drain
 ```
 
-The phase disables supported tokens and runs the shutdown scan inside the existing Docker oracle. Independently verify through mainnet RPC that no 0.1.3 game can still require completion, cancellation, or unjoin.
+The phase disables supported tokens, runs the shutdown scan inside the existing Docker oracle, and then queries mainnet RPC itself. It blocks the release if any 0.1.3 game still has tickets, participant hashes, or funds. Empty old-sized game accounts may remain because only their creators can close them; they are recorded as inert release evidence and must not be offered to 0.2.0 clients.
 
 ```bash
 bun run "$HOME/timba-release-0.2.0/upgrade-0.2.0.ts" backup --host vps
