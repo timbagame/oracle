@@ -4,17 +4,17 @@ import type { Timba } from "./idl/idlType.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 import { ensurePublicKey, resolveNumericLike, toBase58 } from "./solana-utils.ts";
 import { logger } from "./logger.ts";
-import {
-  analyzeRegistryState,
-  summarizeTicketAssignments,
-} from "./player-registry-utils.ts";
+import { analyzeRegistryState, summarizeTicketAssignments } from "./player-registry-utils.ts";
 
 export interface PlayerRegistrySyncOptions {
   connection: anchor.web3.Connection;
   program: anchor.Program<Timba>;
   batchSize?: number;
   maxBatches?: number;
-  eventParserFactory?: (programId: PublicKey, coder: anchor.Coder) => {
+  eventParserFactory?: (
+    programId: PublicKey,
+    coder: anchor.Coder,
+  ) => {
     parseLogs: (logs: string[]) => Iterable<unknown>;
   };
   transactionConcurrency?: number;
@@ -50,8 +50,9 @@ export class PlayerRegistrySync {
       Math.max(5, options.transactionBatchSize ?? derivedBatchSize ?? 25),
     );
     this.disableBatchTransactions = options.disableBatchTransactions ?? false;
-    this.createEventParser = options.eventParserFactory
-      ?? ((programId, coder) => new anchor.EventParser(programId, coder));
+    this.createEventParser =
+      options.eventParserFactory ??
+      ((programId, coder) => new anchor.EventParser(programId, coder));
   }
 
   private isPaidPlanBatchError(error: unknown): boolean {
@@ -93,8 +94,8 @@ export class PlayerRegistrySync {
     }
 
     const program = this.options.program;
-    const coder = (program as unknown as { coder?: anchor.Coder }).coder ??
-      new anchor.BorshCoder(program.idl);
+    const coder =
+      (program as unknown as { coder?: anchor.Coder }).coder ?? new anchor.BorshCoder(program.idl);
     const parser = this.createEventParser(program.programId, coder);
 
     const ticketAssignments = new Map<number, string>();
@@ -144,7 +145,9 @@ export class PlayerRegistrySync {
 
         if (name === "playerUnjoined") {
           const movedValue = data["movedParticipant"] ?? data["moved_participant"];
-          const movedParticipant = movedValue ? toBase58(movedValue as PublicKeyLike) ?? undefined : undefined;
+          const movedParticipant = movedValue
+            ? (toBase58(movedValue as PublicKeyLike) ?? undefined)
+            : undefined;
           events.push({ kind: "unjoin", ticketIndex, movedParticipant });
           continue;
         }
@@ -152,7 +155,10 @@ export class PlayerRegistrySync {
         let playerKey: PublicKey;
         try {
           playerKey = ensurePublicKey(
-            (data["player"] ?? data["playerAddress"] ?? data["player_address"] ?? null) as PublicKeyLike,
+            (data["player"] ??
+              data["playerAddress"] ??
+              data["player_address"] ??
+              null) as PublicKeyLike,
           );
         } catch (error) {
           logger.warning(`Skipping player event with invalid player key: ${String(error)}`);
@@ -277,14 +283,10 @@ export class PlayerRegistrySync {
       }
     };
 
-    const enqueueChunk = (
-      chunkInfos: anchor.web3.ConfirmedSignatureInfo[],
-      startIndex: number,
-    ) => {
-      const task = processChunk(chunkInfos, startIndex)
-        .finally(() => {
-          active.delete(task);
-        });
+    const enqueueChunk = (chunkInfos: anchor.web3.ConfirmedSignatureInfo[], startIndex: number) => {
+      const task = processChunk(chunkInfos, startIndex).finally(() => {
+        active.delete(task);
+      });
       active.add(task);
       return task;
     };
@@ -343,17 +345,18 @@ export class PlayerRegistrySync {
     let before: string | undefined;
 
     for (let batch = 0; batch < this.maxBatches; batch++) {
-      if (
-        finiteMaxSignatures !== undefined &&
-        collected.length >= finiteMaxSignatures
-      ) {
+      if (finiteMaxSignatures !== undefined && collected.length >= finiteMaxSignatures) {
         break;
       }
 
       const remainingByMax =
-        finiteMaxSignatures !== undefined ? Math.max(0, finiteMaxSignatures - collected.length) : undefined;
+        finiteMaxSignatures !== undefined
+          ? Math.max(0, finiteMaxSignatures - collected.length)
+          : undefined;
       const remainingByTarget =
-        targetSignatures !== undefined ? Math.max(0, targetSignatures - collected.length) : undefined;
+        targetSignatures !== undefined
+          ? Math.max(0, targetSignatures - collected.length)
+          : undefined;
 
       let limit = this.batchSize;
       if (remainingByMax !== undefined) {

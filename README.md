@@ -33,14 +33,14 @@ The Oracle service uses a hybrid approach with performance optimizations:
 
 ## 📡 API Endpoints
 
-| Endpoint                  | Method | Description                                      | Body Parameters                              |
-| ------------------------- | ------ | ------------------------------------------------ | -------------------------------------------- |
-| `/health`                 | GET    | Service health                                   | None                                         |
-| `/generate-hash`          | POST   | Generate and retain a secret; return commitment  | `gameType` (optional)                        |
-| `/sign-game-transaction`  | POST   | Validate and partially sign game initialization  | `txBase64`                                   |
-| `/stats`                  | GET    | Oracle statistics and metrics                    | None                                         |
-| `/games/complete-now`     | POST   | Attempt immediate completion of one tracked game | `gameAddress`                                |
-| `/`                       | GET    | Generated API documentation                      | None                                         |
+| Endpoint                 | Method | Description                                      | Body Parameters       |
+| ------------------------ | ------ | ------------------------------------------------ | --------------------- |
+| `/health`                | GET    | Service health                                   | None                  |
+| `/generate-hash`         | POST   | Generate and retain a secret; return commitment  | `gameType` (optional) |
+| `/sign-game-transaction` | POST   | Validate and partially sign game initialization  | `txBase64`            |
+| `/stats`                 | GET    | Oracle statistics and metrics                    | None                  |
+| `/games/complete-now`    | POST   | Attempt immediate completion of one tracked game | `gameAddress`         |
+| `/`                      | GET    | Generated API documentation                      | None                  |
 
 All endpoints except `/health` and `/` require bearer authentication. Rootless Podman reads the token from the permission-checked `secrets/oracle-api-token` file; local development may use `ORACLE_API_TOKEN`. Administrative requeue and auto-complete controls are intentionally CLI-only:
 
@@ -132,8 +132,6 @@ curl -X POST http://localhost:3001/generate-hash \
 }
 ```
 
-
-
 #### Default (No Game Type)
 
 ```bash
@@ -220,8 +218,6 @@ curl http://localhost:3001/stats
    - Oracle automatically completes game when conditions are met
    - Uses stored secret to determine winner fairly
    - Marks game as completed in database
-
-
 
 ### Game Type Differences
 
@@ -344,8 +340,6 @@ const { randomHash, gameAddress } = await response.json();
 // Use randomHash in your game creation transaction
 // Oracle will automatically complete the game when ready
 ```
-
-
 
 ### Smart Contract Integration
 

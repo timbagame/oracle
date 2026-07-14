@@ -27,9 +27,7 @@ const DEFAULT_CLEANUP_STATS: CleanupStats = {
   deletedPlayers: 0,
 };
 
-export function createBasicStats(
-  overrides: Partial<OracleStats> = {},
-): OracleStats {
+export function createBasicStats(overrides: Partial<OracleStats> = {}): OracleStats {
   return {
     ...createEmptyStats(),
     eventListening: false,
@@ -64,18 +62,14 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
     signGameTransaction,
     getStats: getStats ?? (() => createBasicStats(stats)),
     scanAndCompleteActiveGames:
-      scanAndCompleteActiveGames ??
-      (async () => ({ ...createEmptyCompletionStats() })),
+      scanAndCompleteActiveGames ?? (async () => ({ ...createEmptyCompletionStats() })),
     startEventListening: startEventListening ?? (async () => {}),
     stopEventListening: stopEventListening ?? (async () => {}),
     close: close ?? (async () => {}),
-    cleanupOldRecords:
-      cleanupOldRecords ?? (() => ({ ...DEFAULT_CLEANUP_STATS })),
+    cleanupOldRecords: cleanupOldRecords ?? (() => ({ ...DEFAULT_CLEANUP_STATS })),
     requeueGame: requeueGame ?? (() => ({ success: true })),
-    completeGameNow:
-      completeGameNow ?? (async () => ({ success: false, notReady: true })),
+    completeGameNow: completeGameNow ?? (async () => ({ success: false, notReady: true })),
     setAutoCompleteDisabled:
-      setAutoCompleteDisabled ??
-      (() => ({ success: true, autoCompleteDisabled: false })),
+      setAutoCompleteDisabled ?? (() => ({ success: true, autoCompleteDisabled: false })),
   };
 }

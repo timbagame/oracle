@@ -13,15 +13,9 @@ describe("contract ABI compatibility", () => {
       name: "participant_hashes",
       type: { vec: "u64" },
     });
-    const complete = idl.instructions.find(
-      (value: any) => value.name === "complete_game",
-    );
-    expect(
-      complete.accounts.some((value: any) => value.name === "system_program"),
-    ).toBe(true);
-    expect(
-      complete.accounts.find((value: any) => value.name === "winner").writable,
-    ).toBe(true);
+    const complete = idl.instructions.find((value: any) => value.name === "complete_game");
+    expect(complete.accounts.some((value: any) => value.name === "system_program")).toBe(true);
+    expect(complete.accounts.find((value: any) => value.name === "winner").writable).toBe(true);
   });
 
   it("rejects unknown versions", () => {

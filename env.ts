@@ -56,8 +56,7 @@ export function setOracleEnvironment(options: OracleEnvironmentOptions = {}): ()
     updates["NODE_ENV"] = nodeEnv;
   }
 
-  const resolvedSolanaNetwork =
-    solanaNetwork ?? readEnv("SOLANA_NETWORK") ?? fallbackSolanaNetwork;
+  const resolvedSolanaNetwork = solanaNetwork ?? readEnv("SOLANA_NETWORK") ?? fallbackSolanaNetwork;
   updates["SOLANA_NETWORK"] = resolvedSolanaNetwork;
 
   if (databaseFile !== undefined) {

@@ -19,7 +19,14 @@ const LOG_LEVELS: Record<LogLevel, number> = {
 };
 
 type ConsoleMethod = "log" | "info" | "warn" | "error" | "debug" | "trace";
-const CONSOLE_METHODS: readonly ConsoleMethod[] = ["log", "info", "warn", "error", "debug", "trace"] as const;
+const CONSOLE_METHODS: readonly ConsoleMethod[] = [
+  "log",
+  "info",
+  "warn",
+  "error",
+  "debug",
+  "trace",
+] as const;
 
 class Logger {
   private config: LoggerConfig = { timestamps: true };

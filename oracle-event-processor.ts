@@ -1,7 +1,13 @@
 import type * as anchor from "@anchor-lang/core";
 import type { Timba } from "./idl/idlType.ts";
 import type { OracleDatabase } from "./database.ts";
-import type { TimbaEventMap, TimbaEvent, TimbaPlayerEvent, TimbaGameStatusEvent, TimbaGameInitializedEvent } from "./types/timba.ts";
+import type {
+  TimbaEventMap,
+  TimbaEvent,
+  TimbaPlayerEvent,
+  TimbaGameStatusEvent,
+  TimbaGameInitializedEvent,
+} from "./types/timba.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 import type { EventHandlerConfig } from "./oracle-service.types.ts";
 import { toBase58, resolveNumericLike, coercePublicKey } from "./solana-utils.ts";
@@ -17,7 +23,11 @@ const DEFAULT_AUTOCOMPLETE_DEBOUNCE_MS = 500;
 export interface OracleEventProcessorOptions {
   getProgram: () => anchor.Program<Timba>;
   db: OracleDatabase;
-  tryAutoComplete: (gameKey: PublicKeyLike | undefined, gameAddress: string, trigger: string) => Promise<void>;
+  tryAutoComplete: (
+    gameKey: PublicKeyLike | undefined,
+    gameAddress: string,
+    trigger: string,
+  ) => Promise<void>;
   config: ReadonlyArray<EventHandlerConfig<keyof TimbaEventMap>>;
   clearTokenProgramCache: () => void;
   syncPlayerRegistry?: (options: {
@@ -86,8 +96,7 @@ export class OracleEventProcessor {
     this.playerEventFlushMaxOperations =
       options.playerEventFlushMaxOperations ?? DEFAULT_PLAYER_EVENT_FLUSH_MAX_OPERATIONS;
     this.autoCompleteDebounceMs =
-      options.autoCompleteDebounceMs ??
-      (isTestEnv ? 0 : DEFAULT_AUTOCOMPLETE_DEBOUNCE_MS);
+      options.autoCompleteDebounceMs ?? (isTestEnv ? 0 : DEFAULT_AUTOCOMPLETE_DEBOUNCE_MS);
     if (options.syncPlayerRegistry) {
       this.registrySyncScheduler = new RegistrySyncScheduler(
         options.syncPlayerRegistry,
@@ -135,13 +144,15 @@ export class OracleEventProcessor {
       try {
         const result = handler();
         if (result && typeof (result as Promise<unknown>).then === "function") {
-          const inFlight = (result as Promise<void>).catch((error) => {
-            logger.failure(`Error in ${eventType} event for ${gameAddress}:`, error);
-          }).finally(() => {
-            if (this.processingQueues.get(gameAddress) === inFlight) {
-              this.processingQueues.delete(gameAddress);
-            }
-          });
+          const inFlight = (result as Promise<void>)
+            .catch((error) => {
+              logger.failure(`Error in ${eventType} event for ${gameAddress}:`, error);
+            })
+            .finally(() => {
+              if (this.processingQueues.get(gameAddress) === inFlight) {
+                this.processingQueues.delete(gameAddress);
+              }
+            });
           this.processingQueues.set(gameAddress, inFlight);
           return inFlight;
         }
@@ -217,7 +228,7 @@ export class OracleEventProcessor {
     } catch (error) {
       const program = this.options.getProgram();
       await Promise.allSettled(
-        listenerIds.map((listenerId) => program.removeEventListener(listenerId))
+        listenerIds.map((listenerId) => program.removeEventListener(listenerId)),
       );
       throw error;
     }
@@ -238,7 +249,7 @@ export class OracleEventProcessor {
 
     const program = this.options.getProgram();
     await Promise.allSettled(
-      this.listenerIds.map((listenerId) => program.removeEventListener(listenerId))
+      this.listenerIds.map((listenerId) => program.removeEventListener(listenerId)),
     );
 
     this.listenerIds = [];
@@ -286,23 +297,24 @@ export class OracleEventProcessor {
         (event as Record<string, unknown>)["tickets_count"],
     );
 
-    await this.runEventMutation(eventType, async () => {
-      const mutation: PlayerMutation =
-        action === "joined"
-          ? { action: "joined", playerAddress: playerAddress!, ticketIndex: ticketIndex! }
-          : { action: "unjoined", ticketIndex: ticketIndex!, movedParticipant };
-      await this.enqueuePlayerMutation(gameAddress, mutation, {
-        expectedTickets,
-        gameKey: event.gameKey,
-        trigger: action,
-      });
-    }, gameAddress);
+    await this.runEventMutation(
+      eventType,
+      async () => {
+        const mutation: PlayerMutation =
+          action === "joined"
+            ? { action: "joined", playerAddress: playerAddress!, ticketIndex: ticketIndex! }
+            : { action: "unjoined", ticketIndex: ticketIndex!, movedParticipant };
+        await this.enqueuePlayerMutation(gameAddress, mutation, {
+          expectedTickets,
+          gameKey: event.gameKey,
+          trigger: action,
+        });
+      },
+      gameAddress,
+    );
   }
 
-  public handleGameStatusChange(
-    status: "completed" | "closed",
-    event: TimbaGameStatusEvent,
-  ): void {
+  public handleGameStatusChange(status: "completed" | "closed", event: TimbaGameStatusEvent): void {
     const eventData = this.extractEventData(event);
     const eventType = `game ${status}`;
     const validation = this.validateEventData(eventData, eventType, {
@@ -326,7 +338,32 @@ export class OracleEventProcessor {
     });
 
     if (!flushPromise) {
-      void this.runEventMutation(`game ${status}`, () => {
+      void this.runEventMutation(
+        `game ${status}`,
+        () => {
+          if (status === "completed") {
+            this.options.db.markGameCompleted(gameAddress);
+            this.cancelAutoComplete(gameAddress);
+            this.options.onGameFinalized?.(gameAddress);
+            return;
+          }
+
+          this.options.db.markGameClosed(gameAddress);
+          this.options.db.clearStalePlayersForGame(gameAddress);
+          logger.info(`🚫 Game closed: ${gameAddress}`);
+          this.cancelAutoComplete(gameAddress);
+          this.options.onGameFinalized?.(gameAddress);
+        },
+        gameAddress,
+      );
+      return;
+    }
+
+    void this.runEventMutation(
+      `game ${status}`,
+      async () => {
+        await flushPromise;
+        // Serialize with player mutations to keep per-game ordering consistent.
         if (status === "completed") {
           this.options.db.markGameCompleted(gameAddress);
           this.cancelAutoComplete(gameAddress);
@@ -339,26 +376,9 @@ export class OracleEventProcessor {
         logger.info(`🚫 Game closed: ${gameAddress}`);
         this.cancelAutoComplete(gameAddress);
         this.options.onGameFinalized?.(gameAddress);
-      }, gameAddress);
-      return;
-    }
-
-    void this.runEventMutation(`game ${status}`, async () => {
-      await flushPromise;
-      // Serialize with player mutations to keep per-game ordering consistent.
-      if (status === "completed") {
-        this.options.db.markGameCompleted(gameAddress);
-        this.cancelAutoComplete(gameAddress);
-        this.options.onGameFinalized?.(gameAddress);
-        return;
-      }
-
-      this.options.db.markGameClosed(gameAddress);
-      this.options.db.clearStalePlayersForGame(gameAddress);
-      logger.info(`🚫 Game closed: ${gameAddress}`);
-      this.cancelAutoComplete(gameAddress);
-      this.options.onGameFinalized?.(gameAddress);
-    }, gameAddress);
+      },
+      gameAddress,
+    );
   }
 
   public handleGameInitialized(event: TimbaGameInitializedEvent): void {
@@ -598,8 +618,7 @@ export class OracleEventProcessor {
 
     try {
       const applyPlayerMutations = (this.options.db as any).applyPlayerMutations as
-        | ((address: string, ops: ReadonlyArray<PlayerMutation>) => void)
-        | undefined;
+        ((address: string, ops: ReadonlyArray<PlayerMutation>) => void) | undefined;
 
       if (typeof applyPlayerMutations === "function") {
         // Important: call through the db instance to preserve `this` binding for class methods.
@@ -705,13 +724,18 @@ export class OracleEventProcessor {
   }
 
   private validateEventData(
-    eventData: { gameAddress: string; playerAddress?: string; ticketIndex?: number; movedParticipant?: string },
+    eventData: {
+      gameAddress: string;
+      playerAddress?: string;
+      ticketIndex?: number;
+      movedParticipant?: string;
+    },
     eventType: string,
     options: {
       requireTicketIndex?: boolean;
       requirePlayerAddress?: boolean;
       requireValidGameAddress?: boolean;
-    } = {}
+    } = {},
   ): { valid: boolean; message?: string } {
     if (!eventData.gameAddress) {
       return {
@@ -735,10 +759,7 @@ export class OracleEventProcessor {
         };
       }
 
-      if (
-        !Number.isSafeInteger(eventData.ticketIndex) ||
-        eventData.ticketIndex < 0
-      ) {
+      if (!Number.isSafeInteger(eventData.ticketIndex) || eventData.ticketIndex < 0) {
         return {
           valid: false,
           message: `⚠️  Invalid ticket index ${eventData.ticketIndex} in ${eventType} event for ${eventData.gameAddress}`,
@@ -756,13 +777,19 @@ export class OracleEventProcessor {
     return { valid: true };
   }
 
-  public extractEventData(event: TimbaEvent): { gameAddress: string; playerAddress?: string; ticketIndex?: number; movedParticipant?: string } {
+  public extractEventData(event: TimbaEvent): {
+    gameAddress: string;
+    playerAddress?: string;
+    ticketIndex?: number;
+    movedParticipant?: string;
+  } {
     const gameKey = (event.gameKey ?? event.gameAddress ?? event.game) as PublicKeyLike | undefined;
     const playerKey = (event.player ?? event.playerAddress) as PublicKeyLike | undefined;
-    const movedKey = (event.movedParticipant ?? event.moved_participant) as PublicKeyLike | null | undefined;
+    const movedKey = (event.movedParticipant ?? event.moved_participant) as
+      PublicKeyLike | null | undefined;
 
     return {
-      gameAddress: gameKey ? toBase58(gameKey) ?? "" : "",
+      gameAddress: gameKey ? (toBase58(gameKey) ?? "") : "",
       playerAddress: playerKey ? toBase58(playerKey) : undefined,
       ticketIndex: resolveNumericLike(event.ticketIndex ?? event.ticket_index),
       movedParticipant: movedKey ? toBase58(movedKey) : undefined,
@@ -788,7 +815,10 @@ class RegistrySyncScheduler {
   constructor(
     private readonly syncFn: (options: RegistrySyncScheduleOptions) => Promise<boolean>,
     private readonly retryDelayMs: number,
-    private readonly setTimer: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>,
+    private readonly setTimer: (
+      callback: () => void,
+      delay: number,
+    ) => ReturnType<typeof setTimeout>,
     private readonly clearTimer: (timer: ReturnType<typeof setTimeout>) => void,
     private readonly syncTimeoutMs: number = 30000,
   ) {}
@@ -865,10 +895,10 @@ class RegistrySyncScheduler {
               success = await Promise.race([
                 this.syncFn(next),
                 new Promise<boolean>((_, reject) => {
-                   timerId = this.setTimer(() => {
-                     reject(new Error("Registry sync timeout"));
-                   }, this.syncTimeoutMs);
-                })
+                  timerId = this.setTimer(() => {
+                    reject(new Error("Registry sync timeout"));
+                  }, this.syncTimeoutMs);
+                }),
               ]);
             } finally {
               if (timerId !== undefined) {
@@ -903,8 +933,8 @@ class RegistrySyncScheduler {
 
             // Move retryPending to queue
             if (current.retryPending) {
-               current.queue.unshift(current.retryPending);
-               current.retryPending = undefined;
+              current.queue.unshift(current.retryPending);
+              current.retryPending = undefined;
             }
 
             this.entries.set(gameAddress, current);
@@ -913,20 +943,20 @@ class RegistrySyncScheduler {
 
           // Store the failed options as retryPending if not already set
           if (!entry.retryPending) {
-             entry.retryPending = next;
+            entry.retryPending = next;
           } else {
-             entry.retryPending = this.mergeScheduleOptions(entry.retryPending, next);
+            entry.retryPending = this.mergeScheduleOptions(entry.retryPending, next);
           }
           this.entries.set(gameAddress, entry);
 
           return;
         }
 
-      if (entry.timer !== undefined) {
-        this.clearTimer(entry.timer);
-        entry.timer = undefined;
+        if (entry.timer !== undefined) {
+          this.clearTimer(entry.timer);
+          entry.timer = undefined;
+        }
       }
-    }
     } finally {
       entry.running = false;
       if (entry.retryPending) {
@@ -941,7 +971,6 @@ class RegistrySyncScheduler {
       }
     }
   }
-
 
   public hasPendingEntry(gameAddress: string): boolean {
     return this.entries.has(gameAddress);

@@ -14,9 +14,7 @@ export interface GameCompletionTransactionBuilderOptions {
 }
 
 export class GameCompletionTransactionBuilder {
-  constructor(
-    private readonly options: GameCompletionTransactionBuilderOptions,
-  ) {}
+  constructor(private readonly options: GameCompletionTransactionBuilderOptions) {}
 
   public async buildCompletionTransaction(args: {
     gameAccount: TimbaGameAccount;
@@ -29,13 +27,7 @@ export class GameCompletionTransactionBuilder {
     signers: anchor.web3.Keypair[];
   }> {
     const program = this.options.getProgram();
-    const {
-      gameAccount,
-      winnerAddress,
-      randomHashBuffer,
-      secretKeyBuffer,
-      winnerIndex,
-    } = args;
+    const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
 
     const creatorPublicKey = ensurePublicKey(gameAccount.creator);
     const tokenMint = ensurePublicKey(gameAccount.tokenMint);
@@ -49,20 +41,14 @@ export class GameCompletionTransactionBuilder {
 
     const programId = ensurePublicKey(program.programId);
 
-    const {
-      gamePda,
-      oraclePda,
-      gameTokenPda,
-      gameVaultPda,
-      winnerTokenAccount,
-      gameTokenAccount,
-    } = deriveGameAccounts({
-      programId,
-      randomHash: randomHashBuffer,
-      tokenMint,
-      winner: winnerAddress,
-      tokenProgramId,
-    });
+    const { gamePda, oraclePda, gameTokenPda, gameVaultPda, winnerTokenAccount, gameTokenAccount } =
+      deriveGameAccounts({
+        programId,
+        randomHash: randomHashBuffer,
+        tokenMint,
+        winner: winnerAddress,
+        tokenProgramId,
+      });
 
     const gameTokenCtx = {
       tokenMint,

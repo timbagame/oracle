@@ -20,12 +20,10 @@ describe("ScanLoopRunner abort handling", () => {
       },
     });
 
-    const delaySpy = spyOn(delayModule, "delay").mockImplementation(
-      async (_ms, options) => {
-        expect(options?.signal).toBe(abortController.signal);
-        abortController.abort();
-      },
-    );
+    const delaySpy = spyOn(delayModule, "delay").mockImplementation(async (_ms, options) => {
+      expect(options?.signal).toBe(abortController.signal);
+      abortController.abort();
+    });
 
     try {
       const stats = await runner.scanAndCompleteActiveGames({

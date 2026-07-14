@@ -1,11 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { RegistrySyncScheduler } from "../oracle-event-processor.ts";
 
-async function waitFor(
-  predicate: () => boolean,
-  label: string,
-  timeout = 2000,
-): Promise<void> {
+async function waitFor(predicate: () => boolean, label: string, timeout = 2000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     if (predicate()) {
@@ -14,7 +10,7 @@ async function waitFor(
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error(`${label} timed out`);
-};
+}
 
 describe("RegistrySyncScheduler", () => {
   it("keeps queued requests when a retry timer is pending", async () => {

@@ -9,10 +9,16 @@ async function main(): Promise<void> {
     const [oraclePda] = PublicKey.findProgramAddressSync([ORACLE_SEED], program.programId);
     const account = await program.account.oracle.fetch(oraclePda);
 
-    console.log(JSON.stringify({
-      oracleAddress: oraclePda.toBase58(),
-      account,
-    }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          oracleAddress: oraclePda.toBase58(),
+          account,
+        },
+        null,
+        2,
+      ),
+    );
   } catch (error) {
     console.error("Failed to inspect oracle:", error);
   } finally {

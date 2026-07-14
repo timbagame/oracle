@@ -41,8 +41,8 @@ describe("Oracle Robustness - Temporary RPC Failure", () => {
 
     // 3. Run scan multiple times - should stay pending until max attempts
     for (let i = 1; i < 5; i++) {
-        await runner.scanAndCompleteActiveGames();
-        expect(db.getGameStatus(gameAddress)).toBe("pending");
+      await runner.scanAndCompleteActiveGames();
+      expect(db.getGameStatus(gameAddress)).toBe("pending");
     }
 
     // 4. Final scan should mark as desynced (5th attempt)
@@ -55,7 +55,7 @@ describe("Oracle Robustness - Temporary RPC Failure", () => {
 
     // 6. Cleanup after explicit completion SHOULD delete it
     db.markGameCompleted(gameAddress);
-    await new Promise(r => setTimeout(r, 10)); // Ensure it's old enough for the cutoff
+    await new Promise((r) => setTimeout(r, 10)); // Ensure it's old enough for the cutoff
     db.cleanupOldRecords(0.000001);
     expect(db.getSecretKey(gameAddress)).toBeNull();
   });

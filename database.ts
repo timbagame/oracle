@@ -14,8 +14,7 @@ const SQL_STATEMENTS = Object.freeze({
     "UPDATE secret_keys SET signed_at = COALESCE(signed_at, ?) WHERE game_address = ? AND used = FALSE",
   reactivateSecretKey: "UPDATE secret_keys SET used = FALSE WHERE game_address = ?",
   deleteSecretKey: "DELETE FROM secret_keys WHERE game_address = ?",
-  upsertGameTracking:
-    `INSERT INTO game_tracking (game_address, status, game_type, last_checked, auto_complete_disabled)
+  upsertGameTracking: `INSERT INTO game_tracking (game_address, status, game_type, last_checked, auto_complete_disabled)
      VALUES (?, ?, ?, ?, COALESCE((SELECT auto_complete_disabled FROM game_tracking WHERE game_address = ?), FALSE))
      ON CONFLICT(game_address) DO UPDATE SET
        status = excluded.status,
@@ -32,8 +31,7 @@ const SQL_STATEMENTS = Object.freeze({
     "UPDATE game_tracking SET status = ?, completion_attempts = 0, completed_at = NULL, last_checked = ? WHERE game_address = ?",
   upsertGamePlayer:
     "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)",
-  deleteGamePlayerByTicket:
-    "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?",
+  deleteGamePlayerByTicket: "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?",
   deleteGamePlayerByAddress:
     "DELETE FROM game_players WHERE game_address = ? AND player_address = ?",
   updateGameMetadata:
@@ -52,8 +50,7 @@ const SQL_QUERIES = Object.freeze({
   selectSecretKeyAny:
     "SELECT secret_key, random_hash, used FROM secret_keys WHERE game_address = ?",
   selectGameType: "SELECT game_type FROM game_tracking WHERE game_address = ?",
-  selectGameStatus:
-    "SELECT status, game_type FROM game_tracking WHERE game_address = ?",
+  selectGameStatus: "SELECT status, game_type FROM game_tracking WHERE game_address = ?",
   selectGameStatusWithAttempts:
     "SELECT status, completion_attempts, auto_complete_disabled FROM game_tracking WHERE game_address = ?",
   selectGameStatusWithAutoFlag:
@@ -112,8 +109,7 @@ interface DatabaseStats {
 }
 
 export type ResetCompletionAttemptsResult =
-  | { success: true }
-  | { success: false; reason: "not-found" | "finalized" | "unchanged" };
+  { success: true } | { success: false; reason: "not-found" | "finalized" | "unchanged" };
 
 export type ToggleAutoCompleteResult =
   | { success: true; autoCompleteDisabled: boolean }
@@ -298,9 +294,9 @@ export class OracleDatabase {
   }
 
   private ensureSecretSchema(): void {
-    const tableInfo = this.db
-      .query("PRAGMA table_info('secret_keys')")
-      .all() as Array<{ name: string }>;
+    const tableInfo = this.db.query("PRAGMA table_info('secret_keys')").all() as Array<{
+      name: string;
+    }>;
     if (!tableInfo.some((column) => column.name === "signed_at")) {
       this.executeSchemaSteps([
         {
@@ -318,9 +314,9 @@ export class OracleDatabase {
   }
 
   private ensureTicketSchema(): void {
-    const tableInfo = this.db
-      .query("PRAGMA table_info('game_players')")
-      .all() as Array<{ name: string }>;
+    const tableInfo = this.db.query("PRAGMA table_info('game_players')").all() as Array<{
+      name: string;
+    }>;
     const hasTicketIndex = tableInfo.some((column) => column.name === "ticket_index");
 
     if (!hasTicketIndex) {
@@ -335,9 +331,9 @@ export class OracleDatabase {
   }
 
   private ensureTrackingSchema(): void {
-    const tableInfo = this.db
-      .query("PRAGMA table_info('game_tracking')")
-      .all() as Array<{ name: string }>;
+    const tableInfo = this.db.query("PRAGMA table_info('game_tracking')").all() as Array<{
+      name: string;
+    }>;
     const hasAutoCompleteFlag = tableInfo.some(
       (column) => column.name === "auto_complete_disabled",
     );
@@ -353,11 +349,7 @@ export class OracleDatabase {
     }
   }
 
-  private executeDbOperation<T>(
-    operation: () => T,
-    errorMessage: string,
-    defaultValue?: T
-  ): T {
+  private executeDbOperation<T>(operation: () => T, errorMessage: string, defaultValue?: T): T {
     try {
       return operation();
     } catch (error) {
@@ -414,11 +406,15 @@ export class OracleDatabase {
     defaultValue: T | null,
     ...params: Parameters<ReturnType<Database["prepare"]>["get"]>
   ): T | null {
-    return this.executeDbOperation(() => {
-      const stmt = this.getPreparedStatement(sql);
-      const result = stmt.get(...params) as T;
-      return result || defaultValue;
-    }, errorMessage, defaultValue);
+    return this.executeDbOperation(
+      () => {
+        const stmt = this.getPreparedStatement(sql);
+        const result = stmt.get(...params) as T;
+        return result || defaultValue;
+      },
+      errorMessage,
+      defaultValue,
+    );
   }
 
   private queryAll<T>(
@@ -426,18 +422,18 @@ export class OracleDatabase {
     errorMessage: string,
     ...params: Parameters<ReturnType<Database["prepare"]>["all"]>
   ): T[] {
-    return this.executeDbOperation(() => {
-      const stmt = this.getPreparedStatement(sql);
-      return stmt.all(...params) as T[];
-    }, errorMessage, []);
+    return this.executeDbOperation(
+      () => {
+        const stmt = this.getPreparedStatement(sql);
+        return stmt.all(...params) as T[];
+      },
+      errorMessage,
+      [],
+    );
   }
 
   // Secret key management
-  public saveSecretKey(
-    gameAddress: string,
-    secretKey: string,
-    randomHash: string,
-  ): void {
+  public saveSecretKey(gameAddress: string, secretKey: string, randomHash: string): void {
     this.runStatement(
       SQL_STATEMENTS.insertSecretKey,
       `Failed to save secret key for game ${gameAddress}`,
@@ -449,11 +445,7 @@ export class OracleDatabase {
   }
 
   public deleteSecretKey(gameAddress: string): void {
-    this.runStatement(
-      SQL_STATEMENTS.deleteSecretKey,
-      "Failed to delete secret key",
-      gameAddress,
-    );
+    this.runStatement(SQL_STATEMENTS.deleteSecretKey, "Failed to delete secret key", gameAddress);
   }
 
   public getSecretKey(gameAddress: string): SecretKeyData | null {
@@ -461,7 +453,7 @@ export class OracleDatabase {
       SQL_QUERIES.selectSecretKey,
       "Failed to get secret key",
       null,
-      gameAddress
+      gameAddress,
     );
 
     return result
@@ -473,12 +465,11 @@ export class OracleDatabase {
   }
 
   public getSecretKeyInfo(gameAddress: string): (SecretKeyData & { used: boolean }) | null {
-    const result = this.queryOne<{ secret_key: string; random_hash: string; used: number | boolean }>(
-      SQL_QUERIES.selectSecretKeyAny,
-      "Failed to get secret key info",
-      null,
-      gameAddress,
-    );
+    const result = this.queryOne<{
+      secret_key: string;
+      random_hash: string;
+      used: number | boolean;
+    }>(SQL_QUERIES.selectSecretKeyAny, "Failed to get secret key info", null, gameAddress);
 
     if (!result) {
       return null;
@@ -512,41 +503,45 @@ export class OracleDatabase {
     if (minutesOld <= 0) return 0;
     const cutoffTime = Date.now() - minutesOld * 60 * 1000;
 
-    return this.executeDbOperation(() => {
-      const cleanup = this.db.transaction(() => {
-        this.db
-          .query(
-            `DELETE FROM game_players
+    return this.executeDbOperation(
+      () => {
+        const cleanup = this.db.transaction(() => {
+          this.db
+            .query(
+              `DELETE FROM game_players
              WHERE game_address IN (
                SELECT game_address FROM secret_keys
                WHERE signed_at IS NULL AND used = FALSE AND created_at < ?
              )`,
-          )
-          .run(cutoffTime);
-        this.db
-          .query(
-            `DELETE FROM game_tracking
+            )
+            .run(cutoffTime);
+          this.db
+            .query(
+              `DELETE FROM game_tracking
              WHERE status = ? AND game_address IN (
                SELECT game_address FROM secret_keys
                WHERE signed_at IS NULL AND used = FALSE AND created_at < ?
              )`,
-          )
-          .run(DEFAULT_STATUS, cutoffTime);
-        const result = this.db
-          .query(
-            `DELETE FROM secret_keys
+            )
+            .run(DEFAULT_STATUS, cutoffTime);
+          const result = this.db
+            .query(
+              `DELETE FROM secret_keys
              WHERE signed_at IS NULL
                AND used = FALSE
                AND created_at < ?
                AND game_address NOT IN (
                  SELECT game_address FROM game_tracking WHERE status != ?
                )`,
-          )
-          .run(cutoffTime, DEFAULT_STATUS);
-        return result.changes;
-      });
-      return cleanup();
-    }, "Failed to clean up unsigned commitments", 0);
+            )
+            .run(cutoffTime, DEFAULT_STATUS);
+          return result.changes;
+        });
+        return cleanup();
+      },
+      "Failed to clean up unsigned commitments",
+      0,
+    );
   }
 
   public reactivateSecretKey(gameAddress: string): boolean {
@@ -599,21 +594,16 @@ export class OracleDatabase {
     );
   }
 
-  public setAutoCompleteDisabled(
-    gameAddress: string,
-    disabled: boolean,
-  ): ToggleAutoCompleteResult {
+  public setAutoCompleteDisabled(gameAddress: string, disabled: boolean): ToggleAutoCompleteResult {
     const normalized = gameAddress.trim();
     if (!normalized) {
       return { success: false, reason: "invalid-address" };
     }
 
-    const statusRecord = this.queryOne<{ status: string; auto_complete_disabled: number | boolean }>(
-      SQL_QUERIES.selectGameStatusWithAutoFlag,
-      "Failed to lookup game status",
-      null,
-      normalized,
-    );
+    const statusRecord = this.queryOne<{
+      status: string;
+      auto_complete_disabled: number | boolean;
+    }>(SQL_QUERIES.selectGameStatusWithAutoFlag, "Failed to lookup game status", null, normalized);
 
     if (!statusRecord) {
       return { success: false, reason: "not-found" };
@@ -666,7 +656,7 @@ export class OracleDatabase {
       SQL_QUERIES.selectGameType,
       "Failed to get game type",
       null,
-      gameAddress
+      gameAddress,
     );
     return result?.game_type || null;
   }
@@ -684,17 +674,10 @@ export class OracleDatabase {
   private updateGameStatus(
     gameAddress: string,
     status: "completed" | "cancelled",
-    errorMessage: string
+    errorMessage: string,
   ): void {
     const now = Date.now();
-    this.runStatement(
-      SQL_STATEMENTS.updateGameStatus,
-      errorMessage,
-      status,
-      now,
-      now,
-      gameAddress,
-    );
+    this.runStatement(SQL_STATEMENTS.updateGameStatus, errorMessage, status, now, now, gameAddress);
   }
 
   public markGameCompleted(gameAddress: string): void {
@@ -717,18 +700,15 @@ export class OracleDatabase {
   }
 
   public finalizeCompletedGame(gameAddress: string): void {
-    this.runInTransaction(
-      () => {
-        this.markSecretKeyUsed(gameAddress);
-        this.markGameCompleted(gameAddress);
-        this.runStatement(
-          SQL_STATEMENTS.deleteGamePlayers,
-          "Failed to delete player rows for completed game",
-          gameAddress,
-        );
-      },
-      `Failed to finalize completed game ${gameAddress}`
-    );
+    this.runInTransaction(() => {
+      this.markSecretKeyUsed(gameAddress);
+      this.markGameCompleted(gameAddress);
+      this.runStatement(
+        SQL_STATEMENTS.deleteGamePlayers,
+        "Failed to delete player rows for completed game",
+        gameAddress,
+      );
+    }, `Failed to finalize completed game ${gameAddress}`);
   }
 
   public incrementCompletionAttempts(gameAddress: string): void {
@@ -814,7 +794,7 @@ export class OracleDatabase {
         "Failed to get pending games",
         DEFAULT_STATUS,
         maxAttempts,
-        PENDING_SCAN_LIMIT
+        PENDING_SCAN_LIMIT,
       );
     }
 
@@ -822,7 +802,7 @@ export class OracleDatabase {
       SQL_QUERIES.selectPendingGames,
       "Failed to get pending games",
       DEFAULT_STATUS,
-      PENDING_SCAN_LIMIT
+      PENDING_SCAN_LIMIT,
     );
   }
 
@@ -833,7 +813,7 @@ export class OracleDatabase {
         "Failed to get pending games",
         DEFAULT_STATUS,
         maxAttempts,
-        PENDING_SCAN_LIMIT
+        PENDING_SCAN_LIMIT,
       );
     }
 
@@ -841,7 +821,7 @@ export class OracleDatabase {
       SQL_QUERIES.selectPendingGamesActive,
       "Failed to get pending games",
       DEFAULT_STATUS,
-      PENDING_SCAN_LIMIT
+      PENDING_SCAN_LIMIT,
     );
   }
 
@@ -866,11 +846,13 @@ export class OracleDatabase {
   }
 
   private getSecretsStats(): { total: number; used: number } {
-    return this.queryOne<{ total: number; used: number }>(
-      SQL_QUERIES.selectSecretsStats,
-      "Failed to get secrets stats",
-      { total: 0, used: 0 }
-    ) || { total: 0, used: 0 };
+    return (
+      this.queryOne<{ total: number; used: number }>(
+        SQL_QUERIES.selectSecretsStats,
+        "Failed to get secrets stats",
+        { total: 0, used: 0 },
+      ) || { total: 0, used: 0 }
+    );
   }
 
   private getGamesStats(): {
@@ -878,16 +860,18 @@ export class OracleDatabase {
     completed: number;
     cancelled: number;
   } {
-    return this.queryOne<{
-      pending: number;
-      completed: number;
-      cancelled: number;
-    }>(
-      SQL_QUERIES.selectGamesStats,
-      "Failed to get games stats",
-      { pending: 0, completed: 0, cancelled: 0 },
-      DEFAULT_STATUS
-    ) || { pending: 0, completed: 0, cancelled: 0 };
+    return (
+      this.queryOne<{
+        pending: number;
+        completed: number;
+        cancelled: number;
+      }>(
+        SQL_QUERIES.selectGamesStats,
+        "Failed to get games stats",
+        { pending: 0, completed: 0, cancelled: 0 },
+        DEFAULT_STATUS,
+      ) || { pending: 0, completed: 0, cancelled: 0 }
+    );
   }
 
   // Utility methods
@@ -911,7 +895,7 @@ export class OracleDatabase {
              WHERE status IN ('completed', 'cancelled')
            )`,
         "Failed to delete old secret keys",
-        cutoffTime
+        cutoffTime,
       );
 
       const deletedPlayers = this.runDelete(
@@ -921,14 +905,14 @@ export class OracleDatabase {
          )`,
         "Failed to delete old player rows",
         DEFAULT_STATUS,
-        cutoffTime
+        cutoffTime,
       );
 
       const deletedGames = this.runDelete(
         DELETE_COMPLETED_GAMES_SQL,
         "Failed to delete old game tracking rows",
         DEFAULT_STATUS,
-        cutoffTime
+        cutoffTime,
       );
 
       const deletedCounts = {
@@ -938,7 +922,7 @@ export class OracleDatabase {
       };
 
       logger.info(
-        `🧹 Cleanup completed - Secrets: ${deletedCounts.deletedSecrets}, Games: ${deletedCounts.deletedGames}, Players: ${deletedCounts.deletedPlayers}`
+        `🧹 Cleanup completed - Secrets: ${deletedCounts.deletedSecrets}, Games: ${deletedCounts.deletedGames}, Players: ${deletedCounts.deletedPlayers}`,
       );
 
       return deletedCounts;
@@ -989,11 +973,7 @@ export class OracleDatabase {
     };
   }
 
-  public addPlayerToGame(
-    gameAddress: string,
-    playerAddress: string,
-    ticketIndex: number
-  ): void {
+  public addPlayerToGame(gameAddress: string, playerAddress: string, ticketIndex: number): void {
     this.runStatement(
       SQL_STATEMENTS.upsertGamePlayer,
       "Failed to add player to game",
@@ -1004,10 +984,7 @@ export class OracleDatabase {
     );
   }
 
-  public removePlayerFromGame(
-    gameAddress: string,
-    ticketIndex: number
-  ): void {
+  public removePlayerFromGame(gameAddress: string, ticketIndex: number): void {
     this.runStatement(
       SQL_STATEMENTS.deleteGamePlayerByTicket,
       "Failed to remove player from game",
@@ -1036,48 +1013,45 @@ export class OracleDatabase {
       return;
     }
 
-    this.runInTransaction(
-      () => {
-        const baseTimestamp = Date.now();
-        operations.forEach((op, index) => {
-          if (op.action === "joined") {
-            this.runStatement(
-              SQL_STATEMENTS.upsertGamePlayer,
-              "Failed to add player to game",
-              gameAddress,
-              op.playerAddress,
-              op.ticketIndex,
-              baseTimestamp + index,
-            );
-            return;
-          }
-
+    this.runInTransaction(() => {
+      const baseTimestamp = Date.now();
+      operations.forEach((op, index) => {
+        if (op.action === "joined") {
           this.runStatement(
-            SQL_STATEMENTS.deleteGamePlayerByTicket,
-            "Failed to remove player from game",
+            SQL_STATEMENTS.upsertGamePlayer,
+            "Failed to add player to game",
             gameAddress,
+            op.playerAddress,
             op.ticketIndex,
+            baseTimestamp + index,
           );
-          if (op.movedParticipant) {
-            this.runStatement(
-              SQL_STATEMENTS.deleteGamePlayerByAddress,
-              "Failed to remove moved player from its previous index",
-              gameAddress,
-              op.movedParticipant,
-            );
-            this.runStatement(
-              SQL_STATEMENTS.upsertGamePlayer,
-              "Failed to move player after unjoin",
-              gameAddress,
-              op.movedParticipant,
-              op.ticketIndex,
-              baseTimestamp + index,
-            );
-          }
-        });
-      },
-      `Failed to apply player mutations for game ${gameAddress}`,
-    );
+          return;
+        }
+
+        this.runStatement(
+          SQL_STATEMENTS.deleteGamePlayerByTicket,
+          "Failed to remove player from game",
+          gameAddress,
+          op.ticketIndex,
+        );
+        if (op.movedParticipant) {
+          this.runStatement(
+            SQL_STATEMENTS.deleteGamePlayerByAddress,
+            "Failed to remove moved player from its previous index",
+            gameAddress,
+            op.movedParticipant,
+          );
+          this.runStatement(
+            SQL_STATEMENTS.upsertGamePlayer,
+            "Failed to move player after unjoin",
+            gameAddress,
+            op.movedParticipant,
+            op.ticketIndex,
+            baseTimestamp + index,
+          );
+        }
+      });
+    }, `Failed to apply player mutations for game ${gameAddress}`);
   }
 
   public clearStalePlayersForGame(gameAddress: string): void {
@@ -1093,38 +1067,43 @@ export class OracleDatabase {
     const results = this.queryAll<{ player_address: string }>(
       SQL_QUERIES.selectPlayersForGame,
       "Failed to get game players",
-      gameAddress
+      gameAddress,
     );
     return results.map((row) => row.player_address);
   }
 
   public replaceGamePlayers(gameAddress: string, players: string[]): void {
-    this.runInTransaction(
-      () => {
-        this.runStatement(
-          SQL_STATEMENTS.deleteGamePlayers,
-          "Failed to clear player registry for synchronization",
-          gameAddress,
-        );
+    this.runInTransaction(() => {
+      this.runStatement(
+        SQL_STATEMENTS.deleteGamePlayers,
+        "Failed to clear player registry for synchronization",
+        gameAddress,
+      );
 
-        const baseTimestamp = Date.now();
-        players.forEach((playerAddress, index) => {
-          this.runStatement(
-            SQL_STATEMENTS.upsertGamePlayer,
-            "Failed to replace player during registry synchronization",
-            gameAddress,
-            playerAddress,
-            index,
-            baseTimestamp + index,
-          );
-        });
-      },
-      `Failed to replace player registry for game ${gameAddress}`,
-    );
+      const baseTimestamp = Date.now();
+      players.forEach((playerAddress, index) => {
+        this.runStatement(
+          SQL_STATEMENTS.upsertGamePlayer,
+          "Failed to replace player during registry synchronization",
+          gameAddress,
+          playerAddress,
+          index,
+          baseTimestamp + index,
+        );
+      });
+    }, `Failed to replace player registry for game ${gameAddress}`);
   }
 
-  public getPlayerTicketStats(gameAddress: string): { count: number; maxIndex: number | null; minIndex: number | null } {
-    const result = this.queryOne<{ count: number; max_index: number | null; min_index: number | null }>(
+  public getPlayerTicketStats(gameAddress: string): {
+    count: number;
+    maxIndex: number | null;
+    minIndex: number | null;
+  } {
+    const result = this.queryOne<{
+      count: number;
+      max_index: number | null;
+      min_index: number | null;
+    }>(
       SQL_QUERIES.selectPlayerTicketStats,
       "Failed to query player ticket statistics",
       { count: 0, max_index: null, min_index: null },

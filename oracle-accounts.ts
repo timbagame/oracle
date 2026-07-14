@@ -1,8 +1,5 @@
 import { PublicKey } from "@solana/web3.js";
-import {
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddressSync,
-} from "@solana/spl-token";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 
 export const GAME_SEED = Buffer.from("game", "utf8");
 export const ORACLE_SEED = Buffer.from("oracle", "utf8");
@@ -64,4 +61,3 @@ export function deriveGameAccounts(params: {
     gameTokenAccount,
   };
 }
-

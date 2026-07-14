@@ -46,7 +46,10 @@ jobs:
         shell: bash
         env:
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: printf '%s' "${REGISTRY_TOKEN}" | podman login "${REGISTRY}" --username "${GITHUB_ACTOR}" --password-stdin
+        run: |
+          mkdir -p "${HOME}/.docker"
+          printf '%s' "${REGISTRY_TOKEN}" | podman login --authfile "${HOME}/.docker/config.json" "${REGISTRY}" --username "${GITHUB_ACTOR}" --password-stdin
+          echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
 
       - name: Build OCI image
         run: podman build --platform linux/amd64 --format oci --file Containerfile --tag "${IMAGE_TAG}" .

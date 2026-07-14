@@ -1,5 +1,4 @@
-import { beforeAll, afterAll, beforeEach, describe, expect, it } from "bun:test";
-import { spyOn } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { rmSync } from "fs";
 import { OracleDatabase } from "../database.ts";
 import { createTestEnv } from "./helpers/create-test-env.ts";
@@ -96,9 +95,7 @@ describe("OracleDatabase", () => {
     const firstPass = db.cleanupOldRecords(-1);
     expect(firstPass).toEqual({ deletedSecrets: 0, deletedGames: 0, deletedPlayers: 0 });
     expect(db.getSecretKey(gameAddress)).not.toBeNull();
-    expect(db.getPendingGames()).toEqual([
-      { game_address: gameAddress, completion_attempts: 0 },
-    ]);
+    expect(db.getPendingGames()).toEqual([{ game_address: gameAddress, completion_attempts: 0 }]);
     expect(db.getGamePlayers(gameAddress)).toEqual(["player-one"]);
 
     db.markSecretKeyUsed(gameAddress);
@@ -151,23 +148,19 @@ describe("OracleDatabase", () => {
 
     db.trackGame(gameAddress);
     expect(db.isAutoCompleteDisabled(gameAddress)).toBe(false);
-    expect(db.getActivePendingGames().map((entry) => entry.game_address)).toContain(
-      gameAddress,
-    );
+    expect(db.getActivePendingGames().map((entry) => entry.game_address)).toContain(gameAddress);
 
     const disableResult = db.setAutoCompleteDisabled(gameAddress, true);
     expect(disableResult).toEqual({ success: true, autoCompleteDisabled: true });
     expect(db.isAutoCompleteDisabled(gameAddress)).toBe(true);
-    expect(
-      db.getActivePendingGames().some((entry) => entry.game_address === gameAddress),
-    ).toBe(false);
+    expect(db.getActivePendingGames().some((entry) => entry.game_address === gameAddress)).toBe(
+      false,
+    );
 
     const enableResult = db.setAutoCompleteDisabled(gameAddress, false);
     expect(enableResult).toEqual({ success: true, autoCompleteDisabled: false });
     expect(db.isAutoCompleteDisabled(gameAddress)).toBe(false);
-    expect(db.getActivePendingGames().map((entry) => entry.game_address)).toContain(
-      gameAddress,
-    );
+    expect(db.getActivePendingGames().map((entry) => entry.game_address)).toContain(gameAddress);
 
     const notFound = db.setAutoCompleteDisabled("missing-auto", true);
     expect(notFound).toEqual({ success: false, reason: "not-found" });
@@ -176,12 +169,11 @@ describe("OracleDatabase", () => {
   it("resets completion attempts for eligible games", () => {
     const db = OracleDatabase.getInstance();
     const sqlite = (db as any).db as {
-      prepare: (
-        sql: string,
-      ) => {
+      prepare: (sql: string) => {
         get: (
           ...args: unknown[]
-        ) => { status: string; completion_attempts: number; completed_at?: number | null } | undefined;
+        ) =>
+          { status: string; completion_attempts: number; completed_at?: number | null } | undefined;
       };
     };
 
@@ -218,10 +210,14 @@ describe("OracleDatabase", () => {
       reason: "finalized",
     });
 
-    expect(db.resetCompletionAttempts(finalized, { allowFinalized: true })).toEqual({ success: true });
+    expect(db.resetCompletionAttempts(finalized, { allowFinalized: true })).toEqual({
+      success: true,
+    });
 
     snapshot = sqlite
-      .prepare("SELECT status, completion_attempts, completed_at FROM game_tracking WHERE game_address = ?")
+      .prepare(
+        "SELECT status, completion_attempts, completed_at FROM game_tracking WHERE game_address = ?",
+      )
       .get(finalized);
     expect(snapshot?.status).toBe("pending");
     expect(snapshot?.completion_attempts).toBe(0);
@@ -243,9 +239,7 @@ describe("OracleDatabase", () => {
     db.markGameCompleted(gameAddress);
 
     const sqlite = (db as any).db as {
-      prepare: (
-        sql: string,
-      ) => { get: (...args: unknown[]) => { status?: string } | undefined };
+      prepare: (sql: string) => { get: (...args: unknown[]) => { status?: string } | undefined };
     };
 
     const before = sqlite
@@ -277,7 +271,9 @@ describe("OracleDatabase", () => {
       db.trackGame(address);
       const lastChecked = baseTimestamp + (total - i);
       rawDb
-        .prepare("UPDATE game_tracking SET last_checked = ?, completion_attempts = ? WHERE game_address = ?")
+        .prepare(
+          "UPDATE game_tracking SET last_checked = ?, completion_attempts = ? WHERE game_address = ?",
+        )
         .run(lastChecked, i, address);
 
       if (i >= total - 50) {
@@ -291,7 +287,7 @@ describe("OracleDatabase", () => {
     expect(pending).toHaveLength(50);
     expect(pending.map((game) => game.game_address)).toEqual(expected);
     expect(pending.map((game) => game.completion_attempts)).toEqual(
-      expected.map((address) => Number(address.split("-")[1]))
+      expected.map((address) => Number(address.split("-")[1])),
     );
   });
 
@@ -302,11 +298,7 @@ describe("OracleDatabase", () => {
     db.addPlayerToGame("game-players", "player-one", 1);
     db.addPlayerToGame("game-players", "player-two", 2);
 
-    expect(db.getGamePlayers("game-players")).toEqual([
-      "player-one",
-      "player-one",
-      "player-two",
-    ]);
+    expect(db.getGamePlayers("game-players")).toEqual(["player-one", "player-one", "player-two"]);
 
     db.removePlayerFromGame("game-players", 0);
     expect(db.getGamePlayers("game-players")).toEqual(["player-one", "player-two"]);
@@ -370,9 +362,9 @@ describe("OracleDatabase", () => {
     const db = OracleDatabase.getInstance();
     const sqlite = (db as any).db;
 
-    const indexes = sqlite
-      .query("PRAGMA index_list('game_tracking')")
-      .all() as Array<{ name: string }>;
+    const indexes = sqlite.query("PRAGMA index_list('game_tracking')").all() as Array<{
+      name: string;
+    }>;
     const names = indexes.map((entry) => entry.name);
 
     expect(names).toContain("idx_tracking_pending");
@@ -422,13 +414,13 @@ describe("finalizeCompletedGame", () => {
 
     try {
       expect(() => db.finalizeCompletedGame(gameAddress)).toThrow(
-        `Failed to finalize completed game ${gameAddress}`
+        `Failed to finalize completed game ${gameAddress}`,
       );
       expect(db.getSecretKey(gameAddress)).not.toBeNull();
       expect(
         db
           .getPendingGames(Number.POSITIVE_INFINITY)
-          .some((entry) => entry.game_address === gameAddress)
+          .some((entry) => entry.game_address === gameAddress),
       ).toBe(true);
       expect(db.getGamePlayers(gameAddress)).toHaveLength(2);
     } finally {
@@ -440,7 +432,7 @@ describe("finalizeCompletedGame", () => {
     expect(
       db
         .getPendingGames(Number.POSITIVE_INFINITY)
-        .some((entry) => entry.game_address === gameAddress)
+        .some((entry) => entry.game_address === gameAddress),
     ).toBe(false);
     expect(db.getGamePlayers(gameAddress)).toEqual([]);
   });

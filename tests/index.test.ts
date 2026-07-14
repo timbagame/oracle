@@ -36,7 +36,7 @@ describe("API handlers", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ gameType: "coinflip" }),
-      })
+      }),
     );
     expect(res.status).toBe(200);
     const data = (await res.json()) as {
@@ -57,7 +57,7 @@ describe("API handlers", () => {
           receivedGameType = options?.gameType;
           return { randomHash: "forwarded-hash", gameAddress: "forwarded-game" };
         },
-      })
+      }),
     );
 
     const res = await handleGenerateHash(
@@ -65,7 +65,7 @@ describe("API handlers", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ gameType: "  giveaway  " }),
-      })
+      }),
     );
 
     expect(res.status).toBe(200);
@@ -80,7 +80,7 @@ describe("API handlers", () => {
           generateCalled = true;
           return { randomHash: "ignored", gameAddress: "ignored" };
         },
-      })
+      }),
     );
 
     const res = await handleGenerateHash(
@@ -88,7 +88,7 @@ describe("API handlers", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ gameType: 123 }),
-      })
+      }),
     );
 
     expect(res.status).toBe(400);
@@ -113,14 +113,14 @@ describe("API handlers", () => {
         generateGameSecrets: (_options) => {
           throw new Error("boom");
         },
-      })
+      }),
     );
     const res = await handleGenerateHash(
       new Request("http://localhost/generate-hash", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ gameType: "coinflip" }),
-      })
+      }),
     );
     expect(res.status).toBe(500);
     const data = (await res.json()) as {

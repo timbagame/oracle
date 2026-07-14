@@ -8,10 +8,15 @@ describe("solana-utils.resolveTokenProgram", () => {
     const tokenProgramCache = new Map<string, PublicKey>();
     const mint = Keypair.generate().publicKey;
     const connection = {
-        getAccountInfo: async () => null,
+      getAccountInfo: async () => null,
     } as any;
 
-    const program = await resolveTokenProgram(connection, mint, TOKEN_2022_PROGRAM_ID, tokenProgramCache);
+    const program = await resolveTokenProgram(
+      connection,
+      mint,
+      TOKEN_2022_PROGRAM_ID,
+      tokenProgramCache,
+    );
     expect(program.equals(TOKEN_2022_PROGRAM_ID)).toBe(true);
     expect(tokenProgramCache.get(mint.toBase58())).toEqual(TOKEN_2022_PROGRAM_ID);
   });
@@ -28,11 +33,21 @@ describe("solana-utils.resolveTokenProgram", () => {
     const tokenProgramCache = new Map<string, PublicKey>();
 
     const mint = Keypair.generate().publicKey;
-    const program = await resolveTokenProgram(connection, mint, PublicKey.default, tokenProgramCache);
+    const program = await resolveTokenProgram(
+      connection,
+      mint,
+      PublicKey.default,
+      tokenProgramCache,
+    );
     expect(program.equals(owner)).toBe(true);
     expect(lookups).toBe(1);
 
-    const cached = await resolveTokenProgram(connection, mint, PublicKey.default, tokenProgramCache);
+    const cached = await resolveTokenProgram(
+      connection,
+      mint,
+      PublicKey.default,
+      tokenProgramCache,
+    );
     expect(cached.equals(owner)).toBe(true);
     expect(lookups).toBe(1);
     expect(tokenProgramCache.get(mint.toBase58())).toEqual(owner);
@@ -46,9 +61,9 @@ describe("solana-utils.resolveTokenProgram", () => {
 
     const mint = Keypair.generate().publicKey;
 
-    await expect(
-      resolveTokenProgram(connection, mint)
-    ).rejects.toThrow(`Unsupported token program owner ${unsupported.toBase58()}`);
+    await expect(resolveTokenProgram(connection, mint)).rejects.toThrow(
+      `Unsupported token program owner ${unsupported.toBase58()}`,
+    );
   });
 });
 

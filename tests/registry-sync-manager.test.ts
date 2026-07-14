@@ -26,7 +26,7 @@ describe("RegistrySyncManager.ensurePlayersInSync", () => {
       contextStub,
       readinessStub,
       1,
-      () => ({ success: false } as any),
+      () => ({ success: false }) as any,
     );
 
     const second = await manager.ensurePlayersInSync(
@@ -34,7 +34,7 @@ describe("RegistrySyncManager.ensurePlayersInSync", () => {
       contextStub,
       readinessStub,
       1,
-      () => ({ success: false } as any),
+      () => ({ success: false }) as any,
     );
 
     expect("players" in first && first.players).toEqual(["p1"]);
@@ -57,7 +57,7 @@ describe("RegistrySyncManager.ensurePlayersInSync", () => {
       contextStub,
       readinessStub,
       2,
-      () => ({ success: false } as any),
+      () => ({ success: false }) as any,
     );
 
     expect("players" in result && result.players).toEqual(["p1", "p2"]);

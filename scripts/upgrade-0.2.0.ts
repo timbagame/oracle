@@ -1,13 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import {
-  chmod,
-  copyFile,
-  lstat,
-  mkdir,
-  readFile,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 export const PROGRAM_ID = "32Jr4JnXWvqq9GqPQynkooHsszaucUUvZfNLh2hdX2L5";
@@ -29,10 +21,7 @@ export interface LegacyGameStatus {
   inert: boolean;
 }
 
-export function classifyLegacyGame(
-  address: string,
-  data: Uint8Array,
-): LegacyGameStatus {
+export function classifyLegacyGame(address: string, data: Uint8Array): LegacyGameStatus {
   const bytes = Buffer.from(data);
   if (bytes.length < LEGACY_GAME_BASE_SIZE + 4)
     throw new Error(`${address}: legacy Game account is truncated`);
@@ -66,10 +55,7 @@ export function classifyLegacyGame(
   };
 }
 
-async function verifyLegacyGamesAreInert(
-  options: Options,
-  state: ReleaseState,
-): Promise<void> {
+async function verifyLegacyGamesAreInert(options: Options, state: ReleaseState): Promise<void> {
   const response = await fetch(options.rpcUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -94,18 +80,14 @@ async function verifyLegacyGamesAreInert(
       ],
     }),
   });
-  if (!response.ok)
-    throw new Error(`Mainnet RPC returned HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`Mainnet RPC returned HTTP ${response.status}`);
   const payload = (await response.json()) as {
     error?: { message?: string };
     result?: Array<{ pubkey: string; account: { data: [string, string] } }>;
   };
   if (payload.error)
-    throw new Error(
-      `Mainnet RPC failed: ${payload.error.message ?? "unknown error"}`,
-    );
-  if (!payload.result)
-    throw new Error("Mainnet RPC omitted getProgramAccounts result");
+    throw new Error(`Mainnet RPC failed: ${payload.error.message ?? "unknown error"}`);
+  if (!payload.result) throw new Error("Mainnet RPC omitted getProgramAccounts result");
 
   const games = payload.result.map(({ pubkey, account }) =>
     classifyLegacyGame(pubkey, Buffer.from(account.data[0], "base64")),
@@ -127,9 +109,7 @@ async function verifyLegacyGamesAreInert(
           `${game.address} (tickets=${game.ticketsCount}, hashes=${game.participantHashes}, total=${game.totalAmount})`,
       )
       .join(", ");
-    throw new Error(
-      `Cannot upgrade while legacy games remain actionable: ${details}`,
-    );
+    throw new Error(`Cannot upgrade while legacy games remain actionable: ${details}`);
   }
 }
 
@@ -175,9 +155,7 @@ export interface ReleaseState {
   programId: string;
   createdAt: string;
   updatedAt: string;
-  phases: Partial<
-    Record<Phase, { status: PhaseStatus; at: string; error?: string }>
-  >;
+  phases: Partial<Record<Phase, { status: PhaseStatus; at: string; error?: string }>>;
   evidence: Record<string, string>;
 }
 
@@ -224,9 +202,7 @@ export function sha256(data: string | Uint8Array): string {
 }
 
 export function extractVerificationJobId(output: string): string | undefined {
-  return output.match(
-    /(?:job(?:\s+id)?|job_id)[\s:=\"']+([A-Za-z0-9_-]+)/i,
-  )?.[1];
+  return output.match(/(?:job(?:\s+id)?|job_id)[\s:="']+([A-Za-z0-9_-]+)/i)?.[1];
 }
 
 export function remoteVerificationSucceeded(output: string): boolean {
@@ -243,9 +219,7 @@ function parseArgs(argv: string[]): Options {
   const command = argv[0] as Options["command"] | undefined;
   if (
     !command ||
-    ![...PHASES, "status", "resume", "export-bundle", "import-bundle"].includes(
-      command,
-    )
+    ![...PHASES, "status", "resume", "export-bundle", "import-bundle"].includes(command)
   )
     usage();
 
@@ -289,25 +263,14 @@ function parseArgs(argv: string[]): Options {
     deployRoot,
     legacyDeployRoot,
     releaseDir,
-    stateFile: resolve(
-      value("--state") ?? join(releaseDir, "release-state.json"),
-    ),
-    rpcUrl:
-      value("--rpc-url") ??
-      process.env["RPC_URL"] ??
-      "https://api.mainnet-beta.solana.com",
+    stateFile: resolve(value("--state") ?? join(releaseDir, "release-state.json")),
+    rpcUrl: value("--rpc-url") ?? process.env["RPC_URL"] ?? "https://api.mainnet-beta.solana.com",
     authority: value("--authority") ?? process.env["UPGRADE_AUTHORITY"],
     clientBranch:
-      value("--client-branch") ??
-      process.env["CLIENT_BRANCH"] ??
-      "contracts-0.2.0-compat",
-    contractsCommit:
-      value("--contracts-commit") ?? process.env["CONTRACTS_COMMIT"],
-    verificationJobId:
-      value("--verification-job-id") ?? process.env["VERIFICATION_JOB_ID"],
-    bundleFile: resolve(
-      value("--bundle") ?? join(releaseDir, "release-state.bundle.json"),
-    ),
+      value("--client-branch") ?? process.env["CLIENT_BRANCH"] ?? "contracts-0.2.0-compat",
+    contractsCommit: value("--contracts-commit") ?? process.env["CONTRACTS_COMMIT"],
+    verificationJobId: value("--verification-job-id") ?? process.env["VERIFICATION_JOB_ID"],
+    bundleFile: resolve(value("--bundle") ?? join(releaseDir, "release-state.bundle.json")),
     host: host as ReleaseHost | undefined,
   };
 }
@@ -334,9 +297,7 @@ Common options:
 
 async function loadState(options: Options): Promise<ReleaseState> {
   try {
-    return JSON.parse(
-      await readFile(options.stateFile, "utf8"),
-    ) as ReleaseState;
+    return JSON.parse(await readFile(options.stateFile, "utf8")) as ReleaseState;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return {
@@ -389,51 +350,34 @@ export function validateReleaseBundle(bundle: ReleaseBundle): ReleaseState {
   return bundle.state;
 }
 
-async function exportBundle(
-  options: Options,
-  state: ReleaseState,
-): Promise<void> {
+async function exportBundle(options: Options, state: ReleaseState): Promise<void> {
   await mkdir(dirname(options.bundleFile), { recursive: true });
-  await writeFile(
-    options.bundleFile,
-    `${JSON.stringify(createReleaseBundle(state), null, 2)}\n`,
-    { mode: 0o600 },
-  );
+  await writeFile(options.bundleFile, `${JSON.stringify(createReleaseBundle(state), null, 2)}\n`, {
+    mode: 0o600,
+  });
   await chmod(options.bundleFile, 0o600);
   console.log(`Exported non-secret release state to ${options.bundleFile}`);
 }
 
 async function importBundle(options: Options): Promise<void> {
-  const bundle = JSON.parse(
-    await readFile(options.bundleFile, "utf8"),
-  ) as ReleaseBundle;
+  const bundle = JSON.parse(await readFile(options.bundleFile, "utf8")) as ReleaseBundle;
   const imported = validateReleaseBundle(bundle);
   const current = await loadState(options);
   const completed = (state: ReleaseState) =>
     PHASES.filter((phase) => state.phases[phase]?.status === "complete").length;
   if (completed(current) > completed(imported))
-    throw new Error(
-      "Refusing to replace newer local release state with an older bundle",
-    );
+    throw new Error("Refusing to replace newer local release state with an older bundle");
   await saveState(options, imported);
   console.log(`Imported verified release state into ${options.stateFile}`);
 }
 
 function shellQuote(value: string): string {
-  return /^[A-Za-z0-9_./:@=-]+$/.test(value)
-    ? value
-    : `'${value.replaceAll("'", `'\\''`)}'`;
+  return /^[A-Za-z0-9_./:@=-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-async function run(
-  command: Command,
-  options: Options,
-  state: ReleaseState,
-): Promise<string> {
+async function run(command: Command, options: Options, state: ReleaseState): Promise<string> {
   const cwd = command.cwd ?? options.sourceRoot;
-  console.log(
-    `\n$ cd ${shellQuote(cwd)} && ${command.argv.map(shellQuote).join(" ")}`,
-  );
+  console.log(`\n$ cd ${shellQuote(cwd)} && ${command.argv.map(shellQuote).join(" ")}`);
   if (!options.execute) return "";
 
   const executable = command.argv[0];
@@ -452,23 +396,16 @@ async function run(
   ]);
   if (stdout) process.stdout.write(stdout);
   if (stderr) process.stderr.write(stderr);
-  if (exitCode !== 0)
-    throw new Error(`${command.argv[0]} exited with status ${exitCode}`);
+  if (exitCode !== 0) throw new Error(`${command.argv[0]} exited with status ${exitCode}`);
   const output = stdout.trim();
   if (command.captureAs) state.evidence[command.captureAs] = output;
   return output;
 }
 
-function requireApproval(
-  options: Options,
-  phase: Phase,
-  summary: string,
-): void {
+function requireApproval(options: Options, phase: Phase, summary: string): void {
   console.log(`\nAPPROVAL GATE: ${summary}`);
   if (options.execute && !options.approvals.has(phase)) {
-    throw new Error(
-      `Refusing to execute ${phase}; rerun with --approve ${phase}`,
-    );
+    throw new Error(`Refusing to execute ${phase}; rerun with --approve ${phase}`);
   }
 }
 
@@ -479,11 +416,7 @@ function path(options: Options, project: string): string {
 async function assertFileMode(file: string): Promise<void> {
   const info = await lstat(file);
   const mode = info.mode & 0o777;
-  if (
-    info.isSymbolicLink() ||
-    !info.isFile() ||
-    (mode !== 0o400 && mode !== 0o600)
-  ) {
+  if (info.isSymbolicLink() || !info.isFile() || (mode !== 0o400 && mode !== 0o600)) {
     throw new Error(`${file} must be a regular file with mode 400 or 600`);
   }
 }
@@ -495,9 +428,7 @@ function envEntries(input: string): Array<{ key: string; line: string }> {
       line,
       match: line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/),
     }))
-    .filter((entry): entry is { line: string; match: RegExpMatchArray } =>
-      Boolean(entry.match),
-    )
+    .filter((entry): entry is { line: string; match: RegExpMatchArray } => Boolean(entry.match))
     .map(({ line, match }) => ({ key: match[1]!, line }));
 }
 
@@ -514,10 +445,7 @@ export function readEnvValue(input: string, key: string): string | undefined {
   return value;
 }
 
-export function selectEnv(
-  input: string,
-  include: (key: string) => boolean,
-): string {
+export function selectEnv(input: string, include: (key: string) => boolean): string {
   const lines = envEntries(input)
     .filter(({ key }) => include(key))
     .map(({ line }) => line);
@@ -525,13 +453,9 @@ export function selectEnv(
 }
 
 async function stagePodmanDeployment(options: Options): Promise<void> {
-  const legacyEnv = await readFile(
-    join(options.legacyDeployRoot, ".env"),
-    "utf8",
-  );
+  const legacyEnv = await readFile(join(options.legacyDeployRoot, ".env"), "utf8");
   const mnemonic = readEnvValue(legacyEnv, "MNEMONIC");
-  if (!mnemonic)
-    throw new Error("Legacy Compose .env has no MNEMONIC to migrate");
+  if (!mnemonic) throw new Error("Legacy Compose .env has no MNEMONIC to migrate");
 
   const oracleRoot = join(options.deployRoot, "oracle");
   const botRoot = join(options.deployRoot, "bot");
@@ -542,14 +466,9 @@ async function stagePodmanDeployment(options: Options): Promise<void> {
 
   const oracleEnv = selectEnv(
     legacyEnv,
-    (key) =>
-      key === "SOLANA_NETWORK" ||
-      (key.startsWith("ORACLE_") && key !== "ORACLE_API_TOKEN"),
+    (key) => key === "SOLANA_NETWORK" || (key.startsWith("ORACLE_") && key !== "ORACLE_API_TOKEN"),
   );
-  const botEnv = selectEnv(
-    legacyEnv,
-    (key) => key !== "MNEMONIC" && key !== "ORACLE_API_TOKEN",
-  );
+  const botEnv = selectEnv(legacyEnv, (key) => key !== "MNEMONIC" && key !== "ORACLE_API_TOKEN");
   const upgradedAbi = "TIMBA_CONTRACT_VERSION=0.2.0\n";
   await writeFile(join(oracleRoot, ".env"), oracleEnv + upgradedAbi, {
     mode: 0o600,
@@ -592,21 +511,11 @@ async function stagePodmanDeployment(options: Options): Promise<void> {
     await chmod(file, 0o600);
 }
 
-async function localPreflight(
-  options: Options,
-  state: ReleaseState,
-): Promise<void> {
+async function localPreflight(options: Options, state: ReleaseState): Promise<void> {
   for (const project of ["contracts", "oracle", "bot", "timba-web-cf"]) {
     await stat(path(options, project));
   }
-  for (const tool of [
-    "anchor",
-    "solana",
-    "solana-verify",
-    "bun",
-    "jq",
-    "sha256sum",
-  ]) {
+  for (const tool of ["anchor", "solana", "solana-verify", "bun", "jq", "sha256sum"]) {
     await run(
       { argv: ["sh", "-c", `command -v ${tool}`], captureAs: `tool.${tool}` },
       options,
@@ -637,8 +546,7 @@ async function localPreflight(
       options,
       state,
     );
-    if (options.execute && dirty)
-      throw new Error(`${project} worktree is not clean`);
+    if (options.execute && dirty) throw new Error(`${project} worktree is not clean`);
   }
   if (options.authority) {
     const authority = await run(
@@ -651,14 +559,7 @@ async function localPreflight(
     );
     await run(
       {
-        argv: [
-          "solana",
-          "balance",
-          "-k",
-          options.authority,
-          "--url",
-          options.rpcUrl,
-        ],
+        argv: ["solana", "balance", "-k", options.authority, "--url", options.rpcUrl],
         captureAs: "authority.balance",
       },
       options,
@@ -666,14 +567,7 @@ async function localPreflight(
     );
     const program = await run(
       {
-        argv: [
-          "solana",
-          "program",
-          "show",
-          PROGRAM_ID,
-          "--url",
-          options.rpcUrl,
-        ],
+        argv: ["solana", "program", "show", PROGRAM_ID, "--url", options.rpcUrl],
         captureAs: "program.preflight",
       },
       options,
@@ -684,10 +578,7 @@ async function localPreflight(
   }
 }
 
-async function vpsPreflight(
-  options: Options,
-  state: ReleaseState,
-): Promise<void> {
+async function vpsPreflight(options: Options, state: ReleaseState): Promise<void> {
   await stat(join(options.legacyDeployRoot, "docker-compose.yml"));
   for (const tool of [
     "cosign",
@@ -787,10 +678,7 @@ async function prepare(options: Options, state: ReleaseState): Promise<void> {
   if (options.execute) await verifyIdls(options, state);
 }
 
-async function verifyIdls(
-  options: Options,
-  state: ReleaseState,
-): Promise<void> {
+async function verifyIdls(options: Options, state: ReleaseState): Promise<void> {
   const files = {
     contracts: "contracts/target/idl/timba.json",
     bot: "bot/idl/idl.json",
@@ -799,12 +687,9 @@ async function verifyIdls(
   };
   const hashes: Record<string, string> = {};
   for (const [name, relative] of Object.entries(files)) {
-    const parsed = JSON.parse(
-      await readFile(join(options.sourceRoot, relative), "utf8"),
-    );
+    const parsed = JSON.parse(await readFile(join(options.sourceRoot, relative), "utf8"));
     const version = parsed.metadata?.version ?? parsed.version;
-    if (version !== RELEASE_VERSION)
-      throw new Error(`${relative} reports IDL version ${version}`);
+    if (version !== RELEASE_VERSION) throw new Error(`${relative} reports IDL version ${version}`);
     hashes[name] = sha256(stableJson(parsed));
   }
   if (new Set(Object.values(hashes)).size !== 1)
@@ -812,9 +697,7 @@ async function verifyIdls(
   const canonicalHash = hashes["contracts"];
   if (!canonicalHash) throw new Error("Missing canonical contracts IDL hash");
   state.evidence["idl.sha256"] = canonicalHash;
-  console.log(
-    `IDL version ${RELEASE_VERSION}, canonical SHA-256 ${canonicalHash}`,
-  );
+  console.log(`IDL version ${RELEASE_VERSION}, canonical SHA-256 ${canonicalHash}`);
 }
 
 async function drain(options: Options, state: ReleaseState): Promise<void> {
@@ -916,11 +799,7 @@ async function backup(options: Options, state: ReleaseState): Promise<void> {
     const source = join(options.legacyDeployRoot, project, name);
     const integrity = await run(
       {
-        argv: [
-          "sqlite3",
-          source,
-          "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA integrity_check;",
-        ],
+        argv: ["sqlite3", source, "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA integrity_check;"],
       },
       options,
       state,
@@ -928,9 +807,7 @@ async function backup(options: Options, state: ReleaseState): Promise<void> {
     if (!integrity.split("\n").includes("ok"))
       throw new Error(`${source} failed SQLite integrity check`);
     await copyFile(source, join(destination, name));
-    state.evidence[`database.${name}.sha256`] = sha256(
-      await readFile(join(destination, name)),
-    );
+    state.evidence[`database.${name}.sha256`] = sha256(await readFile(join(destination, name)));
   }
   state.evidence["rollback.command"] =
     `restore databases; cd ${options.legacyDeployRoot}; docker compose up -d oracle bot`;
@@ -939,18 +816,14 @@ async function backup(options: Options, state: ReleaseState): Promise<void> {
 async function build(options: Options, state: ReleaseState): Promise<void> {
   const commit = options.contractsCommit ?? state.evidence["contracts.commit"];
   if (!commit)
-    throw new Error(
-      "Missing frozen contracts commit; run prepare or pass --contracts-commit",
-    );
+    throw new Error("Missing frozen contracts commit; run prepare or pass --contracts-commit");
   const actual = await run(
     { argv: ["git", "rev-parse", "HEAD"], cwd: path(options, "contracts") },
     options,
     state,
   );
   if (options.execute && actual !== commit)
-    throw new Error(
-      `Contracts HEAD ${actual} does not match frozen commit ${commit}`,
-    );
+    throw new Error(`Contracts HEAD ${actual} does not match frozen commit ${commit}`);
   await run(
     {
       argv: ["anchor", "build", "--verifiable", "--solana-version", "3.1.10"],
@@ -960,10 +833,7 @@ async function build(options: Options, state: ReleaseState): Promise<void> {
     state,
   );
   if (options.execute) {
-    const binary = join(
-      path(options, "contracts"),
-      "target/verifiable/timba.so",
-    );
+    const binary = join(path(options, "contracts"), "target/verifiable/timba.so");
     state.evidence["binary.bytes"] = String((await stat(binary)).size);
     state.evidence["binary.sha256"] = sha256(await readFile(binary));
     await run(
@@ -977,17 +847,13 @@ async function build(options: Options, state: ReleaseState): Promise<void> {
   }
 }
 
-async function deployContract(
-  options: Options,
-  state: ReleaseState,
-): Promise<void> {
+async function deployContract(options: Options, state: ReleaseState): Promise<void> {
   requireApproval(
     options,
     "deploy-contract",
     `upgrade existing mainnet program ${PROGRAM_ID}; no token transfers`,
   );
-  if (!options.authority)
-    throw new Error("--authority or UPGRADE_AUTHORITY is required");
+  if (!options.authority) throw new Error("--authority or UPGRADE_AUTHORITY is required");
   await assertFileMode(options.authority);
   const authorityAddress = await run(
     {
@@ -999,24 +865,14 @@ async function deployContract(
   );
   await run(
     {
-      argv: [
-        "solana",
-        "balance",
-        "-k",
-        options.authority,
-        "--url",
-        options.rpcUrl,
-      ],
+      argv: ["solana", "balance", "-k", options.authority, "--url", options.rpcUrl],
       captureAs: "authority.balance",
     },
     options,
     state,
   );
   const deployedBinary = join(options.releaseDir, "timba-mainnet-program.so");
-  const localBinary = join(
-    path(options, "contracts"),
-    "target/verifiable/timba.so",
-  );
+  const localBinary = join(path(options, "contracts"), "target/verifiable/timba.so");
   if (options.execute) await mkdir(options.releaseDir, { recursive: true });
   const programBefore = await run(
     {
@@ -1027,20 +883,10 @@ async function deployContract(
     state,
   );
   if (options.execute && !programBefore.includes(authorityAddress))
-    throw new Error(
-      `Program upgrade authority does not match ${authorityAddress}`,
-    );
+    throw new Error(`Program upgrade authority does not match ${authorityAddress}`);
   await run(
     {
-      argv: [
-        "solana",
-        "program",
-        "dump",
-        PROGRAM_ID,
-        deployedBinary,
-        "--url",
-        options.rpcUrl,
-      ],
+      argv: ["solana", "program", "dump", PROGRAM_ID, deployedBinary, "--url", options.rpcUrl],
     },
     options,
     state,
@@ -1085,15 +931,7 @@ async function deployContract(
   );
   await run(
     {
-      argv: [
-        "solana",
-        "program",
-        "dump",
-        PROGRAM_ID,
-        deployedBinary,
-        "--url",
-        options.rpcUrl,
-      ],
+      argv: ["solana", "program", "dump", PROGRAM_ID, deployedBinary, "--url", options.rpcUrl],
     },
     options,
     state,
@@ -1106,37 +944,22 @@ async function deployContract(
   if (options.execute) {
     state.evidence["program.after.executableHash"] = deployedExecutableHash;
     if (deployedExecutableHash !== localExecutableHash)
-      throw new Error(
-        "Deployed mainnet binary does not match the frozen artifact",
-      );
+      throw new Error("Deployed mainnet binary does not match the frozen artifact");
   }
 }
 
-async function publishIdl(
-  options: Options,
-  state: ReleaseState,
-): Promise<void> {
+async function publishIdl(options: Options, state: ReleaseState): Promise<void> {
   requireApproval(
     options,
     "publish-idl",
     `create the first canonical mainnet IDL account for ${PROGRAM_ID}`,
   );
-  if (!options.authority)
-    throw new Error("--authority or UPGRADE_AUTHORITY is required");
+  if (!options.authority) throw new Error("--authority or UPGRADE_AUTHORITY is required");
   await assertFileMode(options.authority);
   const localIdl = join(path(options, "contracts"), "target/idl/timba.json");
   const fetched = join(options.releaseDir, "timba-mainnet-idl.json");
   const fetchCommand: Command = {
-    argv: [
-      "anchor",
-      "idl",
-      "fetch",
-      "--provider.cluster",
-      "mainnet",
-      "--out",
-      fetched,
-      PROGRAM_ID,
-    ],
+    argv: ["anchor", "idl", "fetch", "--provider.cluster", "mainnet", "--out", fetched, PROGRAM_ID],
     cwd: path(options, "contracts"),
   };
   if (options.execute) {
@@ -1145,17 +968,12 @@ async function publishIdl(
       const local = JSON.parse(await readFile(localIdl, "utf8"));
       const remote = JSON.parse(await readFile(fetched, "utf8"));
       if (stableJson(local) !== stableJson(remote))
-        throw new Error(
-          "A canonical IDL already exists but differs from the 0.2.0 release IDL",
-        );
+        throw new Error("A canonical IDL already exists but differs from the 0.2.0 release IDL");
       state.evidence["onchain.idl.sha256"] = sha256(stableJson(remote));
       state.evidence["idl.init.output"] = "already initialized and identical";
       return;
     } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.includes("already exists but differs")
-      )
+      if (error instanceof Error && error.message.includes("already exists but differs"))
         throw error;
       console.log("No fetchable canonical IDL found; initializing it now.");
     }
@@ -1190,10 +1008,7 @@ async function publishIdl(
   }
 }
 
-async function verifySource(
-  options: Options,
-  state: ReleaseState,
-): Promise<void> {
+async function verifySource(options: Options, state: ReleaseState): Promise<void> {
   requireApproval(
     options,
     "verify-source",
@@ -1233,17 +1048,13 @@ async function verifySource(
   );
 }
 
-async function verifyRemote(
-  options: Options,
-  state: ReleaseState,
-): Promise<void> {
+async function verifyRemote(options: Options, state: ReleaseState): Promise<void> {
   requireApproval(
     options,
     "verify-remote",
     `submit or poll reproducible verification for ${PROGRAM_ID}`,
   );
-  if (!options.authority)
-    throw new Error("--authority or UPGRADE_AUTHORITY is required");
+  if (!options.authority) throw new Error("--authority or UPGRADE_AUTHORITY is required");
   const uploader = await run(
     { argv: ["solana", "address", "-k", options.authority] },
     options,
@@ -1290,10 +1101,7 @@ async function verifyRemote(
     );
 }
 
-async function releaseClients(
-  options: Options,
-  state: ReleaseState,
-): Promise<void> {
+async function releaseClients(options: Options, state: ReleaseState): Promise<void> {
   for (const project of ["oracle", "bot", "timba-web-cf"]) {
     const testedCommit = state.evidence[`${project}.commit`];
     if (!testedCommit) throw new Error(`Missing tested ${project} commit`);
@@ -1304,13 +1112,7 @@ async function releaseClients(
     );
     await run(
       {
-        argv: [
-          "git",
-          "merge-base",
-          "--is-ancestor",
-          testedCommit,
-          "origin/main",
-        ],
+        argv: ["git", "merge-base", "--is-ancestor", testedCommit, "origin/main"],
         cwd: path(options, project),
       },
       options,
@@ -1331,10 +1133,7 @@ async function releaseClients(
   );
 }
 
-async function migrateClients(
-  options: Options,
-  state: ReleaseState,
-): Promise<void> {
+async function migrateClients(options: Options, state: ReleaseState): Promise<void> {
   requireApproval(
     options,
     "migrate-clients",
@@ -1359,8 +1158,7 @@ async function migrateClients(
     const commit = state.evidence[`${project}.commit`];
     const releaseCommit = state.evidence[`${project}.releaseCommit`];
     if (!commit) throw new Error(`Missing tested ${project} commit`);
-    if (!releaseCommit)
-      throw new Error(`Missing released ${project} main commit`);
+    if (!releaseCommit) throw new Error(`Missing released ${project} main commit`);
   }
   for (const image of ["oracle", "bot"]) {
     await run(
@@ -1378,11 +1176,7 @@ async function migrateClients(
       options,
       state,
     );
-    await run(
-      { argv: ["podman", "pull", `ghcr.io/timbagame/${image}:main`] },
-      options,
-      state,
-    );
+    await run({ argv: ["podman", "pull", `ghcr.io/timbagame/${image}:main`] }, options, state);
   }
   if (options.execute) await stagePodmanDeployment(options);
   for (const file of [
@@ -1405,10 +1199,7 @@ async function migrateClients(
     options,
     state,
   );
-  const quadletDir = join(
-    process.env["HOME"] ?? "",
-    ".config/containers/systemd",
-  );
+  const quadletDir = join(process.env["HOME"] ?? "", ".config/containers/systemd");
   if (options.execute) {
     await mkdir(quadletDir, { recursive: true });
     await copyFile(
@@ -1424,21 +1215,11 @@ async function migrateClients(
       join(quadletDir, "timba-bot.container"),
     );
   } else {
-    console.log(
-      `Would install the network and two Quadlet files in ${quadletDir}`,
-    );
+    console.log(`Would install the network and two Quadlet files in ${quadletDir}`);
   }
   await run({ argv: ["systemctl", "--user", "daemon-reload"] }, options, state);
-  await run(
-    { argv: ["systemctl", "--user", "start", "timba-oracle.service"] },
-    options,
-    state,
-  );
-  await run(
-    { argv: ["systemctl", "--user", "is-active", "timba-oracle.service"] },
-    options,
-    state,
-  );
+  await run({ argv: ["systemctl", "--user", "start", "timba-oracle.service"] }, options, state);
+  await run({ argv: ["systemctl", "--user", "is-active", "timba-oracle.service"] }, options, state);
   const oracleInspect = await run(
     {
       argv: [
@@ -1455,12 +1236,9 @@ async function migrateClients(
   );
   if (
     options.execute &&
-    (!oracleInspect.includes("timba-oracle.service") ||
-      !oracleInspect.endsWith("registry"))
+    (!oracleInspect.includes("timba-oracle.service") || !oracleInspect.endsWith("registry"))
   )
-    throw new Error(
-      "Oracle is not supervised by the expected auto-updating Quadlet",
-    );
+    throw new Error("Oracle is not supervised by the expected auto-updating Quadlet");
   await run(
     {
       argv: [
@@ -1490,16 +1268,8 @@ async function migrateClients(
     options,
     state,
   );
-  await run(
-    { argv: ["systemctl", "--user", "start", "timba-bot.service"] },
-    options,
-    state,
-  );
-  await run(
-    { argv: ["systemctl", "--user", "is-active", "timba-bot.service"] },
-    options,
-    state,
-  );
+  await run({ argv: ["systemctl", "--user", "start", "timba-bot.service"] }, options, state);
+  await run({ argv: ["systemctl", "--user", "is-active", "timba-bot.service"] }, options, state);
   await run(
     {
       argv: [
@@ -1530,24 +1300,13 @@ async function migrateClients(
   );
   if (
     options.execute &&
-    (!botInspect.includes("timba-bot.service") ||
-      !botInspect.endsWith("registry"))
+    (!botInspect.includes("timba-bot.service") || !botInspect.endsWith("registry"))
   )
-    throw new Error(
-      "Bot is not supervised by the expected auto-updating Quadlet",
-    );
+    throw new Error("Bot is not supervised by the expected auto-updating Quadlet");
   for (const service of ["timba-oracle.service", "timba-bot.service"]) {
     await run(
       {
-        argv: [
-          "journalctl",
-          "--user",
-          "-u",
-          service,
-          "--since",
-          "10 minutes ago",
-          "--no-pager",
-        ],
+        argv: ["journalctl", "--user", "-u", service, "--since", "10 minutes ago", "--no-pager"],
         captureAs: `podman.${service}.logs`,
       },
       options,
@@ -1577,14 +1336,7 @@ async function smokeTest(options: Options, state: ReleaseState): Promise<void> {
   );
   await run(
     {
-      argv: [
-        "podman",
-        "exec",
-        "bot",
-        "bun",
-        "run",
-        "scripts/update-token-min-bets.ts",
-      ],
+      argv: ["podman", "exec", "bot", "bun", "run", "scripts/update-token-min-bets.ts"],
     },
     options,
     state,
@@ -1595,10 +1347,7 @@ async function smokeTest(options: Options, state: ReleaseState): Promise<void> {
   state.evidence["smoke.operatorChecklist"] = "required";
 }
 
-const handlers: Record<
-  Phase,
-  (options: Options, state: ReleaseState) => Promise<void>
-> = {
+const handlers: Record<Phase, (options: Options, state: ReleaseState) => Promise<void>> = {
   "local-preflight": localPreflight,
   prepare,
   "vps-preflight": vpsPreflight,
@@ -1614,32 +1363,20 @@ const handlers: Record<
   "smoke-test": smokeTest,
 };
 
-async function executePhase(
-  phase: Phase,
-  options: Options,
-  state: ReleaseState,
-): Promise<void> {
+async function executePhase(phase: Phase, options: Options, state: ReleaseState): Promise<void> {
   const requiredHost = PHASE_HOST[phase];
   if (options.host && options.host !== requiredHost)
-    throw new Error(
-      `${phase} must run on ${requiredHost}, not ${options.host}`,
-    );
+    throw new Error(`${phase} must run on ${requiredHost}, not ${options.host}`);
   if (options.execute && !options.host)
     throw new Error(`Executing ${phase} requires --host ${requiredHost}`);
   const index = PHASES.indexOf(phase);
   const previous = PHASES[index - 1];
-  if (
-    options.execute &&
-    previous &&
-    state.phases[previous]?.status !== "complete"
-  ) {
+  if (options.execute && previous && state.phases[previous]?.status !== "complete") {
     throw new Error(`${phase} requires completed phase ${previous}`);
   }
   if (!options.execute) {
     await handlers[phase](options, state);
-    console.log(
-      "\nDRY RUN complete; state was not advanced. Add --execute to run this phase.",
-    );
+    console.log("\nDRY RUN complete; state was not advanced. Add --execute to run this phase.");
     return;
   }
   state.phases[phase] = { status: "running", at: now() };
@@ -1662,11 +1399,7 @@ async function main(): Promise<void> {
     return;
   }
   const state = await loadState(options);
-  if (
-    state.version !== 2 ||
-    state.programId !== PROGRAM_ID ||
-    state.release !== RELEASE_VERSION
-  ) {
+  if (state.version !== 2 || state.programId !== PROGRAM_ID || state.release !== RELEASE_VERSION) {
     throw new Error("State file belongs to a different program or release");
   }
   if (options.command === "export-bundle") {
@@ -1690,27 +1423,20 @@ async function main(): Promise<void> {
     );
     return;
   }
-  const phase =
-    options.command === "resume" ? nextIncompletePhase(state) : options.command;
+  const phase = options.command === "resume" ? nextIncompletePhase(state) : options.command;
   if (!phase) {
     console.log("All phases are complete.");
     return;
   }
   console.log(
-    `Timba ${RELEASE_VERSION} upgrade — ${phase} — ${
-      options.execute ? "EXECUTE" : "DRY RUN"
-    }`,
+    `Timba ${RELEASE_VERSION} upgrade — ${phase} — ${options.execute ? "EXECUTE" : "DRY RUN"}`,
   );
   await executePhase(phase, options, state);
 }
 
 if (import.meta.main) {
   main().catch((error) => {
-    console.error(
-      `\nUpgrade stopped: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+    console.error(`\nUpgrade stopped: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   });
 }

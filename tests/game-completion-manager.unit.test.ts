@@ -28,14 +28,16 @@ function createGameAccountStub(overrides: Partial<TimbaGameAccount> = {}): Timba
   };
 }
 
-function createManager(overrides: {
-  accountInfo?: (pubkey: PublicKey) => Promise<{ owner: PublicKey | null } | null>;
-  programId?: PublicKey;
-  secretKeyLength?: number;
-  metrics?: Partial<OracleMetrics>;
-  recoverPlayers?: GameCompletionManagerOptions["recoverPlayerRegistry"];
-  registryPrefetchCooldownMs?: number;
-} = {}) {
+function createManager(
+  overrides: {
+    accountInfo?: (pubkey: PublicKey) => Promise<{ owner: PublicKey | null } | null>;
+    programId?: PublicKey;
+    secretKeyLength?: number;
+    metrics?: Partial<OracleMetrics>;
+    recoverPlayers?: GameCompletionManagerOptions["recoverPlayerRegistry"];
+    registryPrefetchCooldownMs?: number;
+  } = {},
+) {
   const secretStore = new Map<string, { secretKey: string; randomHash: string }>();
   const players = new Map<string, string[]>();
   const desyncedGames = new Set<string>();
@@ -152,7 +154,7 @@ describe("GameCompletionManager registry prefetch cleanup", () => {
         context,
         readiness,
         2,
-        () => ({ success: false, error: "desync" })
+        () => ({ success: false, error: "desync" }),
       ),
     ).resolves.toMatchObject({ error: expect.anything() });
 
@@ -184,8 +186,14 @@ describe("GameCompletionManager registry prefetch cleanup", () => {
 
     const nowSpy = spyOn(Date, "now").mockReturnValue(1_000);
     try {
-      await (manager.registrySyncManager as any).prefetchPlayerRegistry("cooldown-game", context, readiness);
-      const schedule = (manager.registrySyncManager as any).registryPrefetchSchedule.get("cooldown-game");
+      await (manager.registrySyncManager as any).prefetchPlayerRegistry(
+        "cooldown-game",
+        context,
+        readiness,
+      );
+      const schedule = (manager.registrySyncManager as any).registryPrefetchSchedule.get(
+        "cooldown-game",
+      );
       expect(schedule).toBe(2_000);
     } finally {
       nowSpy.mockRestore();
@@ -332,12 +340,10 @@ describe("GameCompletionManager.calculateWinnerIndex", () => {
 
   it("throws when the secret is shorter than the configured length", () => {
     expect(() => manager.calculateWinnerIndex(Buffer.alloc(16), 1, 2)).toThrow(
-      "Secret key buffer must be at least 32 bytes"
+      "Secret key buffer must be at least 32 bytes",
     );
   });
 });
-
-
 
 describe("GameCompletionManager.attemptGameCompletion outcome handling", () => {
   it("records not ready outcomes via the shared helper", async () => {
@@ -448,7 +454,7 @@ describe("GameCompletionManager.attemptGameCompletion outcome handling", () => {
       expect(errorSpy).toHaveBeenCalledWith("failure:failure-game:boom");
       // Verify success log was called exactly once for the success-game
       const successLogCalls = infoSpy.mock.calls.filter(
-        (call: unknown[]) => call[0] === "success:success-game"
+        (call: unknown[]) => call[0] === "success:success-game",
       );
       expect(successLogCalls).toHaveLength(1);
 
@@ -563,7 +569,7 @@ describe("GameCompletionManager player registry recovery", () => {
   it("recovers from a partial registry mismatch using the recovery callback", async () => {
     const existingPlayer = Keypair.generate().publicKey.toBase58();
     const recoveredPlayers = [existingPlayer, Keypair.generate().publicKey.toBase58()];
-    let recoverInvocations: any[] = [];
+    const recoverInvocations: any[] = [];
 
     const { manager, players, secretStore, desyncedGames } = createManager({
       recoverPlayers: async (opts) => {
@@ -576,11 +582,7 @@ describe("GameCompletionManager player registry recovery", () => {
     secretStore.set(gameAddress, { secretKey: secretHex, randomHash: randomHex });
     players.set(gameAddress, [existingPlayer]);
 
-    const result = await (manager as any).resolveWinnerDetails(
-      gameAddress,
-      readiness,
-      context,
-    );
+    const result = await (manager as any).resolveWinnerDetails(gameAddress, readiness, context);
 
     expect("error" in result).toBe(false);
     expect(recoverInvocations[0]).toMatchObject({ expectedTickets: 2 });
@@ -603,11 +605,7 @@ describe("GameCompletionManager player registry recovery", () => {
     secretStore.set(gameAddress, { secretKey: secretHex, randomHash: randomHex });
     players.set(gameAddress, [duplicatePlayer, duplicatePlayer]);
 
-    const result = await (manager as any).resolveWinnerDetails(
-      gameAddress,
-      readiness,
-      context,
-    );
+    const result = await (manager as any).resolveWinnerDetails(gameAddress, readiness, context);
 
     expect("error" in result).toBe(false);
     expect(recoverCalls).toBe(1);
@@ -624,11 +622,7 @@ describe("GameCompletionManager player registry recovery", () => {
     secretStore.set(gameAddress, { secretKey: secretHex, randomHash: randomHex });
     players.set(gameAddress, [existingPlayer]);
 
-    const result = await (manager as any).resolveWinnerDetails(
-      gameAddress,
-      readiness,
-      context,
-    );
+    const result = await (manager as any).resolveWinnerDetails(gameAddress, readiness, context);
 
     expect(result).toEqual({
       error: {
@@ -718,10 +712,18 @@ describe("GameCompletionManager registry prefetch", () => {
     const gameAddress = "prefetch-retry";
 
     try {
-      await (manager.registrySyncManager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+      await (manager.registrySyncManager as any).prefetchPlayerRegistry(
+        gameAddress,
+        context,
+        readiness,
+      );
       expect(players.get(gameAddress)).toBeUndefined();
 
-      await (manager.registrySyncManager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+      await (manager.registrySyncManager as any).prefetchPlayerRegistry(
+        gameAddress,
+        context,
+        readiness,
+      );
 
       expect(attempts).toBe(2);
       expect(players.get(gameAddress)).toEqual(recoveredPlayers);
@@ -754,9 +756,17 @@ describe("GameCompletionManager registry prefetch", () => {
     const gameAddress = "prefetch-concurrent";
 
     try {
-      const firstAttempt = (manager.registrySyncManager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+      const firstAttempt = (manager.registrySyncManager as any).prefetchPlayerRegistry(
+        gameAddress,
+        context,
+        readiness,
+      );
       await Promise.resolve();
-      const secondAttempt = (manager.registrySyncManager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+      const secondAttempt = (manager.registrySyncManager as any).prefetchPlayerRegistry(
+        gameAddress,
+        context,
+        readiness,
+      );
 
       release?.();
 
@@ -792,8 +802,16 @@ describe("GameCompletionManager registry prefetch", () => {
 
     try {
       // Start two prefetches concurrently
-      const p1 = (manager.registrySyncManager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
-      const p2 = (manager.registrySyncManager as any).prefetchPlayerRegistry(gameAddress, context, readiness);
+      const p1 = (manager.registrySyncManager as any).prefetchPlayerRegistry(
+        gameAddress,
+        context,
+        readiness,
+      );
+      const p2 = (manager.registrySyncManager as any).prefetchPlayerRegistry(
+        gameAddress,
+        context,
+        readiness,
+      );
 
       // Allow them to proceed
       release?.();
@@ -837,7 +855,7 @@ describe("GameCompletionManager.ensurePlayersInSync boundary cases", () => {
       (_addr: string, err: string) => {
         receivedError = err;
         return { success: false, error: "fatal" };
-      }
+      },
     );
 
     expect(result).toHaveProperty("error");

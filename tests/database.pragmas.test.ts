@@ -47,7 +47,8 @@ describe("OracleDatabase pragmas", () => {
     OracleDatabase.getInstance();
 
     const external = new Database(testEnv.tempDb.path);
-    const row = external.query("PRAGMA journal_mode").get() as { journal_mode?: string } | string | null;
+    const row = external.query("PRAGMA journal_mode").get() as
+      { journal_mode?: string } | string | null;
     const mode = typeof row === "string" ? row : row?.journal_mode;
     expect((mode ?? "").toLowerCase()).toBe("wal");
     external.close();
@@ -82,9 +83,9 @@ describe("OracleDatabase shutdown", () => {
 
     // Verify data was persisted by opening fresh connection
     const verifyDb = new Database(testEnv.tempDb.path, { readonly: true });
-    const row = verifyDb.query(
-      "SELECT secret_key FROM secret_keys WHERE game_address = ?"
-    ).get("wal-test-game") as { secret_key: string } | null;
+    const row = verifyDb
+      .query("SELECT secret_key FROM secret_keys WHERE game_address = ?")
+      .get("wal-test-game") as { secret_key: string } | null;
     expect(row?.secret_key).toBe("secret-value");
     verifyDb.close();
   });
@@ -146,8 +147,8 @@ describe("OracleDatabase shutdown", () => {
     db.close();
 
     // Verify the close message was logged
-    const closeLogCall = infoSpy.mock.calls.find(
-      (call: unknown[]) => String(call[0]).includes("Database closed successfully")
+    const closeLogCall = infoSpy.mock.calls.find((call: unknown[]) =>
+      String(call[0]).includes("Database closed successfully"),
     );
     expect(closeLogCall).toBeDefined();
   });

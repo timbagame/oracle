@@ -66,11 +66,7 @@ describe("OracleMetricsRecorder", () => {
 
     const history = metrics.getCompletionRecords();
     expect(history).toHaveLength(3);
-    expect(history.map((entry) => entry.gameAddress)).toEqual([
-      "game-2",
-      "game-3",
-      "game-4",
-    ]);
+    expect(history.map((entry) => entry.gameAddress)).toEqual(["game-2", "game-3", "game-4"]);
 
     history.pop();
     expect(metrics.getCompletionRecords()).toHaveLength(3);

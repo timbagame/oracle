@@ -53,7 +53,9 @@ describe("audit-random helpers", () => {
     expect(() => parseArgs(["--interval"])).toThrow("Missing value for --interval");
     expect(() => parseArgs(["--slots"])).toThrow("Missing value for --slots");
     expect(() => parseArgs(["--game"])).toThrow("Missing value for --game");
-    expect(() => parseArgs(["--interval", "10"])).toThrow("--interval must be a number >= 100 (ms)");
+    expect(() => parseArgs(["--interval", "10"])).toThrow(
+      "--interval must be a number >= 100 (ms)",
+    );
     expect(() => parseArgs(["--slots", "0"])).toThrow("--slots must be a number between 1 and 500");
     expect(() => parseArgs(["--unknown-flag"])).toThrow("Unknown argument: --unknown-flag");
   });

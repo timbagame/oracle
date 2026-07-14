@@ -25,9 +25,7 @@ export interface ActiveEndpointChange {
   previousIndex: number;
 }
 
-type ActiveEndpointChangeListener = (
-  change: ActiveEndpointChange,
-) => void | Promise<void>;
+type ActiveEndpointChangeListener = (change: ActiveEndpointChange) => void | Promise<void>;
 
 export const DEFAULT_MAINNET_ENDPOINT = "https://api.mainnet-beta.solana.com";
 export const RPC_RETRY_BASE_DELAY_MS = 500;
@@ -87,9 +85,7 @@ function readHeader(headers: HeadersLike | undefined, name: string): string | un
     return headers.get(name) ?? headers.get(name.toLowerCase()) ?? undefined;
   }
 
-  const matchingKey = Object.keys(headers).find(
-    (key) => key.toLowerCase() === name.toLowerCase(),
-  );
+  const matchingKey = Object.keys(headers).find((key) => key.toLowerCase() === name.toLowerCase());
   if (!matchingKey) {
     return undefined;
   }
@@ -243,9 +239,9 @@ export class RpcEndpointManager {
       throw new Error("At least one RPC endpoint is required");
     }
 
-    this.endpoints = Array.from(
-      new Set(endpoints.map((url) => normalizeRpcEndpoint(url))),
-    ).filter((url) => url.length > 0);
+    this.endpoints = Array.from(new Set(endpoints.map((url) => normalizeRpcEndpoint(url)))).filter(
+      (url) => url.length > 0,
+    );
 
     if (this.endpoints.length === 0) {
       throw new Error("SOLANA_NETWORK did not resolve to any RPC endpoints");
@@ -255,7 +251,8 @@ export class RpcEndpointManager {
     this.logger = options.logger;
     this.connectionFactory =
       options.connectionFactory ??
-      ((endpoint: string, commitment: Commitment) => new anchor.web3.Connection(endpoint, commitment));
+      ((endpoint: string, commitment: Commitment) =>
+        new anchor.web3.Connection(endpoint, commitment));
     this.delayFn = options.delayFn ?? delay;
     this.proxyConnection = this.createProxyConnection();
   }

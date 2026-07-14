@@ -6,7 +6,12 @@ import { OracleDatabase } from "../database.ts";
 import { OracleService } from "../oracle-service.ts";
 import type { Timba } from "../idl/idlType.ts";
 import type { TimbaGameAccount, TimbaPlayerEvent } from "../types/timba.ts";
-import { ensurePublicKey, resolveNumericLike, toBase58, type PublicKeyLike } from "../solana-utils.ts";
+import {
+  ensurePublicKey,
+  resolveNumericLike,
+  toBase58,
+  type PublicKeyLike,
+} from "../solana-utils.ts";
 
 export type CliOptions = {
   gameAddress?: string;
@@ -131,12 +136,19 @@ async function promptSelectGame(db: OracleDatabase): Promise<string> {
 
     output.write("Pending games:\n");
     pending.forEach((row, idx) => {
-      output.write(`${String(idx + 1).padStart(2, " ")}. ${row.game_address} (attempts=${row.completion_attempts})\n`);
+      output.write(
+        `${String(idx + 1).padStart(2, " ")}. ${row.game_address} (attempts=${row.completion_attempts})\n`,
+      );
     });
     const response = (await rl.question("Select # or paste address: ")).trim();
 
     const numeric = Number(response);
-    if (Number.isFinite(numeric) && Number.isInteger(numeric) && numeric >= 1 && numeric <= pending.length) {
+    if (
+      Number.isFinite(numeric) &&
+      Number.isInteger(numeric) &&
+      numeric >= 1 &&
+      numeric <= pending.length
+    ) {
       const picked = pending[numeric - 1];
       if (!picked) throw new Error("Invalid selection");
       return picked.game_address;
@@ -364,29 +376,28 @@ async function main(): Promise<void> {
   const registerPlayerListeners = async (): Promise<void> => {
     if (!options.listen) return;
 
-    const onEvent = (action: "joined" | "unjoined") =>
-      async (event: TimbaPlayerEvent, slot?: number) => {
-      const extracted = extractPlayerMutation(action, event);
-      if (!extracted) return;
-      if (extracted.gameAddress !== gameAddress) return;
-      if (extracted.mutation.action === "joined") {
-        const joinedSlot = Number.isFinite(slot) ? (slot as number) : null;
-        lastJoin = {
-          playerAddress: extracted.mutation.playerAddress,
-          ticketIndex: extracted.mutation.ticketIndex,
-          joinedSlot,
-          gameLastSlotAtJoin: lastKnownGameAccount ? Number(lastKnownGameAccount.lastSlot) : null,
-          observedAtMs: Date.now(),
-        };
-      }
-      applyMutationToPlayersCache(playersCache, extracted.mutation);
-      if (options.writeDb) {
-        db.applyPlayerMutations(gameAddress, [extracted.mutation]);
-      }
-    };
+    const onEvent =
+      (action: "joined" | "unjoined") => async (event: TimbaPlayerEvent, slot?: number) => {
+        const extracted = extractPlayerMutation(action, event);
+        if (!extracted) return;
+        if (extracted.gameAddress !== gameAddress) return;
+        if (extracted.mutation.action === "joined") {
+          const joinedSlot = Number.isFinite(slot) ? (slot as number) : null;
+          lastJoin = {
+            playerAddress: extracted.mutation.playerAddress,
+            ticketIndex: extracted.mutation.ticketIndex,
+            joinedSlot,
+            gameLastSlotAtJoin: lastKnownGameAccount ? Number(lastKnownGameAccount.lastSlot) : null,
+            observedAtMs: Date.now(),
+          };
+        }
+        applyMutationToPlayersCache(playersCache, extracted.mutation);
+        if (options.writeDb) {
+          db.applyPlayerMutations(gameAddress, [extracted.mutation]);
+        }
+      };
 
-    const onStatus = (status: "completed" | "closed") =>
-      async (event: unknown, slot?: number) => {
+    const onStatus = (status: "completed" | "closed") => async (event: unknown, slot?: number) => {
       if (!event || typeof event !== "object") return;
       const address = extractGameAddressFromEventPayload(event as Record<string, unknown>);
       if (!address || address !== gameAddress) return;
@@ -452,15 +463,21 @@ async function main(): Promise<void> {
     lines.push(`Game: ${gameAddress}`);
     lines.push(
       `Status: ${statusLine}${
-        completionObservedAtMs ? ` | CompletedAt: ${new Date(completionObservedAtMs).toISOString()}` : ""
-      }${
-        completionSlot !== null ? ` | CompletedSlot: ${completionSlot}` : ""
-      }`,
+        completionObservedAtMs
+          ? ` | CompletedAt: ${new Date(completionObservedAtMs).toISOString()}`
+          : ""
+      }${completionSlot !== null ? ` | CompletedSlot: ${completionSlot}` : ""}`,
     );
     lines.push(`Last joiner: ${lastJoinLine}`);
-    lines.push(`Slot: ${currentSlot ?? "n/a"} | BlockTime: ${formatUnixSeconds(blockTime ?? undefined)}`);
-    lines.push(`Tickets: ${ticketsCount} | Players(DB): ${players.length} | lastSlot(entropy): ${lastSlot}`);
-    lines.push(`CreatedAt: ${formatUnixSeconds(createdAt ?? undefined)} | ExpiresAt: ${formatUnixSeconds(expiresAt ?? undefined)}`);
+    lines.push(
+      `Slot: ${currentSlot ?? "n/a"} | BlockTime: ${formatUnixSeconds(blockTime ?? undefined)}`,
+    );
+    lines.push(
+      `Tickets: ${ticketsCount} | Players(DB): ${players.length} | lastSlot(entropy): ${lastSlot}`,
+    );
+    lines.push(
+      `CreatedAt: ${formatUnixSeconds(createdAt ?? undefined)} | ExpiresAt: ${formatUnixSeconds(expiresAt ?? undefined)}`,
+    );
     lines.push(`Winner if completes now: ${winnerText}`);
     if (!isFinal) {
       lines.push("");
@@ -476,7 +493,11 @@ async function main(): Promise<void> {
 
         for (let offset = 1; offset <= options.lookaheadSlots; offset += 1) {
           const slot = currentSlot + offset;
-          const winnerIndexIfJoin = completion.calculateWinnerIndex(secretKeyBuffer, slot, joinNPlayers);
+          const winnerIndexIfJoin = completion.calculateWinnerIndex(
+            secretKeyBuffer,
+            slot,
+            joinNPlayers,
+          );
           winCounts.set(winnerIndexIfJoin, (winCounts.get(winnerIndexIfJoin) ?? 0) + 1);
           const winnerLabel =
             winnerIndexIfJoin === players.length
@@ -574,13 +595,17 @@ async function main(): Promise<void> {
     if (gameAccount && players.length > 0) {
       const ticketsCount = Number(gameAccount.ticketsCount);
       if (Number.isFinite(ticketsCount) && ticketsCount !== players.length) {
-        errors.push(`Player registry mismatch: on-chain ticketsCount=${ticketsCount}, DB players=${players.length}`);
+        errors.push(
+          `Player registry mismatch: on-chain ticketsCount=${ticketsCount}, DB players=${players.length}`,
+        );
       }
     }
 
     const entropySlot = gameAccount
       ? Number(gameAccount.lastSlot)
-      : (lastKnownGameAccount ? Number(lastKnownGameAccount.lastSlot) : null);
+      : lastKnownGameAccount
+        ? Number(lastKnownGameAccount.lastSlot)
+        : null;
 
     if (entropySlot !== null && Number.isFinite(entropySlot) && players.length > 0) {
       try {

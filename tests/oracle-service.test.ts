@@ -11,9 +11,7 @@ import { resolveTokenProgram } from "../solana-utils.ts";
 type OracleServiceClass = typeof import("../oracle-service.ts").OracleService;
 type OracleDatabaseClass = typeof import("../database.ts").OracleDatabase;
 
-function createGameAccountStub(
-  overrides: Partial<TimbaGameAccount> = {}
-): TimbaGameAccount {
+function createGameAccountStub(overrides: Partial<TimbaGameAccount> = {}): TimbaGameAccount {
   return {
     creator: overrides.creator ?? Keypair.generate().publicKey,
     tokenMint: overrides.tokenMint ?? Keypair.generate().publicKey,
@@ -132,9 +130,7 @@ describe("OracleService", () => {
 
   it("identifies account not found errors", () => {
     const service = OracleService.getInstance();
-    const check = service.completionManager.isAccountNotFoundError.bind(
-      service.completionManager
-    );
+    const check = service.completionManager.isAccountNotFoundError.bind(service.completionManager);
     expect(check({ message: "Account does not exist" })).toBe(true);
     expect(check({ message: "Something else" })).toBe(false);
   });
@@ -147,11 +143,7 @@ describe("OracleService", () => {
     const single = service.completionManager.calculateWinnerIndex(secret, 123456, 1);
     expect(single).toBe(0);
     expect(() =>
-      service.completionManager.calculateWinnerIndex(
-        Buffer.alloc(16, 1),
-        123456,
-        2
-      )
+      service.completionManager.calculateWinnerIndex(Buffer.alloc(16, 1), 123456, 2),
     ).toThrow("Secret key buffer must be at least 32 bytes");
   });
 
@@ -254,9 +246,10 @@ describe("OracleService", () => {
     });
 
     const sqlite = (db as any).db as {
-      prepare: (
-        sql: string,
-      ) => { run: (...args: unknown[]) => void; get: (...args: unknown[]) => any };
+      prepare: (sql: string) => {
+        run: (...args: unknown[]) => void;
+        get: (...args: unknown[]) => any;
+      };
     };
     sqlite
       .prepare("UPDATE game_tracking SET last_checked = ? WHERE game_address = ?")
@@ -274,7 +267,7 @@ describe("OracleService", () => {
     const context = makeFakeContext();
     const resolveSpy = spyOn(
       service.completionManager,
-      "resolveContextAndReadiness"
+      "resolveContextAndReadiness",
     ).mockResolvedValue({
       status: "not-ready",
       context,
@@ -311,9 +304,10 @@ describe("OracleService", () => {
     });
 
     const sqlite = (db as any).db as {
-      prepare: (
-        sql: string,
-      ) => { run: (...args: unknown[]) => void; get: (...args: unknown[]) => any };
+      prepare: (sql: string) => {
+        run: (...args: unknown[]) => void;
+        get: (...args: unknown[]) => any;
+      };
     };
     sqlite
       .prepare("UPDATE game_tracking SET last_checked = ? WHERE game_address = ?")
@@ -338,9 +332,7 @@ describe("OracleService", () => {
       readiness: context.readiness,
       prefetchScheduled: false,
     });
-    const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockResolvedValue(
-      null,
-    );
+    const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockResolvedValue(null);
 
     try {
       const stats = await service.scanRunner.scanAndCompleteActiveGames();
@@ -380,8 +372,7 @@ describe("OracleService", () => {
     const processed: string[] = [];
     let delayCalls = 0;
 
-    service.completionManager.resolveContextAndReadiness = async () =>
-      makeReadyResolution();
+    service.completionManager.resolveContextAndReadiness = async () => makeReadyResolution();
     (service as any).completeGame = async (addr: string) => {
       processed.push(addr);
       return { success: true };
@@ -396,15 +387,9 @@ describe("OracleService", () => {
       expect(stats).toEqual({ completed: 1, errors: 0, notReady: 0 });
       expect(delayCalls).toBe(0);
 
-      const stubbornEntry = db
-        .getPendingGames()
-        .find((g) => g.game_address === "stubborn");
+      const stubbornEntry = db.getPendingGames().find((g) => g.game_address === "stubborn");
       expect(stubbornEntry?.completion_attempts).toBeGreaterThanOrEqual(5);
-      expect(
-        db
-          .getPendingGames(5)
-          .some((entry) => entry.game_address === "stubborn")
-      ).toBe(false);
+      expect(db.getPendingGames(5).some((entry) => entry.game_address === "stubborn")).toBe(false);
     } finally {
       service.completionManager.resolveContextAndReadiness = originalResolve;
       (service as any).completeGame = originalComplete;
@@ -433,7 +418,6 @@ describe("OracleService", () => {
       // We expect an error because of insecure permissions
       expect(result.error).toBeDefined();
       expect(String(result.error)).toMatch(/insecure permissions/i);
-
     } finally {
       if (fs.existsSync(tempFile)) {
         fs.unlinkSync(tempFile);
@@ -462,14 +446,24 @@ describe("OracleService", () => {
     };
 
     // 3. Verify cache is used initially (returns poison)
-    const cached = await resolveTokenProgram(connection, mint, undefined, service.tokenProgramCache);
+    const cached = await resolveTokenProgram(
+      connection,
+      mint,
+      undefined,
+      service.tokenProgramCache,
+    );
     expect(cached.toBase58()).toBe(wrongProgram.toBase58());
 
     // 4. Simulate invalidation (manually, as we would in error handler)
     service.tokenProgramCache.delete(mint.toBase58());
 
     // 5. Verify it fetches correct program now
-    const resolved = await resolveTokenProgram(connection, mint, undefined, service.tokenProgramCache);
+    const resolved = await resolveTokenProgram(
+      connection,
+      mint,
+      undefined,
+      service.tokenProgramCache,
+    );
     expect(resolved.toBase58()).toBe(correctProgram.toBase58());
 
     // Restore

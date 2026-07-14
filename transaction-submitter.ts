@@ -23,7 +23,7 @@ export class TransactionSubmitter {
 
   public async submitTransaction(
     signTransaction: (latestBlockhash: BlockhashWithExpiryBlockHeight) => Promise<Buffer>,
-    onRetry?: (error: unknown) => void
+    onRetry?: (error: unknown) => void,
   ): Promise<string> {
     const connection = this.options.getConnection();
     const { confirmOpts } = this.options;
@@ -75,12 +75,15 @@ export class TransactionSubmitter {
       // Check if the previous transaction actually landed
       if (lastSignature) {
         try {
-           const status = await connection.getSignatureStatus(lastSignature);
-           if (status?.value?.confirmationStatus === 'confirmed' || status?.value?.confirmationStatus === 'finalized') {
-             if (!status.value.err) {
-               return lastSignature;
-             }
-           }
+          const status = await connection.getSignatureStatus(lastSignature);
+          if (
+            status?.value?.confirmationStatus === "confirmed" ||
+            status?.value?.confirmationStatus === "finalized"
+          ) {
+            if (!status.value.err) {
+              return lastSignature;
+            }
+          }
         } catch (statusError) {
           logger.warning(`Failed to check status of expired tx ${lastSignature}:`, statusError);
         }

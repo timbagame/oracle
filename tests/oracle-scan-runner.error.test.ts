@@ -85,7 +85,9 @@ describe("ScanLoopRunner completion attempt boundary", () => {
 
       const pending = db.getPendingGames();
       expect(pending.some((entry) => entry.game_address === gameAddress)).toBe(true);
-      expect(pending.find((entry) => entry.game_address === gameAddress)?.completion_attempts).toBe(1);
+      expect(pending.find((entry) => entry.game_address === gameAddress)?.completion_attempts).toBe(
+        1,
+      );
     } finally {
       env.cleanup();
     }

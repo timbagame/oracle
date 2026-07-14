@@ -26,7 +26,9 @@ export async function createTestEnv<TLoaders extends SingletonLoaderMap>(options
     }
   }
 
-  const singletons = Object.fromEntries(singletonsEntries) as CreateTestEnvResult<TLoaders>["singletons"];
+  const singletons = Object.fromEntries(
+    singletonsEntries,
+  ) as CreateTestEnvResult<TLoaders>["singletons"];
 
   return Object.assign(testEnv, { singletons });
 }

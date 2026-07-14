@@ -27,19 +27,21 @@ class FakeConnection {
 
 describe("parseRpcEndpointList", () => {
   test("handles comma-separated and JSON inputs", () => {
-    expect(
-      parseRpcEndpointList("https://rpc-a, https://rpc-b"),
-    ).toEqual(["https://rpc-a", "https://rpc-b"]);
+    expect(parseRpcEndpointList("https://rpc-a, https://rpc-b")).toEqual([
+      "https://rpc-a",
+      "https://rpc-b",
+    ]);
 
-    expect(
-      parseRpcEndpointList('["https://rpc-a","https://rpc-b"]'),
-    ).toEqual(["https://rpc-a", "https://rpc-b"]);
+    expect(parseRpcEndpointList('["https://rpc-a","https://rpc-b"]')).toEqual([
+      "https://rpc-a",
+      "https://rpc-b",
+    ]);
   });
 
   test("falls back to default when missing", () => {
-    expect(
-      parseRpcEndpointList(undefined, { fallback: DEFAULT_MAINNET_ENDPOINT }),
-    ).toEqual([DEFAULT_MAINNET_ENDPOINT]);
+    expect(parseRpcEndpointList(undefined, { fallback: DEFAULT_MAINNET_ENDPOINT })).toEqual([
+      DEFAULT_MAINNET_ENDPOINT,
+    ]);
   });
 });
 
@@ -47,7 +49,11 @@ describe("RpcEndpointManager", () => {
   test("switches endpoints after a retryable failure", async () => {
     const endpoints = ["https://rpc-a", "https://rpc-b"];
     const connectionFactory = (endpoint: string, commitment: string) =>
-      new FakeConnection(endpoint, commitment, endpoint === endpoints[0]) as unknown as anchor.web3.Connection;
+      new FakeConnection(
+        endpoint,
+        commitment,
+        endpoint === endpoints[0],
+      ) as unknown as anchor.web3.Connection;
 
     const manager = new RpcEndpointManager(endpoints, {
       connectionFactory,
@@ -63,7 +69,11 @@ describe("RpcEndpointManager", () => {
   test("emits endpoint change notifications", async () => {
     const endpoints = ["https://rpc-a", "https://rpc-b"];
     const connectionFactory = (endpoint: string, commitment: string) =>
-      new FakeConnection(endpoint, commitment, endpoint === endpoints[0]) as unknown as anchor.web3.Connection;
+      new FakeConnection(
+        endpoint,
+        commitment,
+        endpoint === endpoints[0],
+      ) as unknown as anchor.web3.Connection;
 
     const manager = new RpcEndpointManager(endpoints, {
       connectionFactory,
@@ -102,16 +112,12 @@ describe("RpcEndpointManager", () => {
     }
 
     const endpoints = ["https://rpc-a", "https://rpc-b"];
-    const connectionFactory = (
-      endpoint: string,
-      commitment: string,
-    ) => new FatalConnection(endpoint, commitment) as unknown as anchor.web3.Connection;
+    const connectionFactory = (endpoint: string, commitment: string) =>
+      new FatalConnection(endpoint, commitment) as unknown as anchor.web3.Connection;
 
     const manager = new RpcEndpointManager(endpoints, { connectionFactory });
 
-    await expect(manager.getConnection().getBlockHeight()).rejects.toThrow(
-      "HTTP 400",
-    );
+    await expect(manager.getConnection().getBlockHeight()).rejects.toThrow("HTTP 400");
     expect(manager.getActiveEndpoint()).toBe(endpoints[0]!);
   });
 

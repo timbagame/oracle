@@ -1,9 +1,5 @@
 import * as anchor from "@anchor-lang/core";
-import {
-  PublicKey,
-  type BlockhashWithExpiryBlockHeight,
-  Connection,
-} from "@solana/web3.js";
+import { PublicKey, type BlockhashWithExpiryBlockHeight, Connection } from "@solana/web3.js";
 import {
   type AttemptGameCompletionOptions,
   type CoreOracleDependencies,
@@ -13,7 +9,12 @@ import {
   type ReadinessResolution,
 } from "./oracle-service.types.ts";
 import type { TimbaGameAccount } from "./types/timba.ts";
-import { coercePublicKey, ensurePublicKey, generateUnbiasedRandom, resolveNumericLike } from "./solana-utils.ts";
+import {
+  coercePublicKey,
+  ensurePublicKey,
+  generateUnbiasedRandom,
+  resolveNumericLike,
+} from "./solana-utils.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 import { GAME_SEED } from "./oracle-accounts.ts";
 import { logger } from "./logger.ts";
@@ -114,7 +115,8 @@ export class GameCompletionManager {
 
     try {
       const resolvedPda =
-        context?.gamePda ?? (gameKey ? coercePublicKey(gameKey) : this.safeCoercePublicKey(gameAddress));
+        context?.gamePda ??
+        (gameKey ? coercePublicKey(gameKey) : this.safeCoercePublicKey(gameAddress));
 
       if (!resolvedPda) {
         return null;
@@ -143,11 +145,11 @@ export class GameCompletionManager {
         ? hooks.completeGame(gameAddress, completionReadiness, completionContext)
         : this.completeGame(gameAddress, completionReadiness, completionContext));
 
-      return this.finalizeCompletionOutcome(
-        gameAddress,
-        completion,
-        { onResult, successLog, failureLog },
-      );
+      return this.finalizeCompletionOutcome(gameAddress, completion, {
+        onResult,
+        successLog,
+        failureLog,
+      });
     } finally {
       this.inFlightCompletions.delete(lockKey);
     }
@@ -172,11 +174,7 @@ export class GameCompletionManager {
 
     this.options.metrics.recordCompletion({
       gameAddress,
-      outcome: result.success
-        ? "success"
-        : result.notReady
-        ? "not-ready"
-        : "error",
+      outcome: result.success ? "success" : result.notReady ? "not-ready" : "error",
       error: result.error,
     });
 
@@ -261,10 +259,7 @@ export class GameCompletionManager {
     | { error: GameCompletionResult } {
     if (state.status === "missing-context") {
       return {
-        error: this.recordFatalCompletionFailure(
-          gameAddress,
-          this.options.noSecretKeyMessage,
-        ),
+        error: this.recordFatalCompletionFailure(gameAddress, this.options.noSecretKeyMessage),
       };
     }
 
@@ -350,7 +345,7 @@ export class GameCompletionManager {
       context,
       readiness,
       expectedEntries,
-      (addr, err) => this.recordFatalCompletionFailure(addr, err)
+      (addr, err) => this.recordFatalCompletionFailure(addr, err),
     );
 
     if ("error" in ensuredPlayers) {
@@ -372,10 +367,7 @@ export class GameCompletionManager {
 
     if (!winnerPlayerAddress) {
       return {
-        error: this.recordFatalCompletionFailure(
-          gameAddress,
-          "Unable to determine winner",
-        ),
+        error: this.recordFatalCompletionFailure(gameAddress, "Unable to determine winner"),
       };
     }
 
@@ -404,10 +396,7 @@ export class GameCompletionManager {
     return { success: false, error };
   }
 
-  private recordFatalCompletionFailure(
-    gameAddress: string,
-    error: string,
-  ): GameCompletionResult {
+  private recordFatalCompletionFailure(gameAddress: string, error: string): GameCompletionResult {
     return this.recordCompletionFailure(gameAddress, error, { clearReadiness: true });
   }
 
@@ -473,12 +462,17 @@ export class GameCompletionManager {
       return { status: "missing-context" };
     }
 
-    const contextWithReadiness = resolvedContext.readiness === snapshot
-      ? resolvedContext
-      : { ...resolvedContext, readiness: snapshot };
+    const contextWithReadiness =
+      resolvedContext.readiness === snapshot
+        ? resolvedContext
+        : { ...resolvedContext, readiness: snapshot };
 
     if (shouldPrefetch) {
-      await this.registrySyncManager.prefetchPlayerRegistry(gameAddress, contextWithReadiness, snapshot);
+      await this.registrySyncManager.prefetchPlayerRegistry(
+        gameAddress,
+        contextWithReadiness,
+        snapshot,
+      );
     }
 
     const status: "ready" | "not-ready" =
@@ -503,13 +497,7 @@ export class GameCompletionManager {
       getBlockTime?: () => Promise<number>;
     },
   ): Promise<{ snapshot: GameReadinessSnapshot | null; shouldPrefetch: boolean }> {
-    const {
-      providedReadiness,
-      providedContext,
-      requireOnChain,
-      blockTime,
-      getBlockTime,
-    } = options;
+    const { providedReadiness, providedContext, requireOnChain, blockTime, getBlockTime } = options;
 
     const providedCandidate = this.getProvidedReadinessCandidate(
       providedReadiness,
@@ -525,8 +513,7 @@ export class GameCompletionManager {
       return { snapshot: cachedCandidate, shouldPrefetch: false };
     }
 
-    const evaluationBlockTime =
-      blockTime ?? (getBlockTime ? await getBlockTime() : undefined);
+    const evaluationBlockTime = blockTime ?? (getBlockTime ? await getBlockTime() : undefined);
 
     const evaluation = await this.evaluateAndCacheReadiness(
       context.gamePda,
@@ -651,9 +638,7 @@ export class GameCompletionManager {
     };
   }
 
-  public async fetchGameAccount(
-    gamePda: PublicKey,
-  ): Promise<TimbaGameAccount | null> {
+  public async fetchGameAccount(gamePda: PublicKey): Promise<TimbaGameAccount | null> {
     try {
       const program = this.options.getProgram();
       return (await program.account.game.fetch(gamePda)) as TimbaGameAccount;
@@ -708,21 +693,15 @@ export class GameCompletionManager {
         // Invalidate token program cache on error
         const tokenMint = ensurePublicKey(args.gameAccount.tokenMint);
         this.options.tokenProgramCache.delete(tokenMint.toBase58());
-      }
+      },
     );
   }
 
-  public calculateWinnerIndex(
-    secretKeyBuffer: Buffer,
-    lastSlot: number,
-    nPlayers: number,
-  ): number {
+  public calculateWinnerIndex(secretKeyBuffer: Buffer, lastSlot: number, nPlayers: number): number {
     if (nPlayers <= 1) return 0;
 
     if (secretKeyBuffer.length < this.options.secretKeyLength) {
-      throw new Error(
-        `Secret key buffer must be at least ${this.options.secretKeyLength} bytes`,
-      );
+      throw new Error(`Secret key buffer must be at least ${this.options.secretKeyLength} bytes`);
     }
 
     const lastSlotBytes = Buffer.alloc(8);
@@ -744,9 +723,7 @@ export class GameCompletionManager {
     logger.warning(`${this.options.noSecretKeyMessage} for game ${gameAddress}`);
   }
 
-  public resolveStoredGame(
-    gameAddress: string,
-  ): GameOnChainContext | null {
+  public resolveStoredGame(gameAddress: string): GameOnChainContext | null {
     const secretData = this.options.db.getSecretKey(gameAddress);
     if (!secretData) {
       return null;

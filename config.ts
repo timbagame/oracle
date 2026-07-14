@@ -31,7 +31,7 @@ function parseInteger(
     min,
     max,
     key,
-  }: { defaultValue: number; min?: number; max?: number; key: string }
+  }: { defaultValue: number; min?: number; max?: number; key: string },
 ): number {
   if (value === undefined) {
     return defaultValue;
@@ -40,29 +40,23 @@ function parseInteger(
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
     console.warn(
-      `⚠️  Ignoring invalid numeric value '${value}' for ${key}; using ${defaultValue}.`
+      `⚠️  Ignoring invalid numeric value '${value}' for ${key}; using ${defaultValue}.`,
     );
     return defaultValue;
   }
 
   if (!Number.isInteger(parsed)) {
-    console.warn(
-      `⚠️  ${key} must be an integer, received ${parsed}; using ${defaultValue}.`
-    );
+    console.warn(`⚠️  ${key} must be an integer, received ${parsed}; using ${defaultValue}.`);
     return defaultValue;
   }
 
   if (min !== undefined && parsed < min) {
-    console.warn(
-      `⚠️  ${key} must be >= ${min}, received ${parsed}; using ${defaultValue}.`
-    );
+    console.warn(`⚠️  ${key} must be >= ${min}, received ${parsed}; using ${defaultValue}.`);
     return defaultValue;
   }
 
   if (max !== undefined && parsed > max) {
-    console.warn(
-      `⚠️  ${key} must be <= ${max}, received ${parsed}; using ${defaultValue}.`
-    );
+    console.warn(`⚠️  ${key} must be <= ${max}, received ${parsed}; using ${defaultValue}.`);
     return defaultValue;
   }
 
@@ -71,7 +65,7 @@ function parseInteger(
 
 function parseNonNegative(
   value: string | undefined,
-  { defaultValue, key }: { defaultValue: number; key: string }
+  { defaultValue, key }: { defaultValue: number; key: string },
 ): number {
   const parsed = parseInteger(value, { defaultValue, min: 0, key });
   if (parsed < 0) {
@@ -89,10 +83,12 @@ function resolvePath(relativeOrAbsolute: string): string {
 function readProtectedSecret(filePath: string, label: string): string {
   const resolved = resolvePath(filePath);
   const stats = fs.lstatSync(resolved);
-  if (!stats.isFile() || stats.isSymbolicLink()) throw new Error(`${label} must be a regular file, not a symlink`);
+  if (!stats.isFile() || stats.isSymbolicLink())
+    throw new Error(`${label} must be a regular file, not a symlink`);
   if (stats.size <= 0 || stats.size > 4096) throw new Error(`${label} has an invalid size`);
   const mode = stats.mode & 0o777;
-  if ((mode & 0o077) !== 0) throw new Error(`${label} has insecure permissions (${mode.toString(8)}); use 400 or 600`);
+  if ((mode & 0o077) !== 0)
+    throw new Error(`${label} has insecure permissions (${mode.toString(8)}); use 400 or 600`);
   const value = fs.readFileSync(resolved, "utf8").trim();
   if (!value) throw new Error(`${label} is empty`);
   return value;
@@ -141,7 +137,7 @@ function loadConfig(): OracleRuntimeConfig {
 
   const playerEventFlushDebounceMs = parseNonNegative(
     readEnv("ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS"),
-    { defaultValue: 100, key: "ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS" }
+    { defaultValue: 100, key: "ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS" },
   );
 
   const playerEventFlushMaxOperations = parseInteger(
@@ -150,18 +146,17 @@ function loadConfig(): OracleRuntimeConfig {
       defaultValue: 500,
       min: 1,
       key: "ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS",
-    }
+    },
   );
 
-  const autoCompleteDebounceMs = parseNonNegative(
-    readEnv("ORACLE_AUTOCOMPLETE_DEBOUNCE_MS"),
-    { defaultValue: 500, key: "ORACLE_AUTOCOMPLETE_DEBOUNCE_MS" }
-  );
+  const autoCompleteDebounceMs = parseNonNegative(readEnv("ORACLE_AUTOCOMPLETE_DEBOUNCE_MS"), {
+    defaultValue: 500,
+    key: "ORACLE_AUTOCOMPLETE_DEBOUNCE_MS",
+  });
 
-  const disableBatchTransactions = parseBoolean(
-    readEnv("ORACLE_DISABLE_RPC_BATCH_TRANSACTIONS"),
-    { defaultValue: false },
-  );
+  const disableBatchTransactions = parseBoolean(readEnv("ORACLE_DISABLE_RPC_BATCH_TRANSACTIONS"), {
+    defaultValue: false,
+  });
 
   const useEphemeralKeypair = shouldUseEphemeralKeypair();
   const botInternalUrl = readEnv("BOT_INTERNAL_URL") ?? "http://bot:3002";

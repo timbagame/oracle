@@ -18,15 +18,13 @@ async function runManualShutdown() {
     },
     onCycleComplete: (_cycle, stats) => {
       console.log(
-        `   Completed: ${stats.completed}, Not Ready: ${stats.notReady}, Errors: ${stats.errors}`
+        `   Completed: ${stats.completed}, Not Ready: ${stats.notReady}, Errors: ${stats.errors}`,
       );
 
       if (stats.notReady === 0 && stats.completed === 0) {
         console.log("   No actionable games remaining.");
       } else if (stats.notReady > 0) {
-        console.log(
-          `   Waiting ${waitMs / 1000}s for remaining games to settle...`
-        );
+        console.log(`   Waiting ${waitMs / 1000}s for remaining games to settle...`);
       }
     },
   });
@@ -34,12 +32,12 @@ async function runManualShutdown() {
   const cleanupSummary = oracle.cleanupOldRecords(0);
   console.log("\n🧹 Cleanup summary:");
   console.log(
-    `   Deleted secrets: ${cleanupSummary.deletedSecrets}, deleted games: ${cleanupSummary.deletedGames}, deleted players: ${cleanupSummary.deletedPlayers}`
+    `   Deleted secrets: ${cleanupSummary.deletedSecrets}, deleted games: ${cleanupSummary.deletedGames}, deleted players: ${cleanupSummary.deletedPlayers}`,
   );
 
   console.log("\n✅ Manual shutdown scan complete.");
   console.log(
-    `   Total completions: ${summary.totalCompleted}, total errors: ${summary.totalErrors}`
+    `   Total completions: ${summary.totalCompleted}, total errors: ${summary.totalErrors}`,
   );
 }
 

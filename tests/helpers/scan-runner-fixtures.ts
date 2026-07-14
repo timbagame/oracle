@@ -1,7 +1,10 @@
 import type { OracleDatabase } from "../../database.ts";
 import { ScanLoopRunner, type ScanLoopRunnerOptions } from "../../oracle-scan-runner.ts";
 import type { OracleMetrics } from "../../metrics.ts";
-import type { GameCompletionResult, AttemptGameCompletionOptions } from "../../oracle-service.types.ts";
+import type {
+  GameCompletionResult,
+  AttemptGameCompletionOptions,
+} from "../../oracle-service.types.ts";
 
 export interface ScanRunnerFixtureOptions {
   pendingGames?: () => Array<{ game_address: string; completion_attempts: number }>;
@@ -16,9 +19,7 @@ export interface ScanRunnerFixtureOptions {
   cleanupOldRecords?: ScanLoopRunnerOptions["cleanupOldRecords"];
 }
 
-export function createScanRunnerFixture(
-  overrides: ScanRunnerFixtureOptions = {},
-): {
+export function createScanRunnerFixture(overrides: ScanRunnerFixtureOptions = {}): {
   runner: ScanLoopRunner;
   touchCalls: string[];
   attemptCalls: string[];

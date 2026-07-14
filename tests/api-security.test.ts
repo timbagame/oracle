@@ -1,14 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import {
-  createRouteRateLimiter,
-  hasValidBearerToken,
-} from "../api-security.ts";
+import { createRouteRateLimiter, hasValidBearerToken } from "../api-security.ts";
 
 describe("oracle API security", () => {
   test("validates bearer tokens without accepting malformed credentials", () => {
-    expect(hasValidBearerToken("Bearer service-secret", "service-secret")).toBe(
-      true,
-    );
+    expect(hasValidBearerToken("Bearer service-secret", "service-secret")).toBe(true);
     expect(hasValidBearerToken("Bearer wrong", "service-secret")).toBe(false);
     expect(hasValidBearerToken("service-secret", "service-secret")).toBe(false);
     expect(hasValidBearerToken(null, "service-secret")).toBe(false);

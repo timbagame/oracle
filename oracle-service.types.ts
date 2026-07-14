@@ -97,7 +97,7 @@ export interface AttemptGameCompletionOptions {
 }
 
 export type EventHandler<TKey extends keyof TimbaEventMap> = (
-  event: TimbaEventMap[TKey]
+  event: TimbaEventMap[TKey],
 ) => Promise<void> | void;
 
 export interface EventHandlerConfig<TKey extends keyof TimbaEventMap> {

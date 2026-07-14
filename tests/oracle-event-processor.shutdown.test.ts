@@ -16,18 +16,21 @@ describe("OracleEventProcessor shutdown", () => {
     const scheduledTimers: Timer[] = [];
     const clearedTimers: Timer[] = [];
 
-    const scheduleRetryTimeout = (((_callback: Parameters<typeof setTimeout>[0], _delay?: number) => {
+    const scheduleRetryTimeout = ((
+      _callback: Parameters<typeof setTimeout>[0],
+      _delay?: number,
+    ) => {
       const timer = Symbol("timer") as unknown as Timer;
       scheduledTimers.push(timer);
       return timer;
-    }) as unknown) as typeof setTimeout;
+    }) as unknown as typeof setTimeout;
 
-    const clearRetryTimeout = (((timer?: Parameters<typeof clearTimeout>[0]) => {
+    const clearRetryTimeout = ((timer?: Parameters<typeof clearTimeout>[0]) => {
       if (timer === undefined) {
         return;
       }
       clearedTimers.push(timer as unknown as Timer);
-    }) as unknown) as typeof clearTimeout;
+    }) as unknown as typeof clearTimeout;
 
     const programStub = createProgramStub();
     const dbStub = {} as unknown as OracleDatabase;

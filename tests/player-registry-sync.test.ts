@@ -11,9 +11,7 @@ type EventData = {
 type SyncOverrides = {
   connection?: anchor.web3.Connection;
   eventParserFactory?: PlayerRegistrySyncOptions["eventParserFactory"];
-} & Partial<
-    Omit<PlayerRegistrySyncOptions, "connection" | "program" | "eventParserFactory">
-  >;
+} & Partial<Omit<PlayerRegistrySyncOptions, "connection" | "program" | "eventParserFactory">>;
 
 function createSync(
   eventsPerTransaction: Array<EventData[]>,
@@ -27,7 +25,7 @@ function createSync(
   } as const;
 
   const signatures = eventsPerTransaction.map(
-    (_, index) => ({ signature: `sig-${index + 1}` } as anchor.web3.ConfirmedSignatureInfo),
+    (_, index) => ({ signature: `sig-${index + 1}` }) as anchor.web3.ConfirmedSignatureInfo,
   );
   let signatureCalls = 0;
   let parseIndex = 0;
@@ -95,10 +93,7 @@ describe("PlayerRegistrySync", () => {
       expectedTickets: 2,
     });
 
-    expect(players).toEqual([
-      playerOne.toBase58(),
-      playerTwo.toBase58(),
-    ]);
+    expect(players).toEqual([playerOne.toBase58(), playerTwo.toBase58()]);
   });
 
   it("rejects registries with index gaps", async () => {
@@ -278,17 +273,19 @@ describe("PlayerRegistrySync", () => {
     } as unknown as anchor.web3.Connection;
 
     const sync = createSync(
-      [[
-        {
-          name: "playerJoined",
-          data: {
-            gameKey: gamePda,
-            player,
-            ticketIndex: 0,
+      [
+        [
+          {
+            name: "playerJoined",
+            data: {
+              gameKey: gamePda,
+              player,
+              ticketIndex: 0,
+            },
           },
-        },
-      ]],
-      { connection }
+        ],
+      ],
+      { connection },
     );
 
     const players = await sync.fetchPlayersFromChain({
@@ -435,7 +432,9 @@ describe("PlayerRegistrySync", () => {
         return signatures.map((signature) =>
           signature === missingSignature
             ? null
-            : ({ meta: { logMessages: [`batched:${signature}`] } } as anchor.web3.TransactionResponse),
+            : ({
+                meta: { logMessages: [`batched:${signature}`] },
+              } as anchor.web3.TransactionResponse),
         );
       },
       async getTransaction(signature: string) {
@@ -513,7 +512,7 @@ describe("PlayerRegistrySync", () => {
       async getTransactions(signatures: string[]) {
         const isFirstChunk = signatures.includes("sig-0");
         const responses = signatures.map(
-          () => ({ meta: { logMessages: ["chunk"] } } as anchor.web3.TransactionResponse),
+          () => ({ meta: { logMessages: ["chunk"] } }) as anchor.web3.TransactionResponse,
         );
         const delay = isFirstChunk ? 25 : 5;
 
@@ -556,7 +555,7 @@ describe("PlayerRegistrySync", () => {
     ]);
 
     const signatureInfos: anchor.web3.ConfirmedSignatureInfo[] = eventsPerTransaction.map(
-      (_events, index) => ({ signature: `sig-${index}` } as anchor.web3.ConfirmedSignatureInfo),
+      (_events, index) => ({ signature: `sig-${index}` }) as anchor.web3.ConfirmedSignatureInfo,
     );
     let signaturePageCalls = 0;
     const batchedCalls: Array<string[]> = [];

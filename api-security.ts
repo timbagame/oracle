@@ -10,10 +10,7 @@ const ROUTE_LIMITS: Readonly<Record<string, number>> = {
   "/stats": 10,
 };
 
-export function hasValidBearerToken(
-  authorization: string | null,
-  expectedToken: string,
-): boolean {
+export function hasValidBearerToken(authorization: string | null, expectedToken: string): boolean {
   if (!authorization?.startsWith("Bearer ") || expectedToken.length === 0) {
     return false;
   }

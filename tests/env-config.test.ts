@@ -105,19 +105,19 @@ describe("runtime config", () => {
     expect(config.disableBatchTransactions).toBe(false);
 
     expect(warnSpy).toHaveBeenCalledWith(
-      "⚠️  ORACLE_PORT must be <= 65535, received 70000; using 3001."
+      "⚠️  ORACLE_PORT must be <= 65535, received 70000; using 3001.",
     );
     expect(warnSpy).toHaveBeenCalledWith(
-      "⚠️  ORACLE_SCAN_THROTTLE_MS must be >= 0, received -5; using 0."
+      "⚠️  ORACLE_SCAN_THROTTLE_MS must be >= 0, received -5; using 0.",
     );
     expect(warnSpy).toHaveBeenCalledWith(
-      "⚠️  ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS must be >= 0, received -1; using 100."
+      "⚠️  ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS must be >= 0, received -1; using 100.",
     );
     expect(warnSpy).toHaveBeenCalledWith(
-      "⚠️  ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS must be >= 1, received 0; using 500."
+      "⚠️  ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS must be >= 1, received 0; using 500.",
     );
     expect(warnSpy).toHaveBeenCalledWith(
-      "⚠️  Ignoring invalid numeric value 'not-a-number' for ORACLE_AUTOCOMPLETE_DEBOUNCE_MS; using 500."
+      "⚠️  Ignoring invalid numeric value 'not-a-number' for ORACLE_AUTOCOMPLETE_DEBOUNCE_MS; using 500.",
     );
 
     warnSpy.mockRestore();
@@ -182,13 +182,9 @@ describe("runtime config", () => {
   });
 
   it("supports multi-endpoint SOLANA_NETWORK definitions", () => {
-    process.env["SOLANA_NETWORK"] =
-      '["https://rpc-primary","https://rpc-secondary"]';
+    process.env["SOLANA_NETWORK"] = '["https://rpc-primary","https://rpc-secondary"]';
     const config = getConfig();
     expect(config.solanaNetwork).toBe("https://rpc-primary");
-    expect(config.solanaNetworks).toEqual([
-      "https://rpc-primary",
-      "https://rpc-secondary",
-    ]);
+    expect(config.solanaNetworks).toEqual(["https://rpc-primary", "https://rpc-secondary"]);
   });
 });

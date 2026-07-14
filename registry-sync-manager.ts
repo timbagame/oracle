@@ -29,12 +29,15 @@ export class RegistrySyncManager {
   private readonly attemptedRegistryRecovery = new Set<string>();
 
   // Cache for registry analysis results
-  private readonly registryAnalysisCache = new Map<string, {
-    count: number;
-    expected: number;
-    result: ReturnType<typeof analyzeRegistryState>;
-    timestamp: number;
-  }>();
+  private readonly registryAnalysisCache = new Map<
+    string,
+    {
+      count: number;
+      expected: number;
+      result: ReturnType<typeof analyzeRegistryState>;
+      timestamp: number;
+    }
+  >();
 
   constructor(private readonly options: RegistrySyncManagerOptions) {
     const configured = options.registryPrefetchCooldownMs ?? 60_000;
@@ -46,7 +49,7 @@ export class RegistrySyncManager {
     context: GameOnChainContext,
     readiness: GameReadinessSnapshot,
     expectedEntries: number,
-    recordFatalFailure: (gameAddress: string, error: string) => GameCompletionResult
+    recordFatalFailure: (gameAddress: string, error: string) => GameCompletionResult,
   ): Promise<{ players: string[] } | { error: GameCompletionResult }> {
     if (expectedEntries <= 0) {
       logger.failure(
@@ -56,10 +59,7 @@ export class RegistrySyncManager {
         this.options.markGameDesynced(gameAddress);
       }
       return {
-        error: recordFatalFailure(
-          gameAddress,
-          "No ticket entries available for completion",
-        ),
+        error: recordFatalFailure(gameAddress, "No ticket entries available for completion"),
       };
     }
 
@@ -108,7 +108,11 @@ export class RegistrySyncManager {
 
     const postRecoveryDuplicates = players.length > 0 && new Set(players).size !== players.length;
 
-    if (postRecoveryAnalysis.needsReconciliation || postRecoveryDuplicates || players.length === 0) {
+    if (
+      postRecoveryAnalysis.needsReconciliation ||
+      postRecoveryDuplicates ||
+      players.length === 0
+    ) {
       logger.failure(
         `Ticket registry mismatch for ${gameAddress}: expected ${expectedEntries}, found ${players.length}`,
       );
@@ -120,10 +124,7 @@ export class RegistrySyncManager {
       this.resetRegistryPrefetchSchedule(gameAddress);
 
       return {
-        error: recordFatalFailure(
-          gameAddress,
-          "Ticket registry out of sync",
-        ),
+        error: recordFatalFailure(gameAddress, "Ticket registry out of sync"),
       };
     }
 
@@ -133,7 +134,7 @@ export class RegistrySyncManager {
   private getCachedOrAnalyze(
     gameAddress: string,
     players: string[],
-    expectedEntries: number
+    expectedEntries: number,
   ): ReturnType<typeof analyzeRegistryState> {
     const cached = this.registryAnalysisCache.get(gameAddress);
 
@@ -142,9 +143,7 @@ export class RegistrySyncManager {
     // 2. Player count matches (DB hasn't changed)
     // 3. Expected entries matches (On-chain state hasn't changed drastically)
     // 4. Cache is relatively fresh (e.g., < 5 seconds) - optional, but good for safety
-    if (cached &&
-        cached.count === players.length &&
-        cached.expected === expectedEntries) {
+    if (cached && cached.count === players.length && cached.expected === expectedEntries) {
       return cached.result;
     }
 
@@ -216,9 +215,7 @@ export class RegistrySyncManager {
       return null;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      logger.failure(
-        `Player registry recovery failed for ${gameAddress}: ${message}`,
-      );
+      logger.failure(`Player registry recovery failed for ${gameAddress}: ${message}`);
       return null;
     } finally {
       this.attemptedRegistryRecovery.delete(gameAddress);
@@ -280,9 +277,7 @@ export class RegistrySyncManager {
       } catch (error) {
         this.resetRegistryPrefetchSchedule(gameAddress);
         const message = error instanceof Error ? error.message : String(error);
-        logger.warning(
-          `Unable to prefetch player registry for ${gameAddress}: ${message}`,
-        );
+        logger.warning(`Unable to prefetch player registry for ${gameAddress}: ${message}`);
       } finally {
         this.prefetchingGames.delete(gameAddress);
       }

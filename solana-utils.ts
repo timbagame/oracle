@@ -11,12 +11,7 @@ type PublicKeyRecord = {
 };
 
 type PublicKeyInput =
-  | PublicKey
-  | anchor.web3.PublicKey
-  | string
-  | PublicKeyRecord
-  | null
-  | undefined;
+  PublicKey | anchor.web3.PublicKey | string | PublicKeyRecord | null | undefined;
 
 export type PublicKeyLike = PublicKeyInput;
 
@@ -179,8 +174,9 @@ export async function confirmTransaction(
 
   // Modern confirmation (preferred)
   if (typeof conn.confirmTransaction === "function") {
-    const resolvedBlockhash = latestBlockhash
-      ?? (typeof conn.getLatestBlockhash === "function" ? await conn.getLatestBlockhash() : null);
+    const resolvedBlockhash =
+      latestBlockhash ??
+      (typeof conn.getLatestBlockhash === "function" ? await conn.getLatestBlockhash() : null);
 
     if (resolvedBlockhash) {
       const { blockhash, lastValidBlockHeight } = resolvedBlockhash;
@@ -249,9 +245,7 @@ export async function resolveTokenProgram(
     const message = error instanceof Error ? error.message : String(error);
     // Surface a warning for callers that expect a logged hint
     // (tests rely on this visibility when resolution fails).
-    console.warn(
-      `Unable to resolve token program for mint ${tokenMint.toBase58()}: ${message}`,
-    );
+    console.warn(`Unable to resolve token program for mint ${tokenMint.toBase58()}: ${message}`);
     throw new Error(
       `Unable to resolve token program for mint ${tokenMint.toBase58()}: ${message}`,
       { cause: error instanceof Error ? error : undefined },
@@ -259,10 +253,7 @@ export async function resolveTokenProgram(
   }
 }
 
-function matchTokenProgramOwner(
-  owner: PublicKey | undefined,
-  tokenMint: PublicKey,
-): PublicKey {
+function matchTokenProgramOwner(owner: PublicKey | undefined, tokenMint: PublicKey): PublicKey {
   // Match against known token program IDs
 
   const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -283,10 +274,7 @@ function matchTokenProgramOwner(
   );
 }
 
-export function generateUnbiasedRandom(
-  seed: Buffer,
-  max: bigint,
-): bigint {
+export function generateUnbiasedRandom(seed: Buffer, max: bigint): bigint {
   if (max <= 0n) {
     throw new Error("Unable to generate unbiased random number - game must be cancelled");
   }
@@ -303,7 +291,5 @@ export function generateUnbiasedRandom(
     }
   }
 
-  throw new Error(
-    "Unable to generate unbiased random number - game must be cancelled",
-  );
+  throw new Error("Unable to generate unbiased random number - game must be cancelled");
 }

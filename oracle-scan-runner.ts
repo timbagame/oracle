@@ -50,9 +50,7 @@ export class ScanLoopRunner {
   ): Promise<CompletionStats> {
     const { signal } = runOptions;
     const stats: CompletionStats = createEmptyCompletionStats();
-    const pendingGames = this.options.db.getActivePendingGames(
-      this.options.maxCompletionAttempts,
-    );
+    const pendingGames = this.options.db.getActivePendingGames(this.options.maxCompletionAttempts);
     const pendingCount = pendingGames.length;
     const scanStart = performance.now();
 
@@ -92,16 +90,14 @@ export class ScanLoopRunner {
           break;
         }
 
-        const readinessResolution =
-          await this.options.completion.resolveContextAndReadiness(
-            game.game_address,
-            {
-              requireOnChain: true,
-              blockTime: cachedBlockTime,
-              getBlockTime:
-                cachedBlockTime === undefined ? ensureBlockTime : undefined,
-            },
-          );
+        const readinessResolution = await this.options.completion.resolveContextAndReadiness(
+          game.game_address,
+          {
+            requireOnChain: true,
+            blockTime: cachedBlockTime,
+            getBlockTime: cachedBlockTime === undefined ? ensureBlockTime : undefined,
+          },
+        );
 
         if (signal?.aborted) {
           break;
@@ -117,7 +113,7 @@ export class ScanLoopRunner {
             // Be patient if we have the secret; it might be RPC flakiness
             stats.notReady += 1;
             logger.warning(
-              `⚠️  Game ${game.game_address} account not found on-chain (attempt ${attempts}/${this.options.maxCompletionAttempts}); retrying later.`
+              `⚠️  Game ${game.game_address} account not found on-chain (attempt ${attempts}/${this.options.maxCompletionAttempts}); retrying later.`,
             );
             this.options.db.incrementCompletionAttempts(game.game_address);
             this.options.db.touchGameCheck(game.game_address);
@@ -171,9 +167,7 @@ export class ScanLoopRunner {
           cachedBlockTime = undefined;
         }
 
-        if (
-          this.shouldThrottleBetweenGames(result ?? null, index, pendingGames.length)
-        ) {
+        if (this.shouldThrottleBetweenGames(result ?? null, index, pendingGames.length)) {
           await delayHelper(this.options.interGameDelayMs, { signal });
         }
       } catch (error) {

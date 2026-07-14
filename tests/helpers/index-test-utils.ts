@@ -43,9 +43,7 @@ export async function createIndexRouterTestContext(
   };
 }
 
-export async function createIndexLifecycleContext(
-  prefix: string,
-): Promise<IndexLifecycleContext> {
+export async function createIndexLifecycleContext(prefix: string): Promise<IndexLifecycleContext> {
   const testEnv = await createTestEnv({ prefix });
   const module = indexModule;
   return {

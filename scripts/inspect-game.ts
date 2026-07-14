@@ -21,17 +21,23 @@ async function main(): Promise<void> {
 
     const readiness = await completion.evaluateGameReadiness(gamePda);
 
-    console.log(JSON.stringify({
-      address,
-      exists: true,
-      ticketsCount: Number(gameAccount.ticketsCount),
-      maxTickets: Number(gameAccount.maxTickets),
-      minTickets: Number(gameAccount.minTickets),
-      lastSlot: Number(gameAccount.lastSlot),
-      timeout: Number(gameAccount.timeout),
-      createdAt: Number(gameAccount.createdAt),
-      readiness,
-    }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          address,
+          exists: true,
+          ticketsCount: Number(gameAccount.ticketsCount),
+          maxTickets: Number(gameAccount.maxTickets),
+          minTickets: Number(gameAccount.minTickets),
+          lastSlot: Number(gameAccount.lastSlot),
+          timeout: Number(gameAccount.timeout),
+          createdAt: Number(gameAccount.createdAt),
+          readiness,
+        },
+        null,
+        2,
+      ),
+    );
   } catch (error) {
     console.error("Failed to inspect game:", error);
   } finally {

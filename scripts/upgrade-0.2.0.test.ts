@@ -73,22 +73,16 @@ describe("upgrade state", () => {
   it("resumes at the first incomplete phase", () => {
     expect(nextIncompletePhase(state())).toBe("local-preflight");
     expect(
-      nextIncompletePhase(
-        state({ "local-preflight": { status: "complete", at: "now" } }),
-      ),
+      nextIncompletePhase(state({ "local-preflight": { status: "complete", at: "now" } })),
     ).toBe("prepare");
   });
 
   it("retries failed and running phases", () => {
+    expect(nextIncompletePhase(state({ "local-preflight": { status: "failed", at: "now" } }))).toBe(
+      "local-preflight",
+    );
     expect(
-      nextIncompletePhase(
-        state({ "local-preflight": { status: "failed", at: "now" } }),
-      ),
-    ).toBe("local-preflight");
-    expect(
-      nextIncompletePhase(
-        state({ "local-preflight": { status: "running", at: "now" } }),
-      ),
+      nextIncompletePhase(state({ "local-preflight": { status: "running", at: "now" } })),
     ).toBe("local-preflight");
   });
 });
@@ -107,9 +101,7 @@ describe("release evidence", () => {
   });
 
   it("canonicalizes JSON object key order", () => {
-    expect(stableJson({ z: 1, a: { y: 2, x: 3 } })).toBe(
-      stableJson({ a: { x: 3, y: 2 }, z: 1 }),
-    );
+    expect(stableJson({ z: 1, a: { y: 2, x: 3 } })).toBe(stableJson({ a: { x: 3, y: 2 }, z: 1 }));
   });
 
   it("creates stable SHA-256 evidence", () => {
@@ -118,19 +110,13 @@ describe("release evidence", () => {
   });
 
   it("extracts remote verification job IDs", () => {
-    expect(extractVerificationJobId("Job ID: verify_abc-123")).toBe(
-      "verify_abc-123",
-    );
+    expect(extractVerificationJobId("Job ID: verify_abc-123")).toBe("verify_abc-123");
   });
 
   it("requires an explicit successful remote verification result", () => {
-    expect(remoteVerificationSucceeded("Status: completed successfully")).toBe(
-      true,
-    );
+    expect(remoteVerificationSucceeded("Status: completed successfully")).toBe(true);
     expect(remoteVerificationSucceeded("Status: running")).toBe(false);
-    expect(remoteVerificationSucceeded("Status: completed with error")).toBe(
-      false,
-    );
+    expect(remoteVerificationSucceeded("Status: completed with error")).toBe(false);
   });
 });
 
@@ -147,21 +133,15 @@ describe("legacy Game drain guard", () => {
   });
 
   it("marks funds, tickets, or participant hashes as actionable", () => {
-    expect(
-      classifyLegacyGame("funded", legacyGame({ totalAmount: 1n })).inert,
-    ).toBe(false);
-    expect(
-      classifyLegacyGame("joined", legacyGame({ ticketsCount: 1 })).inert,
-    ).toBe(false);
-    expect(
-      classifyLegacyGame("hashed", legacyGame({ participantHashes: 1 })).inert,
-    ).toBe(false);
+    expect(classifyLegacyGame("funded", legacyGame({ totalAmount: 1n })).inert).toBe(false);
+    expect(classifyLegacyGame("joined", legacyGame({ ticketsCount: 1 })).inert).toBe(false);
+    expect(classifyLegacyGame("hashed", legacyGame({ participantHashes: 1 })).inert).toBe(false);
   });
 
   it("rejects an account whose allocation is not the legacy layout", () => {
-    expect(() =>
-      classifyLegacyGame("wrong-size", legacyGame().subarray(0, 145)),
-    ).toThrow("unexpected legacy Game size");
+    expect(() => classifyLegacyGame("wrong-size", legacyGame().subarray(0, 145))).toThrow(
+      "unexpected legacy Game size",
+    );
   });
 });
 
@@ -177,10 +157,7 @@ describe("legacy Compose environment migration", () => {
 
   it("extracts a quoted mnemonic without exposing it in migrated env files", () => {
     expect(readEnvValue(legacy, "MNEMONIC")).toBe("one two three");
-    const migrated = selectEnv(
-      legacy,
-      (key) => key !== "MNEMONIC" && key !== "ORACLE_API_TOKEN",
-    );
+    const migrated = selectEnv(legacy, (key) => key !== "MNEMONIC" && key !== "ORACLE_API_TOKEN");
     expect(migrated).toContain("TELEGRAM_TOKEN=telegram");
     expect(migrated).not.toContain("one two three");
     expect(migrated).not.toContain("old-token");
@@ -190,11 +167,8 @@ describe("legacy Compose environment migration", () => {
     const migrated = selectEnv(
       legacy,
       (key) =>
-        key === "SOLANA_NETWORK" ||
-        (key.startsWith("ORACLE_") && key !== "ORACLE_API_TOKEN"),
+        key === "SOLANA_NETWORK" || (key.startsWith("ORACLE_") && key !== "ORACLE_API_TOKEN"),
     );
-    expect(migrated).toBe(
-      "SOLANA_NETWORK=https://rpc.example\nORACLE_PORT=3001\n",
-    );
+    expect(migrated).toBe("SOLANA_NETWORK=https://rpc.example\nORACLE_PORT=3001\n");
   });
 });

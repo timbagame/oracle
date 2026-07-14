@@ -16,12 +16,8 @@ export function delay(ms: number, options: DelayOptions = {}): Promise<void> {
   }
 
   return new Promise((resolve) => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-
     function cleanup() {
-      if (timeout !== undefined) {
-        clearTimeout(timeout);
-      }
+      clearTimeout(timeout);
       if (signal) {
         signal.removeEventListener("abort", handleAbort);
       }
@@ -32,7 +28,7 @@ export function delay(ms: number, options: DelayOptions = {}): Promise<void> {
       resolve();
     }
 
-    timeout = setTimeout(() => {
+    const timeout = setTimeout(() => {
       cleanup();
       resolve();
     }, ms);

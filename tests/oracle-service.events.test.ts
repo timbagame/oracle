@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { coercePublicKey } from "../solana-utils.ts";
-import { OracleEventProcessor, type OracleEventProcessorOptions, EVENT_HANDLER_CONFIG } from "../oracle-event-processor.ts";
-import { type OracleDatabase } from "../database.ts";
 import {
-  createProgramStub,
-  type ProgramStub,
-} from "./helpers/program-stub.ts";
+  OracleEventProcessor,
+  type OracleEventProcessorOptions,
+  EVENT_HANDLER_CONFIG,
+} from "../oracle-event-processor.ts";
+import { type OracleDatabase } from "../database.ts";
+import { createProgramStub, type ProgramStub } from "./helpers/program-stub.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 
 type OracleServiceType = import("../oracle-service.ts").OracleService;
@@ -77,16 +78,14 @@ describe("OracleService event handling", () => {
 
     await service.startEventListening();
     expect(programStub.addCalls.map((call) => call.event)).toEqual(
-      OracleServiceClass.EVENT_HANDLER_CONFIG.map(
-        (definition) => definition.event
-      )
+      OracleServiceClass.EVENT_HANDLER_CONFIG.map((definition) => definition.event),
     );
 
     const statsWhileListening = service.getStats();
     expect(statsWhileListening.eventListening).toBe(true);
     expect(service.events.isListening()).toBe(true);
     expect(service.events.getActiveListenerCount()).toBe(
-      OracleServiceClass.EVENT_HANDLER_CONFIG.length
+      OracleServiceClass.EVENT_HANDLER_CONFIG.length,
     );
 
     await service.startEventListening();
@@ -107,9 +106,7 @@ describe("OracleService event handling", () => {
     const service = createService(db, programStub);
 
     await service.startEventListening();
-    expect(service.events.getActiveListenerCount()).toBe(
-      EVENT_HANDLER_CONFIG.length
-    );
+    expect(service.events.getActiveListenerCount()).toBe(EVENT_HANDLER_CONFIG.length);
 
     await service.stopEventListening();
     expect(programStub.removeCalls).toEqual([1, 2, 3, 4, 5]);
@@ -120,17 +117,10 @@ describe("OracleService event handling", () => {
     const programStub = createProgramStub({ asyncRegistration: true });
     const service = createService(db, programStub);
 
-    await Promise.all([
-      service.startEventListening(),
-      service.startEventListening(),
-    ]);
+    await Promise.all([service.startEventListening(), service.startEventListening()]);
 
-    expect(programStub.addCalls).toHaveLength(
-      EVENT_HANDLER_CONFIG.length
-    );
-    expect(service.events.getActiveListenerCount()).toBe(
-      EVENT_HANDLER_CONFIG.length
-    );
+    expect(programStub.addCalls).toHaveLength(EVENT_HANDLER_CONFIG.length);
+    expect(service.events.getActiveListenerCount()).toBe(EVENT_HANDLER_CONFIG.length);
 
     await service.stopEventListening();
   });
@@ -143,12 +133,8 @@ describe("OracleService event handling", () => {
 
     await Promise.all([processor.startListening(), processor.startListening()]);
 
-    expect(programStub.addCalls).toHaveLength(
-      EVENT_HANDLER_CONFIG.length,
-    );
-    expect(processor.getActiveListenerCount()).toBe(
-      EVENT_HANDLER_CONFIG.length,
-    );
+    expect(programStub.addCalls).toHaveLength(EVENT_HANDLER_CONFIG.length);
+    expect(processor.getActiveListenerCount()).toBe(EVENT_HANDLER_CONFIG.length);
 
     await processor.stopListening();
   });
@@ -192,9 +178,7 @@ describe("OracleService event handling", () => {
       ticketIndex: 7,
     });
 
-    expect(callLog.removePlayer).toEqual([
-      { game: gameKey.toBase58(), index: 7 },
-    ]);
+    expect(callLog.removePlayer).toEqual([{ game: gameKey.toBase58(), index: 7 }]);
     expect(autoCompleteCalls).toHaveLength(2);
     const secondCall = autoCompleteCalls[1];
     if (!secondCall) {
@@ -219,7 +203,11 @@ describe("OracleService event handling", () => {
     const gameKey = Keypair.generate().publicKey;
     seedSecretForGame(db, gameKey.toBase58());
 
-    const players = [Keypair.generate().publicKey, Keypair.generate().publicKey, Keypair.generate().publicKey];
+    const players = [
+      Keypair.generate().publicKey,
+      Keypair.generate().publicKey,
+      Keypair.generate().publicKey,
+    ];
 
     await Promise.all(
       players.map((player, index) =>
@@ -228,8 +216,8 @@ describe("OracleService event handling", () => {
           player,
           ticketIndex: index,
           ticketsCount: index + 1,
-        } as any)
-      )
+        } as any),
+      ),
     );
 
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -250,7 +238,10 @@ describe("OracleService event handling", () => {
     (db as any).marker = "bound";
     (db as any).applyPlayerMutations = function (
       game: string,
-      operations: ReadonlyArray<{ action: "joined"; playerAddress: string; ticketIndex: number } | { action: "unjoined"; ticketIndex: number }>,
+      operations: ReadonlyArray<
+        | { action: "joined"; playerAddress: string; ticketIndex: number }
+        | { action: "unjoined"; ticketIndex: number }
+      >,
     ) {
       if ((this as any).marker !== "bound") {
         throw new Error("applyPlayerMutations lost this binding");
@@ -430,7 +421,10 @@ describe("OracleService event handling", () => {
     const timers: Array<{ id: number; callback: () => void; delay: number }> = [];
     let nextTimerId = 1;
 
-    const setTimeoutStub: typeof setTimeout = ((callback: (...args: unknown[]) => void, delay?: number) => {
+    const setTimeoutStub: typeof setTimeout = ((
+      callback: (...args: unknown[]) => void,
+      delay?: number,
+    ) => {
       const id = nextTimerId++;
       timers.push({ id, callback: callback as () => void, delay: Number(delay ?? 0) });
       return id as unknown as ReturnType<typeof setTimeout>;
@@ -489,9 +483,7 @@ describe("OracleService event handling", () => {
 
     expect(syncCalls).toHaveLength(3);
     expect(timers).toHaveLength(0);
-    expect(
-      (processor as any).registrySyncScheduler?.hasPendingEntry(gameAddress),
-    ).toBe(false);
+    expect((processor as any).registrySyncScheduler?.hasPendingEntry(gameAddress)).toBe(false);
   });
 
   it("ignores player events with missing data", async () => {
@@ -565,7 +557,7 @@ describe("OracleService event handling", () => {
     await service.events.handlePlayerEvent("joined", {
       gameKey,
       player: playerKey,
-      ticketIndex: (BigInt(Number.MAX_SAFE_INTEGER) + 10n),
+      ticketIndex: BigInt(Number.MAX_SAFE_INTEGER) + 10n,
     });
 
     expect(callLog.addPlayer).toEqual([]);
@@ -762,12 +754,9 @@ describe("OracleService event handling", () => {
     const programStub = createProgramStub();
     const service = createService(db, programStub);
 
-    const missing = await service.completionManager.resolveContextAndReadiness(
-      "no-secret",
-      {
-        requireOnChain: true,
-      },
-    );
+    const missing = await service.completionManager.resolveContextAndReadiness("no-secret", {
+      requireOnChain: true,
+    });
     expect(missing.status).toBe("missing-context");
     expect(programStub.fetchCalls).toHaveLength(0);
 
@@ -778,12 +767,9 @@ describe("OracleService event handling", () => {
       programStub.fetchCalls.push(pda);
       return {};
     };
-    const exists = await service.completionManager.resolveContextAndReadiness(
-      activeGame,
-      {
-        requireOnChain: true,
-      },
-    );
+    const exists = await service.completionManager.resolveContextAndReadiness(activeGame, {
+      requireOnChain: true,
+    });
     if (exists.status === "missing-context") {
       throw new Error("expected context for active game");
     }
@@ -839,7 +825,7 @@ describe("OracleService event handling", () => {
     const service = createService(db, programStub, {
       tryAutoComplete: async () => {
         await new Promise((resolve) => setTimeout(resolve, 50));
-      }
+      },
     });
 
     const gameKey = Keypair.generate().publicKey;
@@ -855,8 +841,8 @@ describe("OracleService event handling", () => {
       if (game === gameKey.toBase58() && index === ticketIndex) {
         // Delay the actual write
         setTimeout(() => {
-           originalAdd.call(db, game, player, index);
-           releaseAdd?.();
+          originalAdd.call(db, game, player, index);
+          releaseAdd?.();
         }, 50);
       } else {
         originalAdd.call(db, game, player, index);
@@ -884,7 +870,9 @@ describe("OracleService event handling", () => {
       ticketIndex,
     });
 
-    await new Promise((resolve) => { releaseAdd = resolve; }); // Wait for join to proceed
+    await new Promise((resolve) => {
+      releaseAdd = resolve;
+    }); // Wait for join to proceed
     await Promise.all([joinPromise, unjoinPromise]);
 
     // Wait a bit for any trailing asyncs
@@ -1165,6 +1153,10 @@ type OracleDatabaseStub = Partial<OracleDatabase> & {
   };
   markSecretKeyUsed(game: string): void;
   incrementCompletionAttempts(game: string): void;
-  getPlayerTicketStats(game: string): { count: number; maxIndex: number | null; minIndex: number | null };
+  getPlayerTicketStats(game: string): {
+    count: number;
+    maxIndex: number | null;
+    minIndex: number | null;
+  };
   replaceGamePlayers(game: string, players: string[]): void;
 };

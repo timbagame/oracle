@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { createBasicOracle } from "./helpers/fake-oracle.ts";
-import { createIndexLifecycleContext, type IndexLifecycleContext } from "./helpers/index-test-utils.ts";
+import {
+  createIndexLifecycleContext,
+  type IndexLifecycleContext,
+} from "./helpers/index-test-utils.ts";
 
 let context: IndexLifecycleContext;
 let exitBackup: any;

@@ -6,10 +6,7 @@ export type ProgramStub = {
   fetchCalls: PublicKey[];
   fetchImpl: (pda: PublicKey) => Promise<any>;
   listeners: Map<number, { event: string; handler: (event: any) => void }>;
-  addEventListener: (
-    event: string,
-    handler: (event: any) => void,
-  ) => number | Promise<number>;
+  addEventListener: (event: string, handler: (event: any) => void) => number | Promise<number>;
   removeEventListener: (id: number) => Promise<void>;
   account: {
     game: {

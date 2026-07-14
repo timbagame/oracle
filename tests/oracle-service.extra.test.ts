@@ -18,12 +18,15 @@ import {
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
-import { deriveGameAccounts, createEmptyCompletionStats } from "../oracle-service.ts";
+import {
+  createEmptyCompletionStats,
+  deriveGameAccounts,
+  OracleService,
+} from "../oracle-service.ts";
 import { OracleMetricsRecorder } from "../metrics.ts";
 import { ScanLoopRunner } from "../oracle-scan-runner.ts";
 import { logger } from "../logger.ts";
 import { resetConfigForTesting } from "../config.ts";
-import { OracleService } from "../oracle-service.ts";
 import { OracleDatabase } from "../database.ts";
 import { confirmTransaction } from "../solana-utils.ts";
 import type { TimbaGameAccount } from "../types/timba.ts";
@@ -46,18 +49,14 @@ const TEST_REFRESHED_BLOCKHASH = "CwE3n9sBfQ9P4srbmANLT7E2x5Yucs5cjox96D65gis9";
 let cleanup: () => void;
 
 beforeAll(async () => {
-  ({ cleanup } = await setupOracleServiceEnv(
-    "oracle-service-extra-test",
-  ));
+  ({ cleanup } = await setupOracleServiceEnv("oracle-service-extra-test"));
 });
 
 afterAll(() => {
   cleanup();
 });
 
-function createGameAccountStub(
-  overrides: Partial<TimbaGameAccount> = {}
-): TimbaGameAccount {
+function createGameAccountStub(overrides: Partial<TimbaGameAccount> = {}): TimbaGameAccount {
   return {
     creator: overrides.creator ?? Keypair.generate().publicKey,
     tokenMint: overrides.tokenMint ?? Keypair.generate().publicKey,
@@ -71,11 +70,13 @@ function createGameAccountStub(
   };
 }
 
-function createReadyContext(overrides: {
-  gameAccount?: TimbaGameAccount;
-  secretKey?: string;
-  randomHash?: string;
-} = {}) {
+function createReadyContext(
+  overrides: {
+    gameAccount?: TimbaGameAccount;
+    secretKey?: string;
+    randomHash?: string;
+  } = {},
+) {
   const gameAccount = overrides.gameAccount ?? createGameAccountStub();
   const secretKey = overrides.secretKey ?? "aa".repeat(32);
   const randomHash = overrides.randomHash ?? "bb".repeat(32);
@@ -97,10 +98,7 @@ type ConnectionOverrides = {
   getLatestBlockhash?: (
     commitment?: string,
   ) => Promise<{ blockhash: string; lastValidBlockHeight: number }>;
-  sendRawTransaction?: (
-    raw: Buffer,
-    options?: anchor.web3.SendOptions,
-  ) => Promise<string>;
+  sendRawTransaction?: (raw: Buffer, options?: anchor.web3.SendOptions) => Promise<string>;
   confirmTransaction?: (params: any) => Promise<void>;
 };
 
@@ -154,9 +152,9 @@ async function runExecuteGameCompletionScenario({
   tokenProgram?: PublicKey | string | null;
   mintOwner?: PublicKey;
   accountInfoImpl?: (pubkey: PublicKey) => Promise<{ owner: PublicKey | null } | null>;
-  transactionFactory?: (context: { adminKeypair: anchor.web3.Keypair }) => Promise<
-    anchor.web3.Transaction | anchor.web3.VersionedTransaction
-  >;
+  transactionFactory?: (context: {
+    adminKeypair: anchor.web3.Keypair;
+  }) => Promise<anchor.web3.Transaction | anchor.web3.VersionedTransaction>;
   connectionOverrides?: ConnectionOverrides;
 } = {}) {
   const service = OracleService.createWith(OracleDatabase.getInstance());
@@ -237,7 +235,11 @@ async function runExecuteGameCompletionScenario({
 
   (service as any).connection = mockConnection;
 
-  const defaultTransactionFactory = async ({ adminKeypair }: { adminKeypair: anchor.web3.Keypair }) => {
+  const defaultTransactionFactory = async ({
+    adminKeypair,
+  }: {
+    adminKeypair: anchor.web3.Keypair;
+  }) => {
     const tx = new anchor.web3.Transaction();
     tx.add(createNoopInstruction());
     tx.feePayer = adminKeypair.publicKey;
@@ -260,8 +262,7 @@ async function runExecuteGameCompletionScenario({
                   calls.signers = signers;
                   return {
                     transaction: async () => {
-                      const factory = transactionFactory
-                        ?? defaultTransactionFactory;
+                      const factory = transactionFactory ?? defaultTransactionFactory;
                       const tx = await factory({ adminKeypair });
                       calls.transactionUsed = tx;
                       return tx;
@@ -371,8 +372,12 @@ describe("OracleService internals", () => {
 
       // It should have fallen back to ephemeral keypair
       // We can verify this by checking if the keypair matches the file (it shouldn't)
-      const fileKeypair = Keypair.fromSecretKey(new Uint8Array(JSON.parse(fs.readFileSync(keypairPath, "utf-8"))));
-      expect((service as any).adminKeypair.publicKey.toBase58()).not.toBe(fileKeypair.publicKey.toBase58());
+      const fileKeypair = Keypair.fromSecretKey(
+        new Uint8Array(JSON.parse(fs.readFileSync(keypairPath, "utf-8"))),
+      );
+      expect((service as any).adminKeypair.publicKey.toBase58()).not.toBe(
+        fileKeypair.publicKey.toBase58(),
+      );
     } finally {
       warningSpy.mockRestore();
       service?.cleanupOldRecords(-1);
@@ -448,14 +453,15 @@ describe("OracleService internals", () => {
       readiness,
     };
 
-    const resolveSpy = spyOn(service.completionManager, "resolveContextAndReadiness").mockImplementation(
-      async () => ({
-        status: "ready",
-        context,
-        readiness,
-        prefetchScheduled: false,
-      }),
-    );
+    const resolveSpy = spyOn(
+      service.completionManager,
+      "resolveContextAndReadiness",
+    ).mockImplementation(async () => ({
+      status: "ready",
+      context,
+      readiness,
+      prefetchScheduled: false,
+    }));
 
     const completeSpy = spyOn(service.completionManager as any, "completeGame").mockImplementation(
       async () => {
@@ -515,17 +521,16 @@ describe("OracleService internals", () => {
         const value = 1_000 + blockTimes.length;
         blockTimes.push(value);
         return value;
-      }
+      },
     );
 
     const observedBlockTimes: Array<number | undefined> = [];
     const resolveSpy = spyOn(
       service.completionManager,
-      "resolveContextAndReadiness"
+      "resolveContextAndReadiness",
     ).mockImplementation(async (_address: string, options: any) => {
       const resolvedBlockTime =
-        options?.blockTime ??
-        (options?.getBlockTime ? await options.getBlockTime() : undefined);
+        options?.blockTime ?? (options?.getBlockTime ? await options.getBlockTime() : undefined);
       observedBlockTimes.push(resolvedBlockTime);
       return {
         status: "ready" as const,
@@ -543,7 +548,7 @@ describe("OracleService internals", () => {
       async ({ gameAddress }: { gameAddress: string }) => ({
         success: true,
         txHash: `${gameAddress}-tx`,
-      })
+      }),
     );
 
     try {
@@ -577,13 +582,13 @@ describe("OracleService internals", () => {
       async () => {
         blockCalls += 1;
         return 1_234_567;
-      }
+      },
     );
 
     const observedOptions: Array<{ blockTime: number | undefined; hasProvider: boolean }> = [];
     const resolveSpy = spyOn(
       service.completionManager,
-      "resolveContextAndReadiness"
+      "resolveContextAndReadiness",
     ).mockImplementation(async (_address: string, options: any) => {
       observedOptions.push({
         blockTime: options?.blockTime,
@@ -605,16 +610,14 @@ describe("OracleService internals", () => {
       async ({ gameAddress }: { gameAddress: string }) => ({
         success: true,
         txHash: `${gameAddress}-tx`,
-      })
+      }),
     );
 
     try {
       const stats = await service.scanRunner.scanAndCompleteActiveGames();
       expect(stats).toEqual({ completed: 1, errors: 0, notReady: 0 });
       expect(blockCalls).toBe(0);
-      expect(observedOptions).toEqual([
-        { blockTime: undefined, hasProvider: true },
-      ]);
+      expect(observedOptions).toEqual([{ blockTime: undefined, hasProvider: true }]);
       expect(attemptSpy).toHaveBeenCalledTimes(1);
     } finally {
       blockSpy.mockRestore();
@@ -666,7 +669,7 @@ describe("OracleService internals", () => {
 
     const resolveSpy = spyOn(
       service.completionManager,
-      "resolveContextAndReadiness"
+      "resolveContextAndReadiness",
     ).mockImplementation(async () =>
       makeReadyResolution({
         context: {
@@ -679,7 +682,7 @@ describe("OracleService internals", () => {
     );
 
     const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockImplementation(
-      async () => outcomes[completionIndex++] ?? { success: true }
+      async () => outcomes[completionIndex++] ?? { success: true },
     );
 
     try {
@@ -730,10 +733,7 @@ describe("OracleService internals", () => {
       expect(summary.cycles).toBe(1);
       expect(summary.totalErrors).toBe(0);
       expect(summary.totalCompleted).toBe(0);
-      expect(failureSpy).toHaveBeenCalledWith(
-        "Cleanup after scan cycle failed:",
-        cleanupError,
-      );
+      expect(failureSpy).toHaveBeenCalledWith("Cleanup after scan cycle failed:", cleanupError);
     } finally {
       failureSpy.mockRestore();
     }
@@ -784,7 +784,7 @@ describe("OracleService internals", () => {
     // now pending list should still contain addr because of retry logic
     const pending = db.getPendingGames().map((g) => g.game_address);
     expect(pending.includes(addr)).toBe(true);
-    const entry = db.getPendingGames().find(g => g.game_address === addr);
+    const entry = db.getPendingGames().find((g) => g.game_address === addr);
     expect(entry?.completion_attempts).toBe(0); // evaluateGameReadiness doesn't increment attempts, scanRunner does
   });
 
@@ -843,19 +843,18 @@ describe("OracleService internals", () => {
     const originalScan = scanner.scanAndCompleteActiveGames;
     const originalCleanup = (service as any).cleanupOldRecords;
 
-    const statsSequence = [
-      { completed: 0, errors: 0, notReady: 1 },
-      createEmptyCompletionStats(),
-    ];
+    const statsSequence = [{ completed: 0, errors: 0, notReady: 1 }, createEmptyCompletionStats()];
 
     const scanCalls: Array<{ completed: number; errors: number; notReady: number }> = [];
     const cleanupCalls: number[] = [];
     const cycleStarts: number[] = [];
-    const cycleCompletions: Array<{ cycle: number; stats: { completed: number; errors: number; notReady: number } }> = [];
+    const cycleCompletions: Array<{
+      cycle: number;
+      stats: { completed: number; errors: number; notReady: number };
+    }> = [];
 
     scanner.scanAndCompleteActiveGames = async () => {
-      const next =
-        statsSequence[scanCalls.length] ?? createEmptyCompletionStats();
+      const next = statsSequence[scanCalls.length] ?? createEmptyCompletionStats();
       scanCalls.push(next);
       return next;
     };
@@ -1175,9 +1174,9 @@ describe("OracleService internals", () => {
         timeout: 0n,
       }),
     });
-  res = await service.completeGame("no-players");
-  expect(res.success).toBe(false);
-  expect(String(res.error || "")).toContain("Ticket registry out of sync");
+    res = await service.completeGame("no-players");
+    expect(res.success).toBe(false);
+    expect(String(res.error || "")).toContain("Ticket registry out of sync");
   });
 
   it("completeGame success path marks DB and returns tx hash", async () => {
@@ -1248,9 +1247,7 @@ describe("OracleService internals", () => {
       address: gameAddr,
       secret: "a".repeat(64),
       randomHash: "c".repeat(64),
-      players: [
-        { address: Keypair.generate().publicKey.toBase58(), ticketIndex: 0 },
-      ],
+      players: [{ address: Keypair.generate().publicKey.toBase58(), ticketIndex: 0 }],
     });
 
     const completion = service.completionManager;
@@ -1308,9 +1305,9 @@ describe("OracleService internals", () => {
     expect(result).toEqual({ success: true });
 
     const sqlite = (db as any).db as {
-      prepare: (
-        sql: string,
-      ) => { get: (...args: unknown[]) => { status: string; completion_attempts: number } | undefined };
+      prepare: (sql: string) => {
+        get: (...args: unknown[]) => { status: string; completion_attempts: number } | undefined;
+      };
     };
     const snapshot = sqlite
       .prepare("SELECT status, completion_attempts FROM game_tracking WHERE game_address = ?")
@@ -1335,12 +1332,11 @@ describe("OracleService internals", () => {
     db.finalizeCompletedGame(gameAddr);
 
     const sqlite = (db as any).db as {
-      prepare: (
-        sql: string,
-      ) => {
+      prepare: (sql: string) => {
         get: (
           ...args: unknown[]
-        ) => { status: string; completion_attempts: number; completed_at: number | null } | undefined;
+        ) =>
+          { status: string; completion_attempts: number; completed_at: number | null } | undefined;
       };
     };
 
@@ -1352,7 +1348,9 @@ describe("OracleService internals", () => {
     expect(db.getSecretKey(gameAddr)).not.toBeNull();
 
     const snapshot = sqlite
-      .prepare("SELECT status, completion_attempts, completed_at FROM game_tracking WHERE game_address = ?")
+      .prepare(
+        "SELECT status, completion_attempts, completed_at FROM game_tracking WHERE game_address = ?",
+      )
       .get(gameAddr);
 
     expect(snapshot?.status).toBe("pending");
@@ -1404,9 +1402,7 @@ describe("OracleService internals", () => {
       });
 
       const sqlite = (db as any).db as {
-        prepare: (
-          sql: string,
-        ) => {
+        prepare: (sql: string) => {
           get: (
             ...args: unknown[]
           ) => { status: string; completion_attempts: number; last_checked: number } | undefined;
@@ -1414,7 +1410,9 @@ describe("OracleService internals", () => {
       };
 
       const before = sqlite
-        .prepare("SELECT status, completion_attempts, last_checked FROM game_tracking WHERE game_address = ?")
+        .prepare(
+          "SELECT status, completion_attempts, last_checked FROM game_tracking WHERE game_address = ?",
+        )
         .get(gameAddr);
 
       expect(before?.status).toBe("pending");
@@ -1425,7 +1423,9 @@ describe("OracleService internals", () => {
       expect(result).toEqual({ success: true });
 
       const after = sqlite
-        .prepare("SELECT status, completion_attempts, last_checked FROM game_tracking WHERE game_address = ?")
+        .prepare(
+          "SELECT status, completion_attempts, last_checked FROM game_tracking WHERE game_address = ?",
+        )
         .get(gameAddr);
 
       expect(after?.status).toBe("pending");
@@ -1684,9 +1684,7 @@ describe("OracleService internals", () => {
       address: gameAddr,
       secret: "a".repeat(64),
       randomHash: "b".repeat(64),
-      players: [
-        { address: Keypair.generate().publicKey.toBase58(), ticketIndex: 0 },
-      ],
+      players: [{ address: Keypair.generate().publicKey.toBase58(), ticketIndex: 0 }],
     });
 
     const completion = service.completionManager;
@@ -1739,9 +1737,7 @@ describe("OracleService internals", () => {
       address: gameAddr,
       secret: "a".repeat(64),
       randomHash: "b".repeat(64),
-      players: [
-        { address: Keypair.generate().publicKey.toBase58(), ticketIndex: 0 },
-      ],
+      players: [{ address: Keypair.generate().publicKey.toBase58(), ticketIndex: 0 }],
     });
 
     const completion = service.completionManager;
@@ -1787,7 +1783,10 @@ describe("OracleService internals", () => {
 
     const mockConnection = {
       getAccountInfo: async () => ({ owner: TOKEN_PROGRAM_ID }),
-      getLatestBlockhash: async () => ({ blockhash: TEST_LATEST_BLOCKHASH, lastValidBlockHeight: 99 }),
+      getLatestBlockhash: async () => ({
+        blockhash: TEST_LATEST_BLOCKHASH,
+        lastValidBlockHeight: 99,
+      }),
       sendRawTransaction: async () => "tx-confirm-fail",
       confirmTransaction: async () => {
         throw new Error("confirm-fail");
@@ -1947,15 +1946,16 @@ describe("OracleService internals", () => {
     const originalExecute = completion.executeGameCompletion;
     const winnerIndexSpy = spyOn(completion as any, "calculateWinnerIndex").mockReturnValue(0);
     const executeSpy = spyOn(completion, "executeGameCompletion").mockResolvedValue("tx-123");
-    const finalizeSpy = spyOn(dbInstance, "finalizeCompletedGame").mockImplementation(() => undefined);
+    const finalizeSpy = spyOn(dbInstance, "finalizeCompletedGame").mockImplementation(
+      () => undefined,
+    );
     const playerAddress = Keypair.generate().publicKey.toBase58();
     const playersSpy = spyOn(dbInstance, "getGamePlayers").mockReturnValue([playerAddress]);
     const attemptsSpy = spyOn(dbInstance, "incrementCompletionAttempts").mockImplementation(
       () => undefined,
     );
 
-    completion.resolveContextAndReadiness = async () =>
-      makeReadyResolution({ context, readiness });
+    completion.resolveContextAndReadiness = async () => makeReadyResolution({ context, readiness });
 
     try {
       const result = await service.completeGame(gameAddress);
@@ -2005,21 +2005,22 @@ describe("OracleService internals", () => {
     const originalResolve = completion.resolveContextAndReadiness;
     const winnerIndexSpy = spyOn(completion as any, "calculateWinnerIndex").mockReturnValue(0);
     const executeSpy = spyOn(completion, "executeGameCompletion");
-    const finalizeSpy = spyOn(dbInstance, "finalizeCompletedGame").mockImplementation(() => undefined);
+    const finalizeSpy = spyOn(dbInstance, "finalizeCompletedGame").mockImplementation(
+      () => undefined,
+    );
     const playersSpy = spyOn(dbInstance, "getGamePlayers").mockReturnValue([]);
     const attemptsSpy = spyOn(dbInstance, "incrementCompletionAttempts").mockImplementation(
       () => undefined,
     );
 
-    completion.resolveContextAndReadiness = async () =>
-      makeReadyResolution({ context, readiness });
+    completion.resolveContextAndReadiness = async () => makeReadyResolution({ context, readiness });
 
     try {
       const result = await service.completeGame(gameAddress);
 
-  expect(result.success).toBe(false);
-  expect(result.notReady).toBeUndefined();
-  expect(result.error).toBe("Ticket registry out of sync");
+      expect(result.success).toBe(false);
+      expect(result.notReady).toBeUndefined();
+      expect(result.error).toBe("Ticket registry out of sync");
       expect((service as any).readinessCache.has(gameAddress)).toBe(false);
       expect(attemptsSpy).toHaveBeenCalledWith(gameAddress);
       expect(executeSpy).not.toHaveBeenCalled();
@@ -2068,7 +2069,9 @@ describe("OracleService internals", () => {
     const executeSpy = spyOn(completion, "executeGameCompletion").mockRejectedValue(
       new Error("rpc down"),
     );
-    const finalizeSpy = spyOn(dbInstance, "finalizeCompletedGame").mockImplementation(() => undefined);
+    const finalizeSpy = spyOn(dbInstance, "finalizeCompletedGame").mockImplementation(
+      () => undefined,
+    );
     const playersSpy = spyOn(dbInstance, "getGamePlayers").mockReturnValue([
       Keypair.generate().publicKey.toBase58(),
     ]);
@@ -2076,8 +2079,7 @@ describe("OracleService internals", () => {
       () => undefined,
     );
 
-    completion.resolveContextAndReadiness = async () =>
-      makeReadyResolution({ context, readiness });
+    completion.resolveContextAndReadiness = async () => makeReadyResolution({ context, readiness });
 
     try {
       const result = await service.completeGame(gameAddress);
@@ -2132,7 +2134,7 @@ describe("OracleService internals", () => {
 
     const resolveSpy = spyOn(
       service.completionManager,
-      "resolveContextAndReadiness"
+      "resolveContextAndReadiness",
     ).mockImplementation(async () =>
       makeReadyResolution({
         context: {
@@ -2148,7 +2150,7 @@ describe("OracleService internals", () => {
       async (address: string) => {
         db.finalizeCompletedGame(address);
         return { success: true, txHash: "tx-metrics" };
-      }
+      },
     );
 
     const stats = await service.scanRunner.scanAndCompleteActiveGames();
@@ -2331,17 +2333,17 @@ describe("OracleService internals", () => {
           accountInfoImpl: async () => {
             throw new Error("account missing");
           },
-        })
+        }),
       ).rejects.toThrow("Unable to resolve token program");
 
       const warningMessages = warnSpy.mock.calls.map((args) => args.join(" "));
-      expect(warningMessages.some((message) => message.includes("Unable to resolve token program"))).toBe(true);
+      expect(
+        warningMessages.some((message) => message.includes("Unable to resolve token program")),
+      ).toBe(true);
     } finally {
       warnSpy.mockRestore();
     }
   });
-
-
 
   it("confirmTransaction forwards latest blockhash params", async () => {
     const calls: any[] = [];
@@ -2356,8 +2358,15 @@ describe("OracleService internals", () => {
     await confirmTransaction(mockConnection, "sig-1");
     expect(calls[0]).toEqual({ signature: "sig-1", blockhash: "bh", lastValidBlockHeight: 42 });
 
-    await confirmTransaction(mockConnection, "sig-2", { blockhash: "provided", lastValidBlockHeight: 99 });
-    expect(calls[1]).toEqual({ signature: "sig-2", blockhash: "provided", lastValidBlockHeight: 99 });
+    await confirmTransaction(mockConnection, "sig-2", {
+      blockhash: "provided",
+      lastValidBlockHeight: 99,
+    });
+    expect(calls[1]).toEqual({
+      signature: "sig-2",
+      blockhash: "provided",
+      lastValidBlockHeight: 99,
+    });
   });
 
   it("confirmTransaction uses provided blockhash when getLatestBlockhash is unavailable", async () => {
@@ -2374,6 +2383,10 @@ describe("OracleService internals", () => {
       lastValidBlockHeight: 13,
     });
 
-    expect(calls[0]).toEqual({ signature: "sig-3", blockhash: "external", lastValidBlockHeight: 13 });
+    expect(calls[0]).toEqual({
+      signature: "sig-3",
+      blockhash: "external",
+      lastValidBlockHeight: 13,
+    });
   });
 });

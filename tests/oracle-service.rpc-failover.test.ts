@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
-import { setupOracleServiceEnv, type OracleServiceClass } from "./helpers/setup-oracle-service-env.ts";
+import {
+  setupOracleServiceEnv,
+  type OracleServiceClass,
+} from "./helpers/setup-oracle-service-env.ts";
 import type { ActiveEndpointChange } from "../rpc-endpoints.ts";
 
-
 class TestRpcEndpointManager {
-  private readonly listeners = new Set<
-    (change: ActiveEndpointChange) => void | Promise<void>
-  >();
+  private readonly listeners = new Set<(change: ActiveEndpointChange) => void | Promise<void>>();
 
   public onActiveEndpointChange(
     listener: (change: import("../rpc-endpoints.ts").ActiveEndpointChange) => void | Promise<void>,

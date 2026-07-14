@@ -6,10 +6,7 @@ import {
 } from "./oracle-service.ts";
 import { getEnvironmentMode, isTestEnvironment } from "./env.ts";
 import { getConfig, DEFAULT_ORACLE_PORT } from "./config.ts";
-import type {
-  CompletionStats,
-  GameCompletionResult,
-} from "./oracle-service.types.ts";
+import type { CompletionStats, GameCompletionResult } from "./oracle-service.types.ts";
 import type { ToggleAutoCompleteResult } from "./database.ts";
 import { logger } from "./logger.ts";
 import { normalizeGameType } from "./game-type.ts";
@@ -175,9 +172,7 @@ function createInternalServerErrorResponse(): Response {
   });
 }
 
-function createSuccessResponse(
-  payload: Record<string, unknown> = {},
-): Response {
+function createSuccessResponse(payload: Record<string, unknown> = {}): Response {
   return createServiceResponse({ success: true, payload });
 }
 
@@ -209,13 +204,8 @@ export interface OracleApi {
   close: () => ReturnType<OracleService["close"]>;
   cleanupOldRecords: OracleService["cleanupOldRecords"];
   requeueGame: (gameAddress: string) => RequeueGameResult;
-  completeGameNow: (
-    gameAddress: string,
-  ) => Promise<GameCompletionResult | null>;
-  setAutoCompleteDisabled: (
-    gameAddress: string,
-    disabled: boolean,
-  ) => ToggleAutoCompleteResult;
+  completeGameNow: (gameAddress: string) => Promise<GameCompletionResult | null>;
+  setAutoCompleteDisabled: (gameAddress: string, disabled: boolean) => ToggleAutoCompleteResult;
 }
 
 interface JsonBodyResult {
@@ -223,9 +213,7 @@ interface JsonBodyResult {
   parseError?: string;
 }
 
-async function readJsonBody(
-  request: Request | undefined,
-): Promise<JsonBodyResult> {
+async function readJsonBody(request: Request | undefined): Promise<JsonBodyResult> {
   if (!request || request.bodyUsed) {
     return { body: null };
   }
@@ -304,10 +292,7 @@ export function buildHandlers(oracle: OracleApi) {
     async handleSignGameTransaction(request?: Request): Promise<Response> {
       try {
         if (!request || !oracle.signGameTransaction) {
-          return createErrorResponse(
-            "Game transaction signing is unavailable",
-            503,
-          );
+          return createErrorResponse("Game transaction signing is unavailable", 503);
         }
         const { body, parseError } = await readJsonBody(request);
         if (parseError) return createErrorResponse(parseError, 400);
@@ -319,8 +304,7 @@ export function buildHandlers(oracle: OracleApi) {
           txBase64: oracle.signGameTransaction(txBase64),
         });
       } catch (error: unknown) {
-        const message =
-          error instanceof Error ? error.message : "Invalid transaction";
+        const message = error instanceof Error ? error.message : "Invalid transaction";
         return createErrorResponse(message, 400);
       }
     },
@@ -342,8 +326,7 @@ export function buildHandlers(oracle: OracleApi) {
         }
 
         const providedValue = body ? body["gameAddress"] : undefined;
-        const providedAddress =
-          typeof providedValue === "string" ? providedValue.trim() : "";
+        const providedAddress = typeof providedValue === "string" ? providedValue.trim() : "";
 
         if (!providedAddress) {
           return createErrorResponse("gameAddress is required", 400);
@@ -351,10 +334,7 @@ export function buildHandlers(oracle: OracleApi) {
 
         const result = oracle.requeueGame(providedAddress);
         if (!result.success) {
-          const outcome = mapRequeueFailureToResponse(
-            providedAddress,
-            result.reason,
-          );
+          const outcome = mapRequeueFailureToResponse(providedAddress, result.reason);
           return createErrorResponse(outcome.message, outcome.status);
         }
 
@@ -380,8 +360,7 @@ export function buildHandlers(oracle: OracleApi) {
         }
 
         const providedValue = body ? body["gameAddress"] : undefined;
-        const providedAddress =
-          typeof providedValue === "string" ? providedValue.trim() : "";
+        const providedAddress = typeof providedValue === "string" ? providedValue.trim() : "";
 
         if (!providedAddress) {
           return createErrorResponse("gameAddress is required", 400);
@@ -434,9 +413,7 @@ export function buildHandlers(oracle: OracleApi) {
         }
 
         const providedAddress =
-          typeof body?.["gameAddress"] === "string"
-            ? body["gameAddress"].trim()
-            : "";
+          typeof body?.["gameAddress"] === "string" ? body["gameAddress"].trim() : "";
         const providedDisabled = body?.["autoCompleteDisabled"];
 
         if (!providedAddress) {
@@ -444,16 +421,10 @@ export function buildHandlers(oracle: OracleApi) {
         }
 
         if (typeof providedDisabled !== "boolean") {
-          return createErrorResponse(
-            "autoCompleteDisabled must be a boolean",
-            400,
-          );
+          return createErrorResponse("autoCompleteDisabled must be a boolean", 400);
         }
 
-        const result = oracle.setAutoCompleteDisabled(
-          providedAddress,
-          providedDisabled,
-        );
+        const result = oracle.setAutoCompleteDisabled(providedAddress, providedDisabled);
         if (!result.success) {
           const outcome = mapToggleAutoCompleteFailure(providedAddress, result);
           return createErrorResponse(outcome.message, outcome.status);
@@ -583,9 +554,7 @@ const ADMIN_ROUTE_METADATA: ReadonlyArray<RouteDocumentation> = [
   },
 ];
 
-export function generateDocumentationHtml(
-  routes: ReadonlyArray<RouteDocumentation>,
-): string {
+export function generateDocumentationHtml(routes: ReadonlyArray<RouteDocumentation>): string {
   const escapeHtml = (value: string): string =>
     value
       .replace(/&/g, "&amp;")
@@ -599,11 +568,8 @@ export function generateDocumentationHtml(
       const path = escapeHtml(route.path);
       const summary = escapeHtml(route.summary);
       const method = escapeHtml(route.method);
-      const methodClassCandidate = route.method
-        .toLowerCase()
-        .replace(/[^a-z0-9-]/g, "");
-      const methodClass =
-        methodClassCandidate.length > 0 ? methodClassCandidate : "custom";
+      const methodClassCandidate = route.method.toLowerCase().replace(/[^a-z0-9-]/g, "");
+      const methodClass = methodClassCandidate.length > 0 ? methodClassCandidate : "custom";
       const requestExample = route.requestExample
         ? `<br><strong>Body:</strong> <code>${escapeHtml(route.requestExample)}</code>`
         : "";
@@ -710,10 +676,7 @@ export function buildFetchRouter(
     if (PROTECTED_ROUTES.has(path) && security.apiToken !== undefined) {
       if (
         !security.apiToken ||
-        !hasValidBearerToken(
-          request.headers.get("authorization"),
-          security.apiToken,
-        )
+        !hasValidBearerToken(request.headers.get("authorization"), security.apiToken)
       ) {
         return createErrorResponse("Unauthorized", 401);
       }
@@ -721,22 +684,16 @@ export function buildFetchRouter(
       const rateLimit = checkRateLimit(path);
       if (!rateLimit.allowed) {
         const response = createErrorResponse("Too many requests", 429);
-        response.headers.set(
-          "Retry-After",
-          String(rateLimit.retryAfterSeconds ?? 1),
-        );
+        response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds ?? 1));
         return response;
       }
     }
 
     try {
-      const route = ROUTE_METADATA.find(
-        (entry) => entry.path === path && entry.method === method,
-      ) ??
+      const route =
+        ROUTE_METADATA.find((entry) => entry.path === path && entry.method === method) ??
         (security.enableAdminRoutesForTesting
-          ? ADMIN_ROUTE_METADATA.find(
-              (entry) => entry.path === path && entry.method === method,
-            )
+          ? ADMIN_ROUTE_METADATA.find((entry) => entry.path === path && entry.method === method)
           : undefined);
 
       if (!route) {
@@ -746,9 +703,7 @@ export function buildFetchRouter(
       const handler = handlers[route.handler];
 
       if (!handler) {
-        logger.failure(
-          `Handler not implemented for route: ${method} ${path} (${route.handler})`,
-        );
+        logger.failure(`Handler not implemented for route: ${method} ${path} (${route.handler})`);
         return createInternalServerErrorResponse();
       }
 
@@ -772,8 +727,7 @@ if (!IS_TEST_ENV) {
   const oracleApi: OracleApi = {
     generateGameSecrets: (options) => realOracle.generateGameSecrets(options),
     getStats: () => realOracle.getStats(),
-    scanAndCompleteActiveGames: () =>
-      realOracle.scanRunner.scanAndCompleteActiveGames(),
+    scanAndCompleteActiveGames: () => realOracle.scanRunner.scanAndCompleteActiveGames(),
     startEventListening: () => realOracle.startEventListening(),
     stopEventListening: () => realOracle.stopEventListening(),
     close: () => realOracle.close(),
@@ -815,9 +769,7 @@ if (!IS_TEST_ENV) {
           });
 
           if (!signal.aborted) {
-            logger.warning(
-              "Background scan loop exited unexpectedly; restarting...",
-            );
+            logger.warning("Background scan loop exited unexpectedly; restarting...");
             retryDelayMs = DEFAULT_DELAY_MS;
           }
         } catch (error) {
@@ -833,11 +785,7 @@ if (!IS_TEST_ENV) {
           break;
         }
 
-        if (
-          retryDelayMs !== undefined &&
-          Number.isFinite(retryDelayMs) &&
-          retryDelayMs > 0
-        ) {
+        if (retryDelayMs !== undefined && Number.isFinite(retryDelayMs) && retryDelayMs > 0) {
           await delay(retryDelayMs, { signal });
         }
       }
@@ -846,10 +794,7 @@ if (!IS_TEST_ENV) {
     backgroundLoop = runBackgroundLoop()
       .catch((error) => {
         if (!signal.aborted) {
-          logger.failure(
-            "Unhandled error in background scan supervisor:",
-            error,
-          );
+          logger.failure("Unhandled error in background scan supervisor:", error);
         }
       })
       .finally(() => {
@@ -868,10 +813,7 @@ if (!IS_TEST_ENV) {
       try {
         await stopServer(oracleApi, exitCode);
       } catch (shutdownError) {
-        logger.failure(
-          "Failed to stop server after init error:",
-          shutdownError,
-        );
+        logger.failure("Failed to stop server after init error:", shutdownError);
         if (exitCode !== undefined && !IS_TEST_ENV) {
           process.exit(exitCode);
         }
@@ -884,19 +826,12 @@ if (!IS_TEST_ENV) {
 
 // Initialize and start services
 export async function initialize(oracle: OracleApi): Promise<void> {
-  try {
-    await oracle.startEventListening();
-    logger.success("Oracle services initialized");
-  } catch (error) {
-    throw error;
-  }
+  await oracle.startEventListening();
+  logger.success("Oracle services initialized");
 }
 
 // Graceful shutdown
-export async function shutdown(
-  oracle: OracleApi,
-  signal: string,
-): Promise<void> {
+export async function shutdown(oracle: OracleApi, signal: string): Promise<void> {
   logger.info(`\n🛑 Shutting down (${signal})...`);
   const exitCode = !IS_TEST_ENV ? 0 : undefined;
 
