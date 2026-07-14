@@ -57,6 +57,8 @@ All phases are dry-run-first. Add `--execute` only after reviewing the printed o
 
 ## 1. Trusted machine: prepare
 
+The compatibility branches default to the deployed `0.1.3` ABI. They can be merged and deployed before the maintenance window so application changes settle independently of the contract upgrade. Keep `TIMBA_CONTRACT_VERSION=0.1.3` (and `NEXT_PUBLIC_TIMBA_CONTRACT_VERSION=0.1.3` for Cloudflare) until the on-chain upgrade succeeds. The final Podman migration writes `0.2.0` automatically.
+
 From the private Oracle repository:
 
 ```bash

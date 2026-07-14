@@ -550,8 +550,13 @@ async function stagePodmanDeployment(options: Options): Promise<void> {
     legacyEnv,
     (key) => key !== "MNEMONIC" && key !== "ORACLE_API_TOKEN",
   );
-  await writeFile(join(oracleRoot, ".env"), oracleEnv, { mode: 0o600 });
-  await writeFile(join(botRoot, ".env"), botEnv, { mode: 0o600 });
+  const upgradedAbi = "TIMBA_CONTRACT_VERSION=0.2.0\n";
+  await writeFile(join(oracleRoot, ".env"), oracleEnv + upgradedAbi, {
+    mode: 0o600,
+  });
+  await writeFile(join(botRoot, ".env"), botEnv + upgradedAbi, {
+    mode: 0o600,
+  });
 
   for (const [project, name] of [
     ["oracle", "admin-keypair.json"],

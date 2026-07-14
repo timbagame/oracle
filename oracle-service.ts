@@ -29,7 +29,7 @@ import type { PublicKeyLike } from "./solana-utils.ts";
 import { coercePublicKey, confirmTransaction } from "./solana-utils.ts";
 import { PlayerRegistrySync } from "./player-registry-sync.ts";
 import type { Timba } from "./idl/idlType.ts";
-import idl from "./idl/idl.json" with { type: "json" };
+import { contractIdl, contractVersion } from "./contract-idl.ts";
 import { ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 export {
@@ -387,7 +387,11 @@ export class OracleService {
       commitment: "confirmed",
     });
     anchor.setProvider(provider);
-    return new anchor.Program(idl as Timba, provider) as anchor.Program<Timba>;
+    logger.info(`Using Timba contract ABI ${contractVersion}`);
+    return new anchor.Program(
+      contractIdl as Timba,
+      provider,
+    ) as anchor.Program<Timba>;
   }
 
   private initPlayerRegistrySync(): PlayerRegistrySync {
