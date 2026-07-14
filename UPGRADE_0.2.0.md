@@ -203,6 +203,38 @@ Keep maintenance enabled for the controlled lifecycle:
 
 Using controlled wallets, create, join, optionally unjoin, and complete one low-value game. Confirm contract state, oracle registry, bot result, and web result agree before removing maintenance.
 
+## 5. Remove temporary 0.1.3 compatibility
+
+Do this as a separate cleanup change only after the controlled lifecycle passes, maintenance is removed, and production has remained healthy on 0.2.0. This cleanup is irreversible: after it is deployed, the clients can no longer connect to a 0.1.3 program.
+
+In Oracle, Bot, and Web:
+
+1. Replace the dual-version IDL selector with the canonical generated 0.2.0 IDL.
+2. Remove `ContractVersion`, `resolveContractVersion`, `createLegacyIdl`, every `0.1.3` branch, and their compatibility tests.
+3. Remove `TIMBA_CONTRACT_VERSION` and `NEXT_PUBLIC_TIMBA_CONTRACT_VERSION` from code, examples, container configuration, and CI. The clients must use 0.2.0 unconditionally.
+4. Replace any remaining version-dependent account-size or instruction-account logic with the 0.2.0 behavior.
+5. Search all three repositories and review every remaining match:
+
+   ```bash
+   rg -n '0\.1\.3|TIMBA_CONTRACT_VERSION|NEXT_PUBLIC_TIMBA_CONTRACT_VERSION|createLegacyIdl|resolveContractVersion' \
+     /path/to/oracle /path/to/bot /path/to/timba-web-cf
+   ```
+
+   The command must return no active 0.1.3 compatibility code. Do not remove unrelated historical database/event compatibility merely because it uses the word `legacy`.
+
+Format, lint, typecheck, test, and build all three projects. Commit and push the cleanup, wait for signed Oracle and Bot images and the Web deployment to succeed, then let the Podman auto-update timer deploy the new images. Verify both services are healthy and complete a second controlled game.
+
+Finally, remove the now-unused version setting from the VPS without changing any other secrets:
+
+```bash
+sed -i '/^TIMBA_CONTRACT_VERSION=/d' "$HOME/timba/oracle.env" "$HOME/timba/bot.env"
+chmod 600 "$HOME/timba/oracle.env" "$HOME/timba/bot.env"
+systemctl --user restart timba-oracle.service
+systemctl --user restart timba-bot.service
+```
+
+Confirm both services are healthy after the restart. Preserve the final release bundle and evidence, but remove this upgrade orchestrator and its tests from Oracle in the same cleanup change once they are no longer needed for incident recovery. Keep this runbook as the historical migration record.
+
 ## Failure boundaries
 
 Before contract deployment, restore the checkpointed databases if needed, keep both environment files on `TIMBA_CONTRACT_VERSION=0.1.3`, and restart the existing Podman services in order:
