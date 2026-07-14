@@ -50,12 +50,18 @@ Every phase is dry-run-first. Use `--execute` only after reviewing its commands.
 From the private Oracle repository:
 
 ```bash
+bun run simulate-upgrade:0.2.0 --keep
+
 bun run upgrade:0.2.0 local-preflight --host local
 bun run upgrade:0.2.0 local-preflight --host local --execute
 
 bun run upgrade:0.2.0 prepare --host local
 bun run upgrade:0.2.0 prepare --host local --execute
 ```
+
+The simulation builds 0.2.0, dumps the exact deployed executable, snapshots every mainnet account owned by the Timba program, and loads the real Program and ProgramData accounts into an isolated local validator. It changes only the local deployment slot, upgrade authority, and Oracle operator, using a disposable signer; the executable, ProgramData allocation, and all Timba-owned account data otherwise remain exact. It upgrades to `contracts/target/deploy/timba.so`, proves all Timba-owned account bytes survive, rejects actionable legacy games, and executes a 0.2.0 Oracle instruction. It never sends a mainnet transaction or reads a production key. Review the retained `manifest.json`, then delete the simulation directory.
+
+Legacy 0.1.3 Game accounts keep their old allocation after the executable upgrade. They are intentionally drained before deployment and remain inert; the upgrade does not resize, close, or reopen them. New 0.2.0 games use new PDAs and the new layout.
 
 This checks the pinned Anchor and Solana tools, clean and pushed repositories, all project tests/builds, exact commits, and identical 0.2.0 IDLs. Production remains on ABI 0.1.3.
 

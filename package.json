@@ -4,6 +4,7 @@
     "start": "bun run index.ts",
     "dev": "bun run --watch index.ts",
     "admin": "bun run scripts/oracle-admin.ts",
+    "simulate-upgrade:0.2.0": "bun run scripts/simulate-mainnet-upgrade.ts",
     "upgrade:0.2.0": "bun run scripts/upgrade-0.2.0.ts",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
