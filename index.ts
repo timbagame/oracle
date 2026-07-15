@@ -715,17 +715,10 @@ export function buildFetchRouter(
   };
 }
 
-// Main server
-if (!IS_TEST_ENV) {
-  const config = getConfig();
-  const port = config.oraclePort ?? DEFAULT_ORACLE_PORT;
-  if (!config.apiToken) {
-    throw new Error("ORACLE_API_TOKEN is required to start the oracle API");
-  }
-
-  const realOracle = OracleService.getInstance();
-  const oracleApi: OracleApi = {
+export function buildProductionOracleApi(realOracle: OracleService): OracleApi {
+  return {
     generateGameSecrets: (options) => realOracle.generateGameSecrets(options),
+    signGameTransaction: (txBase64) => realOracle.signGameTransaction(txBase64),
     getStats: () => realOracle.getStats(),
     scanAndCompleteActiveGames: () => realOracle.scanRunner.scanAndCompleteActiveGames(),
     startEventListening: () => realOracle.startEventListening(),
@@ -737,6 +730,18 @@ if (!IS_TEST_ENV) {
     setAutoCompleteDisabled: (gameAddress, disabled) =>
       realOracle.setAutoCompleteDisabled(gameAddress, disabled),
   };
+}
+
+// Main server
+if (!IS_TEST_ENV) {
+  const config = getConfig();
+  const port = config.oraclePort ?? DEFAULT_ORACLE_PORT;
+  if (!config.apiToken) {
+    throw new Error("ORACLE_API_TOKEN is required to start the oracle API");
+  }
+
+  const realOracle = OracleService.getInstance();
+  const oracleApi = buildProductionOracleApi(realOracle);
   const handlers = buildHandlers(oracleApi);
   const fetchRouter = buildFetchRouter(handlers, { apiToken: config.apiToken });
   server = Bun.serve({

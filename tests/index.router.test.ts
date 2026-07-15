@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import type { RequeueGameFailureReason } from "../oracle-service.ts";
+import type { OracleService, RequeueGameFailureReason } from "../oracle-service.ts";
+import { buildProductionOracleApi } from "../index.ts";
 import { createBasicStats } from "./helpers/fake-oracle.ts";
 import {
   buildRequest,
@@ -116,6 +117,14 @@ describe("index router", () => {
     } finally {
       signingContext.testEnv.cleanup();
     }
+  });
+
+  test("production API exposes game transaction signing", () => {
+    const api = buildProductionOracleApi({
+      signGameTransaction: (txBase64: string) => `signed:${txBase64}`,
+    } as OracleService);
+
+    expect(api.signGameTransaction?.("unsigned")).toBe("signed:unsigned");
   });
 
   test("POST /sign-game-transaction requires a transaction", async () => {
