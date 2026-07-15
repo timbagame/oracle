@@ -34,3 +34,7 @@ jobs:
         run: bun x tsc -p tsconfig.json --noEmit
       - name: Tests
         run: bun test --no-summarize
+      - name: Contract compatibility (0.1.3 and 0.2.0)
+        run: |
+          TIMBA_CONTRACT_VERSION=0.1.3 bun test tests/contract-idl.test.ts tests/oracle-completion.tx.test.ts
+          TIMBA_CONTRACT_VERSION=0.2.0 bun test tests/contract-idl.test.ts tests/oracle-completion.tx.test.ts
