@@ -34,6 +34,55 @@ describe("ScanLoopRunner error recovery", () => {
 });
 
 describe("ScanLoopRunner completion attempt boundary", () => {
+  it("preserves a commitment when the on-chain game exists even if its event was missed", async () => {
+    const env = await createTestEnv({
+      prefix: "scan-runner-missed-initialized-event",
+      singletons: {
+        OracleDatabase: async () => OracleDatabase,
+      },
+    });
+
+    try {
+      const db = env.singletons.OracleDatabase.getInstance();
+      db.cleanupOldRecords(-1);
+
+      const gameAddress = "confirmed-without-event";
+      db.saveSecretKey(gameAddress, "aa".repeat(32), "bb".repeat(32));
+      db.trackGame(gameAddress);
+
+      const runner = new ScanLoopRunner({
+        db,
+        metrics: {
+          recordCompletion: () => {},
+          recordScanCycle: () => {},
+          recordCleanupSweep: () => {},
+        },
+        completion: {
+          resolveContextAndReadiness: async () => ({
+            status: "ready",
+            context: {} as any,
+            readiness: { ready: false, gameAccount: {} } as any,
+            prefetchScheduled: false,
+          }),
+          attemptGameCompletion: async () => ({ success: false, notReady: true }),
+          consumeReadiness: () => undefined,
+          getBlockchainTime: async () => Date.now(),
+        },
+        interGameDelayMs: 0,
+        maxCompletionAttempts: 5,
+        cleanupOldRecords: () => {},
+      });
+
+      await runner.scanAndCompleteActiveGames();
+      (db as any).db.query("UPDATE secret_keys SET created_at = 0").run();
+
+      expect(db.cleanupUnsignedCommitments(10)).toBe(0);
+      expect(db.getSecretKeyInfo(gameAddress)).not.toBeNull();
+    } finally {
+      env.cleanup();
+    }
+  });
+
   it("skips games that already reached the max completion attempts", async () => {
     const env = await createTestEnv({
       prefix: "scan-runner-max",

@@ -141,6 +141,11 @@ export class ScanLoopRunner {
           continue;
         }
 
+        // Event subscriptions can miss GameInitialized across RPC disconnects or
+        // restarts. A successfully decoded on-chain game is authoritative proof
+        // that its commitment must survive abandoned-commitment cleanup.
+        this.options.db.markSecretKeyCommitted(game.game_address);
+
         const onChainContext = readinessResolution.context;
         const readiness = readinessResolution.readiness;
 

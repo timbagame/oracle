@@ -32,6 +32,7 @@ export function createScanRunnerFixture(overrides: ScanRunnerFixtureOptions = {}
     getPendingGames: overrides.pendingGames ?? (() => []),
     getActivePendingGames: overrides.pendingGames ?? (() => []),
     markGameCompleted: () => {},
+    markSecretKeyCommitted: () => {},
     touchGameCheck: (address: string) => {
       touchCalls.push(address);
     },
