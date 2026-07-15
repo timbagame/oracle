@@ -672,6 +672,7 @@ describe("OracleService event handling", () => {
       { game: gameKey.toBase58(), type: "coinflip" },
       { game: gameKey.toBase58(), type: undefined },
     ]);
+    expect(callLog.markCommitted).toEqual([gameKey.toBase58(), gameKey.toBase58()]);
   });
 
   it("truncates oversized derived game types", () => {
@@ -1013,6 +1014,7 @@ type CallLog = {
   removePlayer: Array<{ game: string; index: number }>;
   clearPlayers: string[];
   track: Array<{ game: string; type: string | undefined }>;
+  markCommitted: string[];
   markCompleted: string[];
   markClosed: string[];
   markDesynced: string[];
@@ -1025,6 +1027,7 @@ function createDbStub(): { db: OracleDatabaseStub; callLog: CallLog } {
     removePlayer: [],
     clearPlayers: [],
     track: [],
+    markCommitted: [],
     markCompleted: [],
     markClosed: [],
     markDesynced: [],
@@ -1061,6 +1064,9 @@ function createDbStub(): { db: OracleDatabaseStub; callLog: CallLog } {
     },
     trackGame(game, type, _options) {
       callLog.track.push({ game, type: type ?? undefined });
+    },
+    markSecretKeyCommitted(game) {
+      callLog.markCommitted.push(game);
     },
     markGameCompleted(game) {
       callLog.markCompleted.push(game);
@@ -1125,6 +1131,7 @@ type OracleDatabaseStub = Partial<OracleDatabase> & {
   removePlayerFromGame(game: string, index: number): void;
   clearStalePlayersForGame(game: string): void;
   trackGame(game: string, type?: string | null, options?: { preserveFinalized?: boolean }): void;
+  markSecretKeyCommitted(game: string): void;
   markGameCompleted(game: string): void;
   markGameDesynced(game: string): void;
   finalizeCompletedGame(game: string): void;

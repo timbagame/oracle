@@ -439,22 +439,25 @@ describe("finalizeCompletedGame", () => {
 });
 
 describe("unsigned commitment cleanup", () => {
-  it("deletes only expired commitments that were never signed", () => {
+  it("deletes only expired secrets that were never committed", () => {
     const db = OracleDatabase.getInstance();
-    const unsigned = "unsigned-game";
+    const generated = "generated-game";
     const signed = "signed-game";
+    const initialized = "initialized-game";
 
-    for (const address of [unsigned, signed]) {
+    for (const address of [generated, signed, initialized]) {
       db.saveSecretKey(address, "aa".repeat(32), "bb".repeat(32));
       db.trackGame(address);
     }
     db.markSecretKeySigned(signed);
+    db.markSecretKeyCommitted(initialized);
 
     const sqlite = (db as any).db;
     sqlite.query("UPDATE secret_keys SET created_at = 0").run();
 
     expect(db.cleanupUnsignedCommitments(10)).toBe(1);
-    expect(db.getSecretKeyInfo(unsigned)).toBeNull();
+    expect(db.getSecretKeyInfo(generated)).toBeNull();
     expect(db.getSecretKeyInfo(signed)).not.toBeNull();
+    expect(db.getSecretKeyInfo(initialized)).not.toBeNull();
   });
 });

@@ -398,6 +398,8 @@ export class OracleEventProcessor {
       return;
     }
 
+    this.options.db.markSecretKeyCommitted(gameAddress);
+
     // Execute synchronously as these don't have race conditions with player events
     let gameType: string | undefined = undefined;
     if (event.gameType) {

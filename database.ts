@@ -11,7 +11,9 @@ const SQL_STATEMENTS = Object.freeze({
     "INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)",
   markSecretKeyUsed: "UPDATE secret_keys SET used = TRUE WHERE game_address = ?",
   markSecretKeySigned:
-    "UPDATE secret_keys SET signed_at = COALESCE(signed_at, ?) WHERE game_address = ? AND used = FALSE",
+    "UPDATE secret_keys SET signed_at = COALESCE(signed_at, ?), committed_at = COALESCE(committed_at, ?) WHERE game_address = ? AND used = FALSE",
+  markSecretKeyCommitted:
+    "UPDATE secret_keys SET committed_at = COALESCE(committed_at, ?) WHERE game_address = ? AND used = FALSE",
   reactivateSecretKey: "UPDATE secret_keys SET used = FALSE WHERE game_address = ?",
   deleteSecretKey: "DELETE FROM secret_keys WHERE game_address = ?",
   upsertGameTracking: `INSERT INTO game_tracking (game_address, status, game_type, last_checked, auto_complete_disabled)
@@ -128,6 +130,7 @@ const TABLE_DEFINITIONS: ReadonlyArray<{
         random_hash TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         signed_at INTEGER,
+        committed_at INTEGER,
         used BOOLEAN DEFAULT FALSE
       )
     `,
@@ -307,6 +310,21 @@ export class OracleDatabase {
         {
           sql: "UPDATE secret_keys SET signed_at = created_at WHERE signed_at IS NULL",
           log: "Preserving existing commitments as signed",
+          error: "Failed to preserve existing commitments",
+        },
+      ]);
+    }
+
+    if (!tableInfo.some((column) => column.name === "committed_at")) {
+      this.executeSchemaSteps([
+        {
+          sql: "ALTER TABLE secret_keys ADD COLUMN committed_at INTEGER",
+          log: "Adding committed_at column to secret_keys",
+          error: "Failed to add committed_at column to secret_keys",
+        },
+        {
+          sql: "UPDATE secret_keys SET committed_at = COALESCE(signed_at, created_at) WHERE committed_at IS NULL",
+          log: "Preserving existing commitments",
           error: "Failed to preserve existing commitments",
         },
       ]);
@@ -491,9 +509,20 @@ export class OracleDatabase {
   }
 
   public markSecretKeySigned(gameAddress: string): void {
+    const timestamp = Date.now();
     this.runStatement(
       SQL_STATEMENTS.markSecretKeySigned,
       "Failed to mark secret key as signed",
+      timestamp,
+      timestamp,
+      gameAddress,
+    );
+  }
+
+  public markSecretKeyCommitted(gameAddress: string): void {
+    this.runStatement(
+      SQL_STATEMENTS.markSecretKeyCommitted,
+      "Failed to mark secret key as committed",
       Date.now(),
       gameAddress,
     );
@@ -511,7 +540,7 @@ export class OracleDatabase {
               `DELETE FROM game_players
              WHERE game_address IN (
                SELECT game_address FROM secret_keys
-               WHERE signed_at IS NULL AND used = FALSE AND created_at < ?
+               WHERE committed_at IS NULL AND used = FALSE AND created_at < ?
              )`,
             )
             .run(cutoffTime);
@@ -520,14 +549,14 @@ export class OracleDatabase {
               `DELETE FROM game_tracking
              WHERE status = ? AND game_address IN (
                SELECT game_address FROM secret_keys
-               WHERE signed_at IS NULL AND used = FALSE AND created_at < ?
+               WHERE committed_at IS NULL AND used = FALSE AND created_at < ?
              )`,
             )
             .run(DEFAULT_STATUS, cutoffTime);
           const result = this.db
             .query(
               `DELETE FROM secret_keys
-             WHERE signed_at IS NULL
+             WHERE committed_at IS NULL
                AND used = FALSE
                AND created_at < ?
                AND game_address NOT IN (
