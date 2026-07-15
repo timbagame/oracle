@@ -455,9 +455,9 @@ describe("unsigned commitment cleanup", () => {
     const sqlite = (db as any).db;
     sqlite.query("UPDATE secret_keys SET created_at = 0").run();
 
-    expect(db.cleanupUnsignedCommitments(10)).toBe(1);
+    expect(db.cleanupUnsignedCommitments(10)).toBe(2);
     expect(db.getSecretKeyInfo(generated)).toBeNull();
-    expect(db.getSecretKeyInfo(signed)).not.toBeNull();
+    expect(db.getSecretKeyInfo(signed)).toBeNull();
     expect(db.getSecretKeyInfo(initialized)).not.toBeNull();
   });
 });

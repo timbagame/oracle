@@ -11,7 +11,7 @@ const SQL_STATEMENTS = Object.freeze({
     "INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)",
   markSecretKeyUsed: "UPDATE secret_keys SET used = TRUE WHERE game_address = ?",
   markSecretKeySigned:
-    "UPDATE secret_keys SET signed_at = COALESCE(signed_at, ?), committed_at = COALESCE(committed_at, ?) WHERE game_address = ? AND used = FALSE",
+    "UPDATE secret_keys SET signed_at = COALESCE(signed_at, ?) WHERE game_address = ? AND used = FALSE",
   markSecretKeyCommitted:
     "UPDATE secret_keys SET committed_at = COALESCE(committed_at, ?) WHERE game_address = ? AND used = FALSE",
   reactivateSecretKey: "UPDATE secret_keys SET used = FALSE WHERE game_address = ?",
@@ -509,12 +509,10 @@ export class OracleDatabase {
   }
 
   public markSecretKeySigned(gameAddress: string): void {
-    const timestamp = Date.now();
     this.runStatement(
       SQL_STATEMENTS.markSecretKeySigned,
       "Failed to mark secret key as signed",
-      timestamp,
-      timestamp,
+      Date.now(),
       gameAddress,
     );
   }
