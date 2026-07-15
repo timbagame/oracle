@@ -1,5 +1,6 @@
 import type * as anchor from "@anchor-lang/core";
 import type { Timba } from "./idl/idlType.ts";
+import { contractVersion } from "./contract-idl.ts";
 import type { OracleDatabase } from "./database.ts";
 import type {
   TimbaEventMap,
@@ -47,7 +48,12 @@ export interface OracleEventProcessorOptions {
 
 type PlayerMutation =
   | { action: "joined"; playerAddress: string; ticketIndex: number }
-  | { action: "unjoined"; ticketIndex: number; movedParticipant?: string };
+  | {
+      action: "unjoined";
+      ticketIndex: number;
+      movedParticipant?: string;
+      inferMovedParticipant?: boolean;
+    };
 
 type PendingPlayerMutationBuffer = {
   operations: PlayerMutation[];
@@ -301,7 +307,12 @@ export class OracleEventProcessor {
         const mutation: PlayerMutation =
           action === "joined"
             ? { action: "joined", playerAddress: playerAddress!, ticketIndex: ticketIndex! }
-            : { action: "unjoined", ticketIndex: ticketIndex!, movedParticipant };
+            : {
+                action: "unjoined",
+                ticketIndex: ticketIndex!,
+                movedParticipant,
+                inferMovedParticipant: contractVersion === "0.1.3",
+              };
         await this.enqueuePlayerMutation(gameAddress, mutation, {
           expectedTickets,
           gameKey: event.gameKey,

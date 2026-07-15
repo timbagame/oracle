@@ -1033,7 +1033,12 @@ export class OracleDatabase {
     gameAddress: string,
     operations: ReadonlyArray<
       | { action: "joined"; playerAddress: string; ticketIndex: number }
-      | { action: "unjoined"; ticketIndex: number; movedParticipant?: string }
+      | {
+          action: "unjoined";
+          ticketIndex: number;
+          movedParticipant?: string;
+          inferMovedParticipant?: boolean;
+        }
     >,
   ): void {
     if (operations.length === 0) {
@@ -1055,24 +1060,43 @@ export class OracleDatabase {
           return;
         }
 
+        const lastParticipant = op.inferMovedParticipant
+          ? (this.db
+              .query(
+                `SELECT player_address, ticket_index FROM game_players
+                 WHERE game_address = ? AND ticket_index = (
+                   SELECT MAX(ticket_index) FROM game_players WHERE game_address = ?
+                 )`,
+              )
+              .get(gameAddress, gameAddress) as {
+              player_address: string;
+              ticket_index: number;
+            } | null)
+          : undefined;
+        const inferredMovedParticipant =
+          lastParticipant && lastParticipant.ticket_index !== op.ticketIndex
+            ? lastParticipant.player_address
+            : undefined;
+        const movedParticipant = op.movedParticipant ?? inferredMovedParticipant;
+
         this.runStatement(
           SQL_STATEMENTS.deleteGamePlayerByTicket,
           "Failed to remove player from game",
           gameAddress,
           op.ticketIndex,
         );
-        if (op.movedParticipant) {
+        if (movedParticipant) {
           this.runStatement(
             SQL_STATEMENTS.deleteGamePlayerByAddress,
             "Failed to remove moved player from its previous index",
             gameAddress,
-            op.movedParticipant,
+            movedParticipant,
           );
           this.runStatement(
             SQL_STATEMENTS.upsertGamePlayer,
             "Failed to move player after unjoin",
             gameAddress,
-            op.movedParticipant,
+            movedParticipant,
             op.ticketIndex,
             baseTimestamp + index,
           );
