@@ -446,7 +446,6 @@ describe("OracleService event handling", () => {
       db: db as any,
       tryAutoComplete: async () => {},
       config: EVENT_HANDLER_CONFIG,
-      clearTokenProgramCache: () => {},
       syncPlayerRegistry: async (options) => {
         const attempt = syncCalls.length + 1;
         syncCalls.push({ attempt, trigger: options.trigger });
@@ -963,7 +962,6 @@ function createService(
     db: db as any,
     tryAutoComplete: async () => {},
     config: EVENT_HANDLER_CONFIG,
-    clearTokenProgramCache: () => {},
     syncPlayerRegistry: async () => true,
     playerEventFlushDebounceMs: 0,
     autoCompleteDebounceMs: 0,
@@ -993,7 +991,6 @@ function createService(
       recordCleanupSweep: () => {},
     },
     readinessCache: new Map(),
-    tokenProgramCache: new Map(),
     secretKeyLength: 32,
     noSecretKeyMessage: "No secret key found",
     confirmTransaction: connectionStub.confirmTransaction,

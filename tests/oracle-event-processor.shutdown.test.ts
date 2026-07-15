@@ -40,7 +40,6 @@ describe("OracleEventProcessor shutdown", () => {
       db: dbStub,
       tryAutoComplete: async () => {},
       config: EVENT_HANDLER_CONFIG,
-      clearTokenProgramCache: () => {},
       syncPlayerRegistry: async (_options) => false,
       setTimeoutFn: scheduleRetryTimeout,
       clearTimeoutFn: clearRetryTimeout,

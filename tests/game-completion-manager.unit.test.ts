@@ -17,7 +17,6 @@ function createGameAccountStub(overrides: Partial<TimbaGameAccount> = {}): Timba
   return {
     creator: overrides.creator ?? Keypair.generate().publicKey,
     tokenMint: overrides.tokenMint ?? Keypair.generate().publicKey,
-    tokenProgram: overrides.tokenProgram ?? TOKEN_PROGRAM_ID,
     ticketsCount: overrides.ticketsCount ?? BigInt(1),
     maxTickets: overrides.maxTickets ?? BigInt(1),
     minTickets: overrides.minTickets ?? BigInt(1),
@@ -86,7 +85,6 @@ function createManager(
   } as const;
 
   const readinessCache = new Map<string, any>();
-  const tokenProgramCache = new Map<string, PublicKey>();
 
   const manager = new GameCompletionManager({
     db: db as any,
@@ -95,7 +93,6 @@ function createManager(
     getProgram: () => program as any,
     adminKeypair: anchor.web3.Keypair.generate(),
     readinessCache,
-    tokenProgramCache,
     secretKeyLength: overrides.secretKeyLength ?? 32,
     noSecretKeyMessage: "missing",
     confirmTransaction: async (_sig?: string, _latest?: BlockhashWithExpiryBlockHeight) => {},
@@ -109,7 +106,6 @@ function createManager(
   return {
     manager,
     readinessCache,
-    tokenProgramCache,
     secretStore,
     players,
     connection,
@@ -133,7 +129,6 @@ describe("GameCompletionManager registry prefetch cleanup", () => {
     const gameAccount = {
       creator: Keypair.generate().publicKey,
       tokenMint: Keypair.generate().publicKey,
-      tokenProgram: TOKEN_PROGRAM_ID,
       timeout: BigInt(60),
       createdAt: BigInt(0),
       lastSlot: BigInt(1),
@@ -180,7 +175,6 @@ describe("GameCompletionManager registry prefetch cleanup", () => {
         maxTickets: 1,
         minTickets: 1,
         lastSlot: 1,
-        tokenProgram: TOKEN_PROGRAM_ID,
       }),
     };
 

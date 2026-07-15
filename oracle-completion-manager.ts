@@ -24,7 +24,6 @@ import { TransactionSubmitter } from "./transaction-submitter.ts";
 
 export interface GameCompletionManagerOptions extends CoreOracleDependencies {
   readinessCache: Map<string, GameReadinessSnapshot>;
-  tokenProgramCache: Map<string, PublicKey>;
   secretKeyLength: number;
   noSecretKeyMessage: string;
   confirmTransaction: (
@@ -60,8 +59,6 @@ export class GameCompletionManager {
     this.transactionBuilder = new GameCompletionTransactionBuilder({
       getProgram: () => options.getProgram(),
       adminKeypair: options.adminKeypair,
-      tokenProgramCache: options.tokenProgramCache,
-      getConnection: () => options.getConnection() as unknown as anchor.web3.Connection,
     });
 
     this.registrySyncManager = new RegistrySyncManager({
@@ -565,10 +562,6 @@ export class GameCompletionManager {
     return readiness;
   }
 
-  public clearTokenProgramCache(): void {
-    this.options.tokenProgramCache.clear();
-  }
-
   public async getBlockchainTime(): Promise<number> {
     try {
       const connection = this.options.getConnection();
@@ -674,27 +667,20 @@ export class GameCompletionManager {
     const { builder, signers } = await this.transactionBuilder.buildCompletionTransaction(args);
 
     // Use TransactionSubmitter
-    return this.transactionSubmitter.submitTransaction(
-      async (latestBlockhash) => {
-        const tx = await builder.transaction();
-        if (tx instanceof anchor.web3.VersionedTransaction) {
-          tx.message.recentBlockhash = latestBlockhash.blockhash;
-          tx.sign(signers);
-          return tx.serialize();
-        }
-
-        tx.feePayer = tx.feePayer ?? signers[0]!.publicKey;
-        tx.recentBlockhash = latestBlockhash.blockhash;
-        // We assume adminKeypair is the signer
-        tx.partialSign(...signers);
+    return this.transactionSubmitter.submitTransaction(async (latestBlockhash) => {
+      const tx = await builder.transaction();
+      if (tx instanceof anchor.web3.VersionedTransaction) {
+        tx.message.recentBlockhash = latestBlockhash.blockhash;
+        tx.sign(signers);
         return tx.serialize();
-      },
-      () => {
-        // Invalidate token program cache on error
-        const tokenMint = ensurePublicKey(args.gameAccount.tokenMint);
-        this.options.tokenProgramCache.delete(tokenMint.toBase58());
-      },
-    );
+      }
+
+      tx.feePayer = tx.feePayer ?? signers[0]!.publicKey;
+      tx.recentBlockhash = latestBlockhash.blockhash;
+      // We assume adminKeypair is the signer
+      tx.partialSign(...signers);
+      return tx.serialize();
+    });
   }
 
   public calculateWinnerIndex(secretKeyBuffer: Buffer, lastSlot: number, nPlayers: number): number {

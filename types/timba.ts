@@ -39,7 +39,6 @@ export type TimbaEvent = TimbaEventMap[keyof TimbaEventMap];
 export interface TimbaGameAccount {
   creator: PublicKeyLike;
   tokenMint: PublicKeyLike;
-  tokenProgram?: PublicKeyLike | null;
   ticketsCount: NumericLike;
   maxTickets: NumericLike;
   minTickets: NumericLike;

@@ -173,7 +173,8 @@ export type Timba = {
               }
             },
             {
-              "name": "tokenProgram"
+              "name": "tokenProgram",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             },
             {
               "name": "associatedTokenProgram",
@@ -373,7 +374,8 @@ export type Timba = {
           }
         },
         {
-          "name": "tokenProgram"
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
           "name": "associatedTokenProgram",
@@ -559,7 +561,8 @@ export type Timba = {
               }
             },
             {
-              "name": "tokenProgram"
+              "name": "tokenProgram",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             },
             {
               "name": "associatedTokenProgram",
@@ -862,7 +865,8 @@ export type Timba = {
               }
             },
             {
-              "name": "tokenProgram"
+              "name": "tokenProgram",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             },
             {
               "name": "associatedTokenProgram",
@@ -1177,7 +1181,8 @@ export type Timba = {
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "tokenProgram"
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
           "name": "associatedTokenProgram",
@@ -1342,7 +1347,8 @@ export type Timba = {
               }
             },
             {
-              "name": "tokenProgram"
+              "name": "tokenProgram",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             },
             {
               "name": "associatedTokenProgram",
@@ -1592,7 +1598,8 @@ export type Timba = {
               }
             },
             {
-              "name": "tokenProgram"
+              "name": "tokenProgram",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             },
             {
               "name": "associatedTokenProgram",
@@ -1930,7 +1937,8 @@ export type Timba = {
               }
             },
             {
-              "name": "tokenProgram"
+              "name": "tokenProgram",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             },
             {
               "name": "associatedTokenProgram",
@@ -2351,11 +2359,6 @@ export type Timba = {
       "msg": "Token mint mismatch"
     },
     {
-      "code": 7402,
-      "name": "unsupportedTokenProgram",
-      "msg": "Token program unsupported"
-    },
-    {
       "code": 7403,
       "name": "tokenVaultNotEmpty",
       "msg": "Token vault not empty"
@@ -2364,11 +2367,6 @@ export type Timba = {
       "code": 7404,
       "name": "tokenFeesOutstanding",
       "msg": "Token fees outstanding"
-    },
-    {
-      "code": 7405,
-      "name": "unsupportedTokenExtension",
-      "msg": "Token extension unsupported"
     }
   ],
   "types": [

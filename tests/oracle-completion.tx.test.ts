@@ -68,7 +68,6 @@ describe("GameCompletionManager.executeGameCompletion transaction handling", () 
       getProgram: () => program as any,
       adminKeypair: Keypair.generate() as unknown as anchor.web3.Keypair,
       readinessCache: new Map(),
-      tokenProgramCache: new Map(),
       secretKeyLength: 32,
       noSecretKeyMessage: "missing",
       confirmTransaction: async (sig, blockhash) => {
@@ -105,7 +104,6 @@ describe("GameCompletionManager.executeGameCompletion transaction handling", () 
     const gameAccount = {
       creator: Keypair.generate().publicKey,
       tokenMint: Keypair.generate().publicKey,
-      tokenProgram: TOKEN_PROGRAM_ID,
     } as TimbaGameAccount;
 
     const args = {

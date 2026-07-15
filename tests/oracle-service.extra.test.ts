@@ -13,11 +13,7 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { tmpdir } from "os";
-import {
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  TOKEN_2022_PROGRAM_ID,
-  TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   createEmptyCompletionStats,
   deriveGameAccounts,
@@ -2286,34 +2282,8 @@ describe("OracleService internals", () => {
     expect(result.calls.confirmations[0]?.blockhash).toBe(TEST_REFRESHED_BLOCKHASH);
   });
 
-  it("executeGameCompletion derives Token-2022 accounts when provided", async () => {
-    const result = await runExecuteGameCompletionScenario({ tokenProgram: TOKEN_2022_PROGRAM_ID });
-
-    expect(result.tx).toBe("tx-abc");
-    expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_2022_PROGRAM_ID.toBase58());
-    const tokenCtx = result.calls.accounts?.gameTokenCtx;
-    expect(tokenCtx?.tokenProgram?.toBase58()).toBe(TOKEN_2022_PROGRAM_ID.toBase58());
-    expect(result.calls.accounts?.winnerTokenAccount.toBase58()).toBe(
-      result.expectedWinnerAta.toBase58(),
-    );
-    expect(tokenCtx?.gameTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
-  });
-
-  it("executeGameCompletion infers Token-2022 accounts from mint owner", async () => {
-    const result = await runExecuteGameCompletionScenario({ mintOwner: TOKEN_2022_PROGRAM_ID });
-
-    expect(result.tx).toBe("tx-abc");
-    expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_2022_PROGRAM_ID.toBase58());
-    const tokenCtx = result.calls.accounts?.gameTokenCtx;
-    expect(tokenCtx?.tokenProgram?.toBase58()).toBe(TOKEN_2022_PROGRAM_ID.toBase58());
-    expect(result.calls.accounts?.winnerTokenAccount.toBase58()).toBe(
-      result.expectedWinnerAta.toBase58(),
-    );
-    expect(tokenCtx?.gameTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
-  });
-
-  it("executeGameCompletion treats zeroed token program as SPL default", async () => {
-    const result = await runExecuteGameCompletionScenario({ tokenProgram: PublicKey.default });
+  it("executeGameCompletion uses the legacy SPL Token program", async () => {
+    const result = await runExecuteGameCompletionScenario();
 
     expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
     const tokenCtx = result.calls.accounts?.gameTokenCtx;
@@ -2322,27 +2292,6 @@ describe("OracleService internals", () => {
       result.expectedWinnerAta.toBase58(),
     );
     expect(tokenCtx?.gameTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
-  });
-
-  it("executeGameCompletion surfaces token program resolution errors", async () => {
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-
-    try {
-      await expect(
-        runExecuteGameCompletionScenario({
-          accountInfoImpl: async () => {
-            throw new Error("account missing");
-          },
-        }),
-      ).rejects.toThrow("Unable to resolve token program");
-
-      const warningMessages = warnSpy.mock.calls.map((args) => args.join(" "));
-      expect(
-        warningMessages.some((message) => message.includes("Unable to resolve token program")),
-      ).toBe(true);
-    } finally {
-      warnSpy.mockRestore();
-    }
   });
 
   it("confirmTransaction forwards latest blockhash params", async () => {

@@ -1,16 +1,14 @@
 import * as anchor from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
-import { ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import type { Timba } from "./idl/idlType.ts";
 import type { TimbaGameAccount } from "./types/timba.ts";
-import { ensurePublicKey, resolveTokenProgram } from "./solana-utils.ts";
+import { ensurePublicKey } from "./solana-utils.ts";
 import { deriveGameAccounts } from "./oracle-accounts.ts";
 
 export interface GameCompletionTransactionBuilderOptions {
   getProgram: () => anchor.Program<Timba>;
   adminKeypair: anchor.web3.Keypair;
-  tokenProgramCache: Map<string, PublicKey>;
-  getConnection: () => anchor.web3.Connection;
 }
 
 export class GameCompletionTransactionBuilder {
@@ -32,13 +30,6 @@ export class GameCompletionTransactionBuilder {
     const creatorPublicKey = ensurePublicKey(gameAccount.creator);
     const tokenMint = ensurePublicKey(gameAccount.tokenMint);
 
-    const tokenProgramId = await resolveTokenProgram(
-      this.options.getConnection(),
-      tokenMint,
-      gameAccount.tokenProgram,
-      this.options.tokenProgramCache,
-    );
-
     const programId = ensurePublicKey(program.programId);
 
     const { gamePda, oraclePda, gameTokenPda, gameVaultPda, winnerTokenAccount, gameTokenAccount } =
@@ -47,7 +38,7 @@ export class GameCompletionTransactionBuilder {
         randomHash: randomHashBuffer,
         tokenMint,
         winner: winnerAddress,
-        tokenProgramId,
+        tokenProgramId: TOKEN_PROGRAM_ID,
       });
 
     const gameTokenCtx = {
@@ -55,7 +46,7 @@ export class GameCompletionTransactionBuilder {
       gameToken: gameTokenPda,
       gameVault: gameVaultPda,
       gameTokenAccount,
-      tokenProgram: tokenProgramId,
+      tokenProgram: TOKEN_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
     } as const;
 

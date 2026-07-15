@@ -2,11 +2,9 @@ import { beforeAll, afterAll, describe, it, expect, spyOn } from "bun:test";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
-import { Keypair, PublicKey } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { Keypair } from "@solana/web3.js";
 import * as delayModule from "../delay.ts";
 import type { TimbaGameAccount } from "../types/timba.ts";
-import { resolveTokenProgram } from "../solana-utils.ts";
 
 type OracleServiceClass = typeof import("../oracle-service.ts").OracleService;
 type OracleDatabaseClass = typeof import("../database.ts").OracleDatabase;
@@ -15,7 +13,6 @@ function createGameAccountStub(overrides: Partial<TimbaGameAccount> = {}): Timba
   return {
     creator: overrides.creator ?? Keypair.generate().publicKey,
     tokenMint: overrides.tokenMint ?? Keypair.generate().publicKey,
-    tokenProgram: overrides.tokenProgram ?? TOKEN_PROGRAM_ID,
     ticketsCount: overrides.ticketsCount ?? 1,
     maxTickets: overrides.maxTickets ?? 1,
     minTickets: overrides.minTickets ?? 0,
@@ -423,51 +420,6 @@ describe("OracleService", () => {
         fs.unlinkSync(tempFile);
       }
     }
-  });
-
-  // resolveTokenProgram invalidates cache on error/change
-  it("invalidates cached token program IDs on error", async () => {
-    const service = OracleService.getInstance();
-    const mint = Keypair.generate().publicKey;
-    const wrongProgram = Keypair.generate().publicKey;
-    const correctProgram = TOKEN_PROGRAM_ID;
-
-    // 1. Poison the cache
-    service.tokenProgramCache.set(mint.toBase58(), wrongProgram);
-
-    // 2. Mock connection to return correct owner
-    const connection = (service as any).rpcEndpointManager.getConnection();
-    const originalGetAccountInfo = connection.getAccountInfo;
-    connection.getAccountInfo = async (key: PublicKey) => {
-      if (key.equals(mint)) {
-        return { owner: correctProgram, lamports: 0, data: Buffer.alloc(0), executable: false };
-      }
-      return null;
-    };
-
-    // 3. Verify cache is used initially (returns poison)
-    const cached = await resolveTokenProgram(
-      connection,
-      mint,
-      undefined,
-      service.tokenProgramCache,
-    );
-    expect(cached.toBase58()).toBe(wrongProgram.toBase58());
-
-    // 4. Simulate invalidation (manually, as we would in error handler)
-    service.tokenProgramCache.delete(mint.toBase58());
-
-    // 5. Verify it fetches correct program now
-    const resolved = await resolveTokenProgram(
-      connection,
-      mint,
-      undefined,
-      service.tokenProgramCache,
-    );
-    expect(resolved.toBase58()).toBe(correctProgram.toBase58());
-
-    // Restore
-    connection.getAccountInfo = originalGetAccountInfo;
   });
 });
 

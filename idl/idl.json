@@ -167,7 +167,8 @@
               }
             },
             {
-              "name": "token_program"
+              "name": "token_program",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             },
             {
               "name": "associated_token_program",
@@ -367,7 +368,8 @@
           }
         },
         {
-          "name": "token_program"
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
           "name": "associated_token_program",
@@ -553,7 +555,8 @@
               }
             },
             {
-              "name": "token_program"
+              "name": "token_program",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             },
             {
               "name": "associated_token_program",
@@ -856,7 +859,8 @@
               }
             },
             {
-              "name": "token_program"
+              "name": "token_program",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             },
             {
               "name": "associated_token_program",
@@ -1171,7 +1175,8 @@
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "token_program"
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
           "name": "associated_token_program",
@@ -1336,7 +1341,8 @@
               }
             },
             {
-              "name": "token_program"
+              "name": "token_program",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             },
             {
               "name": "associated_token_program",
@@ -1586,7 +1592,8 @@
               }
             },
             {
-              "name": "token_program"
+              "name": "token_program",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             },
             {
               "name": "associated_token_program",
@@ -1924,7 +1931,8 @@
               }
             },
             {
-              "name": "token_program"
+              "name": "token_program",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             },
             {
               "name": "associated_token_program",
@@ -2345,11 +2353,6 @@
       "msg": "Token mint mismatch"
     },
     {
-      "code": 7402,
-      "name": "UnsupportedTokenProgram",
-      "msg": "Token program unsupported"
-    },
-    {
       "code": 7403,
       "name": "TokenVaultNotEmpty",
       "msg": "Token vault not empty"
@@ -2358,11 +2361,6 @@
       "code": 7404,
       "name": "TokenFeesOutstanding",
       "msg": "Token fees outstanding"
-    },
-    {
-      "code": 7405,
-      "name": "UnsupportedTokenExtension",
-      "msg": "Token extension unsupported"
     }
   ],
   "types": [

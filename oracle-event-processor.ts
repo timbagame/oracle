@@ -29,7 +29,6 @@ export interface OracleEventProcessorOptions {
     trigger: string,
   ) => Promise<void>;
   config: ReadonlyArray<EventHandlerConfig<keyof TimbaEventMap>>;
-  clearTokenProgramCache: () => void;
   syncPlayerRegistry?: (options: {
     gameAddress: string;
     expectedTickets?: number;
@@ -255,7 +254,6 @@ export class OracleEventProcessor {
     this.listenerIds = [];
     this.listening = false;
     this.clearRegistrySyncs();
-    this.options.clearTokenProgramCache();
     this.clearBufferedPlayerMutations();
     this.clearAutoCompleteSchedules();
   }

@@ -65,7 +65,6 @@ export class OracleService {
   private readonly scanner: ScanLoopRunner;
   private readonly registrySync: PlayerRegistrySync;
   public readonly readinessCache: Map<string, GameReadinessSnapshot>;
-  public readonly tokenProgramCache: Map<string, PublicKey>;
 
   private constructor(db?: OracleDatabase, metrics?: OracleMetrics) {
     this.config = getConfig();
@@ -78,7 +77,6 @@ export class OracleService {
     this.registrySync = this.initPlayerRegistrySync();
     this.interGameDelayMs = this.config.scanThrottleMs;
     this.readinessCache = new Map();
-    this.tokenProgramCache = new Map();
 
     this.completion = this.initCompletion();
     this.eventProcessor = this.initEventProcessor();
@@ -119,7 +117,6 @@ export class OracleService {
       getProgram: () => this.program,
       adminKeypair: this.adminKeypair,
       readinessCache: this.readinessCache,
-      tokenProgramCache: this.tokenProgramCache,
       secretKeyLength: SECRET_KEY_LENGTH,
       noSecretKeyMessage: NO_SECRET_KEY_MESSAGE,
       confirmTransaction: (signature, latestBlockhash) =>
@@ -140,7 +137,6 @@ export class OracleService {
       tryAutoComplete: (gameKey, gameAddress, trigger) =>
         this.tryAutoComplete(gameKey ?? this.ensureGameKey(gameAddress), gameAddress, trigger),
       config: EVENT_HANDLER_CONFIG,
-      clearTokenProgramCache: () => this.completion.clearTokenProgramCache(),
       syncPlayerRegistry: (options) => this.syncPlayerRegistry(options),
       onGameFinalized: (gameAddress) => this.completion.resetRegistryPrefetchSchedule(gameAddress),
       playerEventFlushDebounceMs: this.config.playerEventFlushDebounceMs,
