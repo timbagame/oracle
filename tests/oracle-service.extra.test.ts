@@ -275,7 +275,7 @@ async function runExecuteGameCompletionScenario({
 
   (service as any).program = programStub;
 
-  let tx = "";
+  let tx: string;
 
   try {
     const gameAccount = createGameAccountStub({

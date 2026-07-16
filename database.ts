@@ -375,7 +375,7 @@ export class OracleDatabase {
       if (defaultValue !== undefined) {
         return defaultValue;
       }
-      throw new Error(errorMessage);
+      throw new Error(errorMessage, { cause: error });
     }
   }
 

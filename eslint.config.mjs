@@ -23,8 +23,6 @@ export default tseslint.config(
       "no-constant-binary-expression": "error",
       "no-control-regex": "off",
       "no-duplicate-imports": ["error", { allowSeparateTypeImports: true }],
-      "no-useless-assignment": "off",
-      "preserve-caught-error": "off",
       "no-unsafe-finally": "off",
     },
   },

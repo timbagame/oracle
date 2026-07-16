@@ -464,7 +464,7 @@ export function parseRpcEndpointList(
     try {
       parsed = JSON.parse(trimmed);
     } catch (error) {
-      throw new Error(`Failed to parse SOLANA_NETWORK JSON array: ${error}`);
+      throw new Error(`Failed to parse SOLANA_NETWORK JSON array: ${error}`, { cause: error });
     }
   }
 
