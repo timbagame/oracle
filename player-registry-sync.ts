@@ -2,7 +2,6 @@ import * as anchor from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
 import type { Timba } from "./idl/idlType.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
-import { contractVersion } from "./contract-idl.ts";
 import { ensurePublicKey, resolveNumericLike, toBase58 } from "./solana-utils.ts";
 import { logger } from "./logger.ts";
 import { analyzeRegistryState, summarizeTicketAssignments } from "./player-registry-utils.ts";
@@ -196,18 +195,13 @@ export class PlayerRegistrySync {
     const applyEventsSequentially = (events: RegistryEvent[]) => {
       for (const event of events) {
         if (event.kind === "unjoin") {
-          const lastTicketIndex = Math.max(-1, ...ticketAssignments.keys());
-          const inferredMovedParticipant =
-            contractVersion === "0.1.3" && lastTicketIndex !== event.ticketIndex
-              ? ticketAssignments.get(lastTicketIndex)
-              : undefined;
           ticketAssignments.delete(event.ticketIndex);
-          if (inferredMovedParticipant) {
-            ticketAssignments.delete(lastTicketIndex);
-          }
-          const movedParticipant = event.movedParticipant ?? inferredMovedParticipant;
-          if (movedParticipant) {
-            ticketAssignments.set(event.ticketIndex, movedParticipant);
+          if (event.movedParticipant) {
+            const movedTicketIndex = [...ticketAssignments.entries()].find(
+              ([, participant]) => participant === event.movedParticipant,
+            )?.[0];
+            if (movedTicketIndex !== undefined) ticketAssignments.delete(movedTicketIndex);
+            ticketAssignments.set(event.ticketIndex, event.movedParticipant);
           }
           sawUnjoinEvent = true;
           continue;

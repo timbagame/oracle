@@ -4,7 +4,7 @@ This guide covers only the Oracle service. Cross-project production operations a
 
 ## Configuration
 
-Copy `env.example` to `.env` and set the production values. `SOLANA_NETWORK` accepts a JSON array or comma-separated RPC list and fails over in order. `TIMBA_CONTRACT_VERSION` selects the supported contract ABI.
+Copy `env.example` to `.env` and set the production values. `SOLANA_NETWORK` accepts a JSON array or comma-separated RPC list and fails over in order.
 
 Keep these files outside `.env` and set them to mode `600`:
 

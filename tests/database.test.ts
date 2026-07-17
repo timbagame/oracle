@@ -342,20 +342,6 @@ describe("OracleDatabase", () => {
     expect(db.getGamePlayers(game)).toEqual(["player-a", "player-c"]);
   });
 
-  it("infers the participant moved by a legacy 0.1.3 unjoin event", () => {
-    const db = OracleDatabase.getInstance();
-    const game = "game-legacy-swap-remove";
-
-    db.applyPlayerMutations(game, [
-      { action: "joined", playerAddress: "player-a", ticketIndex: 0 },
-      { action: "joined", playerAddress: "player-b", ticketIndex: 1 },
-      { action: "joined", playerAddress: "player-c", ticketIndex: 2 },
-      { action: "unjoined", ticketIndex: 1, inferMovedParticipant: true },
-    ]);
-
-    expect(db.getGamePlayers(game)).toEqual(["player-a", "player-c"]);
-  });
-
   it("reports connection info and reopens after close", () => {
     const db = OracleDatabase.getInstance();
 
