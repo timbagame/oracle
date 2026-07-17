@@ -29,6 +29,7 @@ export interface GameCompletionResult {
 export interface GameSecrets {
   randomHash: string;
   gameAddress: string;
+  oracleOperator?: string;
 }
 
 export interface GenerateGameSecretsOptions {

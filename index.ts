@@ -282,6 +282,7 @@ export function buildHandlers(oracle: OracleApi) {
         return createSuccessResponse({
           randomHash: secrets.randomHash,
           gameAddress: secrets.gameAddress,
+          oracleOperator: secrets.oracleOperator,
         });
       } catch (error: unknown) {
         logger.failure("Error generating hash:", error);

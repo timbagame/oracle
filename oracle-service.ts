@@ -1,5 +1,5 @@
 import * as anchor from "@anchor-lang/core";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { randomBytes, createHash } from "crypto";
 import * as fs from "fs";
 import {
@@ -27,7 +27,7 @@ import { coercePublicKey, confirmTransaction } from "./solana-utils.ts";
 import { PlayerRegistrySync } from "./player-registry-sync.ts";
 import type { Timba } from "./idl/idlType.ts";
 import { contractIdl } from "./contract-idl.ts";
-import { ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 export { deriveGameAccounts, type DerivedGameAccounts } from "./oracle-accounts.ts";
 export {
@@ -439,6 +439,7 @@ export class OracleService {
     return {
       randomHash: randomHash.toString("hex"),
       gameAddress,
+      oracleOperator: this.adminKeypair.publicKey.toBase58(),
     };
   }
 
@@ -456,8 +457,8 @@ export class OracleService {
     const programInstructions = transaction.instructions.filter((instruction) =>
       instruction.programId.equals(this.program.programId),
     );
-    if (programInstructions.length !== 1) {
-      throw new Error("Transaction must contain exactly one Timba instruction");
+    if (programInstructions.length < 1 || programInstructions.length > 2) {
+      throw new Error("Transaction must contain initialization and an optional creator join");
     }
 
     const initialize = programInstructions[0]!;
@@ -479,8 +480,9 @@ export class OracleService {
     if (!oracleOperator.isSigner || oracleOperator.isWritable) {
       throw new Error("Invalid oracle operator account");
     }
-    const oracleOperatorPlaceholder = oracleOperator.pubkey;
-    oracleOperator.pubkey = this.adminKeypair.publicKey;
+    const userSignedFirst = oracleOperator.pubkey.equals(this.adminKeypair.publicKey);
+    const oracleOperatorPlaceholder = userSignedFirst ? null : oracleOperator.pubkey;
+    if (!userSignedFirst) oracleOperator.pubkey = this.adminKeypair.publicKey;
 
     const expectedOracle = PublicKey.findProgramAddressSync(
       [Buffer.from("oracle")],
@@ -507,10 +509,43 @@ export class OracleService {
       throw new Error("Random hash is not an unused oracle commitment");
     }
 
+    const join = programInstructions[1];
+    if (join) {
+      if (!userSignedFirst)
+        throw new Error("Atomic creator join requires the creator to sign first");
+      const decodedJoin = new anchor.BorshInstructionCoder(this.program.idl).decode(join.data);
+      if (!decodedJoin || decodedJoin.name !== "joinGame" || join.keys.length !== 11) {
+        throw new Error("Invalid creator join instruction");
+      }
+      const joinGame = join.keys[0]!;
+      const joinPlayer = join.keys[1]!;
+      const optionalOperator = join.keys[2]!;
+      const joinTokenMint = join.keys[3]!;
+      const initializeTokenMint = initialize.keys[4]!;
+      const joinOracle = join.keys[10]!;
+      if (
+        !joinGame.pubkey.equals(game.pubkey) ||
+        !joinGame.isWritable ||
+        !joinPlayer.pubkey.equals(creator.pubkey) ||
+        !joinPlayer.isSigner ||
+        !joinPlayer.isWritable ||
+        !optionalOperator.pubkey.equals(this.program.programId) ||
+        optionalOperator.isSigner ||
+        !joinTokenMint.pubkey.equals(initializeTokenMint.pubkey) ||
+        !joinOracle.pubkey.equals(expectedOracle)
+      ) {
+        throw new Error("Creator join does not match game initialization");
+      }
+    }
+
     for (const instruction of transaction.instructions) {
-      if (instruction === initialize) continue;
-      if (!instruction.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID)) {
-        throw new Error("Only associated-token setup may accompany game initialization");
+      if (instruction === initialize || instruction === join) continue;
+      if (
+        !instruction.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID) &&
+        !instruction.programId.equals(SystemProgram.programId) &&
+        !instruction.programId.equals(TOKEN_PROGRAM_ID)
+      ) {
+        throw new Error("Unsupported setup instruction in game transaction");
       }
       if (instruction.keys.some(({ pubkey }) => pubkey.equals(this.adminKeypair.publicKey))) {
         throw new Error("Oracle operator cannot be referenced by setup instructions");
@@ -520,9 +555,18 @@ export class OracleService {
     // Transaction.from() retains an empty signature entry for the placeholder.
     // Once its account meta is replaced, that stale entry is an unknown signer
     // and must be removed before web3.js recompiles and signs the message.
-    transaction.signatures = transaction.signatures.filter(
-      ({ publicKey }) => !publicKey.equals(oracleOperatorPlaceholder),
-    );
+    if (userSignedFirst) {
+      const creatorSignature = transaction.signatures.find(({ publicKey }) =>
+        publicKey.equals(creator.pubkey),
+      )?.signature;
+      if (!creatorSignature || !transaction.verifySignatures(false)) {
+        throw new Error("Creator signature is missing or invalid");
+      }
+    } else if (oracleOperatorPlaceholder) {
+      transaction.signatures = transaction.signatures.filter(
+        ({ publicKey }) => !publicKey.equals(oracleOperatorPlaceholder),
+      );
+    }
     transaction.partialSign(this.adminKeypair);
     const serialized = transaction.serialize({ requireAllSignatures: false }).toString("base64");
     this.db.markSecretKeySigned(expectedGame.toBase58());

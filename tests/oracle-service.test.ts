@@ -122,6 +122,89 @@ describe("OracleService", () => {
     ).not.toBeNull();
   });
 
+  it("preserves a creator-first signature for an atomic initialize and join", () => {
+    const service = OracleService.getInstance();
+    service.cleanupOldRecords(-1);
+    const { randomHash, gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
+    const program = (service as any).program as anchor.Program;
+    const adminKeypair = (service as any).adminKeypair as Keypair;
+    const creator = Keypair.generate();
+    const oracle = PublicKey.findProgramAddressSync([Buffer.from("oracle")], program.programId)[0];
+    const tokenMint = Keypair.generate().publicKey;
+    const initialize = new TransactionInstruction({
+      programId: program.programId,
+      data: new anchor.BorshInstructionCoder(program.idl).encode("initializeGame", {
+        config: {
+          gameType: { coinflip: {} },
+          amount: new anchor.BN(1),
+          maxTickets: 2,
+          minTickets: 2,
+          timeout: new anchor.BN(60),
+          isPrivate: false,
+        },
+        randomHash: Array.from(Buffer.from(randomHash, "hex")),
+      }),
+      keys: [
+        { pubkey: new PublicKey(gameAddress), isSigner: false, isWritable: true },
+        { pubkey: creator.publicKey, isSigner: true, isWritable: true },
+        { pubkey: oracle, isSigner: false, isWritable: false },
+        { pubkey: adminKeypair.publicKey, isSigner: true, isWritable: false },
+        { pubkey: tokenMint, isSigner: false, isWritable: false },
+        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false },
+        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ],
+    });
+    const join = new TransactionInstruction({
+      programId: program.programId,
+      data: new anchor.BorshInstructionCoder(program.idl).encode("joinGame", {}),
+      keys: [
+        { pubkey: new PublicKey(gameAddress), isSigner: false, isWritable: true },
+        { pubkey: creator.publicKey, isSigner: true, isWritable: true },
+        { pubkey: program.programId, isSigner: false, isWritable: false },
+        { pubkey: tokenMint, isSigner: false, isWritable: false },
+        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false },
+        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        { pubkey: oracle, isSigner: false, isWritable: false },
+      ],
+    });
+    const transaction = new Transaction({
+      feePayer: creator.publicKey,
+      recentBlockhash: PublicKey.default.toBase58(),
+    }).add(initialize, join);
+    transaction.partialSign(creator);
+    const creatorSignature = transaction.signatures.find(({ publicKey }) =>
+      publicKey.equals(creator.publicKey),
+    )!.signature;
+
+    const signed = Transaction.from(
+      Buffer.from(
+        service.signGameTransaction(
+          transaction
+            .serialize({ requireAllSignatures: false, verifySignatures: false })
+            .toString("base64"),
+        ),
+        "base64",
+      ),
+    );
+
+    expect(
+      signed.signatures.find(({ publicKey }) => publicKey.equals(creator.publicKey))?.signature,
+    ).toEqual(creatorSignature);
+    expect(
+      signed.signatures.find(({ publicKey }) => publicKey.equals(adminKeypair.publicKey))
+        ?.signature,
+    ).not.toBeNull();
+  });
+
   it("generates secrets and stores them", () => {
     const service = OracleService.getInstance();
     service.cleanupOldRecords(-1);
