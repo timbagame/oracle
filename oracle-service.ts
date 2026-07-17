@@ -493,6 +493,8 @@ export class OracleService {
     }
 
     const instructionData = decoded.data as Record<string, unknown>;
+    const config = instructionData["config"] as { isPrivate?: boolean } | undefined;
+    const isPrivate = config?.isPrivate === true;
     const randomHashValue = instructionData["randomHash"] ?? instructionData["_randomHash"];
     const randomHash = Buffer.from(randomHashValue as number[]);
     if (randomHash.length !== 32) {
@@ -523,14 +525,18 @@ export class OracleService {
       const joinTokenMint = join.keys[3]!;
       const initializeTokenMint = initialize.keys[4]!;
       const joinOracle = join.keys[10]!;
+      const hasExpectedOperator = isPrivate
+        ? optionalOperator.pubkey.equals(this.adminKeypair.publicKey) &&
+          optionalOperator.isSigner &&
+          !optionalOperator.isWritable
+        : optionalOperator.pubkey.equals(this.program.programId) && !optionalOperator.isSigner;
       if (
         !joinGame.pubkey.equals(game.pubkey) ||
         !joinGame.isWritable ||
         !joinPlayer.pubkey.equals(creator.pubkey) ||
         !joinPlayer.isSigner ||
         !joinPlayer.isWritable ||
-        !optionalOperator.pubkey.equals(this.program.programId) ||
-        optionalOperator.isSigner ||
+        !hasExpectedOperator ||
         !joinTokenMint.pubkey.equals(initializeTokenMint.pubkey) ||
         !joinOracle.pubkey.equals(expectedOracle)
       ) {

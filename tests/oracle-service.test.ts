@@ -122,7 +122,7 @@ describe("OracleService", () => {
     ).not.toBeNull();
   });
 
-  it("preserves a creator-first signature for an atomic initialize and join", () => {
+  it("signs an atomic private-game creator join", () => {
     const service = OracleService.getInstance();
     service.cleanupOldRecords(-1);
     const { randomHash, gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
@@ -140,7 +140,7 @@ describe("OracleService", () => {
           maxTickets: 2,
           minTickets: 2,
           timeout: new anchor.BN(60),
-          isPrivate: false,
+          isPrivate: true,
         },
         randomHash: Array.from(Buffer.from(randomHash, "hex")),
       }),
@@ -165,7 +165,7 @@ describe("OracleService", () => {
       keys: [
         { pubkey: new PublicKey(gameAddress), isSigner: false, isWritable: true },
         { pubkey: creator.publicKey, isSigner: true, isWritable: true },
-        { pubkey: program.programId, isSigner: false, isWritable: false },
+        { pubkey: adminKeypair.publicKey, isSigner: true, isWritable: false },
         { pubkey: tokenMint, isSigner: false, isWritable: false },
         { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
         { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false },
