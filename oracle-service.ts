@@ -13,6 +13,11 @@ import { OracleEventProcessor, EVENT_HANDLER_CONFIG } from "./oracle-event-proce
 import { GameCompletionManager } from "./oracle-completion-manager.ts";
 import { ScanLoopRunner } from "./oracle-scan-runner.ts";
 import { logger } from "./logger.ts";
+
+const PHANTOM_LIGHTHOUSE_PROGRAM_ID = new PublicKey("L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95");
+const PHANTOM_ASSERT_OWNER_PROGRAM_ID = new PublicKey(
+  "DeJBGdMFa1uynnnKiwrVioatTuHmNLpyFKnmB5kaFdzQ",
+);
 import { RpcEndpointManager } from "./rpc-endpoints.ts";
 import {
   type AttemptGameCompletionOptions,
@@ -550,9 +555,13 @@ export class OracleService {
         !instruction.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID) &&
         !instruction.programId.equals(SystemProgram.programId) &&
         !instruction.programId.equals(TOKEN_PROGRAM_ID) &&
-        !instruction.programId.equals(ComputeBudgetProgram.programId)
+        !instruction.programId.equals(ComputeBudgetProgram.programId) &&
+        !instruction.programId.equals(PHANTOM_LIGHTHOUSE_PROGRAM_ID) &&
+        !instruction.programId.equals(PHANTOM_ASSERT_OWNER_PROGRAM_ID)
       ) {
-        throw new Error("Unsupported setup instruction in game transaction");
+        throw new Error(
+          `Unsupported setup instruction in game transaction: ${instruction.programId.toBase58()}`,
+        );
       }
       if (instruction.keys.some(({ pubkey }) => pubkey.equals(this.adminKeypair.publicKey))) {
         throw new Error("Oracle operator cannot be referenced by setup instructions");

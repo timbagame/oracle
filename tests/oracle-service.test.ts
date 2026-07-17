@@ -180,7 +180,21 @@ describe("OracleService", () => {
     const transaction = new Transaction({
       feePayer: creator.publicKey,
       recentBlockhash: PublicKey.default.toBase58(),
-    }).add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 }), initialize, join);
+    }).add(
+      new TransactionInstruction({
+        programId: new PublicKey("L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95"),
+        keys: [],
+        data: Buffer.alloc(0),
+      }),
+      new TransactionInstruction({
+        programId: new PublicKey("DeJBGdMFa1uynnnKiwrVioatTuHmNLpyFKnmB5kaFdzQ"),
+        keys: [],
+        data: Buffer.alloc(0),
+      }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 }),
+      initialize,
+      join,
+    );
     transaction.partialSign(creator);
     const creatorSignature = transaction.signatures.find(({ publicKey }) =>
       publicKey.equals(creator.publicKey),
