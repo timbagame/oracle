@@ -535,18 +535,20 @@ export class OracleService {
           optionalOperator.isSigner &&
           !optionalOperator.isWritable
         : optionalOperator.pubkey.equals(this.program.programId) && !optionalOperator.isSigner;
+      if (!joinGame.pubkey.equals(game.pubkey) || !joinGame.isWritable)
+        throw new Error("Creator join uses an invalid game account");
       if (
-        !joinGame.pubkey.equals(game.pubkey) ||
-        !joinGame.isWritable ||
         !joinPlayer.pubkey.equals(creator.pubkey) ||
         !joinPlayer.isSigner ||
-        !joinPlayer.isWritable ||
-        !hasExpectedOperator ||
-        !joinTokenMint.pubkey.equals(initializeTokenMint.pubkey) ||
-        !joinOracle.pubkey.equals(expectedOracle)
-      ) {
-        throw new Error("Creator join does not match game initialization");
-      }
+        !joinPlayer.isWritable
+      )
+        throw new Error("Creator join uses an invalid creator account");
+      if (!hasExpectedOperator)
+        throw new Error("Creator join uses an invalid optional oracle operator");
+      if (!joinTokenMint.pubkey.equals(initializeTokenMint.pubkey))
+        throw new Error("Creator join token mint does not match initialization");
+      if (!joinOracle.pubkey.equals(expectedOracle))
+        throw new Error("Creator join uses an invalid oracle account");
     }
 
     for (const instruction of transaction.instructions) {

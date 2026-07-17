@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { Keypair, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import type { OracleService, RequeueGameFailureReason } from "../oracle-service.ts";
-import { buildProductionOracleApi } from "../index.ts";
+import { buildProductionOracleApi, summarizeGameTransaction } from "../index.ts";
 import { createBasicStats } from "./helpers/fake-oracle.ts";
 import {
   buildRequest,
@@ -117,6 +118,34 @@ describe("index router", () => {
     } finally {
       signingContext.testEnv.cleanup();
     }
+  });
+
+  test("transaction diagnostics omit signatures and account addresses", () => {
+    const signer = Keypair.generate();
+    const recipient = Keypair.generate().publicKey;
+    const transaction = new Transaction({
+      feePayer: signer.publicKey,
+      recentBlockhash: PublicKey.default.toBase58(),
+    }).add(
+      SystemProgram.transfer({
+        fromPubkey: signer.publicKey,
+        toPubkey: recipient,
+        lamports: 1,
+      }),
+    );
+    transaction.partialSign(signer);
+
+    const summary = summarizeGameTransaction(
+      transaction.serialize({ requireAllSignatures: false }).toString("base64"),
+    );
+    const serialized = JSON.stringify(summary);
+
+    expect(serialized).toContain(SystemProgram.programId.toBase58());
+    expect(serialized).not.toContain(signer.publicKey.toBase58());
+    expect(serialized).not.toContain(recipient.toBase58());
+    expect(serialized).not.toContain(
+      Buffer.from(transaction.signatures[0]!.signature!).toString("hex"),
+    );
   });
 
   test("production API exposes game transaction signing", () => {

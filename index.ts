@@ -16,6 +16,7 @@ import {
   hasValidBearerToken,
   type RateLimitResult,
 } from "./api-security.ts";
+import { Transaction } from "@solana/web3.js";
 
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
 const IS_TEST_ENV = isTestEnvironment();
@@ -33,6 +34,33 @@ const PROTECTED_ROUTES = new Set([
   "/stats",
   "/games/complete-now",
 ]);
+
+export function summarizeGameTransaction(txBase64: string) {
+  try {
+    const transaction = Transaction.from(Buffer.from(txBase64, "base64"));
+    return {
+      instructionCount: transaction.instructions.length,
+      signatureSlots: transaction.signatures.length,
+      instructions: transaction.instructions.map((instruction, index) => ({
+        index,
+        programId: instruction.programId.toBase58(),
+        accountCount: instruction.keys.length,
+        signerCount: instruction.keys.filter((key) => key.isSigner).length,
+        writableCount: instruction.keys.filter((key) => key.isWritable).length,
+        accountFlags: instruction.keys.map((key) => ({
+          signer: key.isSigner,
+          writable: key.isWritable,
+        })),
+        dataLength: instruction.data.length,
+        discriminator: Buffer.from(instruction.data.subarray(0, 8)).toString("hex"),
+      })),
+    };
+  } catch (error) {
+    return {
+      parseError: error instanceof Error ? error.message : "Unable to decode transaction",
+    };
+  }
+}
 
 type HttpMethod = "GET" | "POST";
 
@@ -291,6 +319,7 @@ export function buildHandlers(oracle: OracleApi) {
     },
 
     async handleSignGameTransaction(request?: Request): Promise<Response> {
+      let txForDiagnostics = "";
       try {
         if (!request || !oracle.signGameTransaction) {
           return createErrorResponse("Game transaction signing is unavailable", 503);
@@ -301,11 +330,21 @@ export function buildHandlers(oracle: OracleApi) {
         if (typeof txBase64 !== "string" || !txBase64) {
           return createErrorResponse("txBase64 is required", 400);
         }
+        txForDiagnostics = txBase64;
         return createSuccessResponse({
           txBase64: oracle.signGameTransaction(txBase64),
         });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : "Invalid transaction";
+        logger.failure(
+          "Game transaction signing rejected:",
+          JSON.stringify({
+            error: message,
+            transaction: txForDiagnostics
+              ? summarizeGameTransaction(txForDiagnostics)
+              : { parseError: "Missing transaction payload" },
+          }),
+        );
         return createErrorResponse(message, 400);
       }
     },
