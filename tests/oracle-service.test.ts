@@ -69,7 +69,7 @@ describe("OracleService", () => {
     service.cleanupOldRecords(-1);
     const { randomHash, gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
     const program = (service as any).program as anchor.Program;
-    const adminKeypair = (service as any).adminKeypair as Keypair;
+    const operatorKeypair = (service as any).operatorKeypair as Keypair;
     const creator = Keypair.generate();
     const placeholder = Keypair.generate().publicKey;
     const oracle = PublicKey.findProgramAddressSync([Buffer.from("oracle")], program.programId)[0];
@@ -115,10 +115,10 @@ describe("OracleService", () => {
     const signed = Transaction.from(Buffer.from(signedBase64, "base64"));
     const signedInitialize = signed.instructions[0]!;
 
-    expect(signedInitialize.keys[3]!.pubkey.equals(adminKeypair.publicKey)).toBe(true);
+    expect(signedInitialize.keys[3]!.pubkey.equals(operatorKeypair.publicKey)).toBe(true);
     expect(signed.signatures.some(({ publicKey }) => publicKey.equals(placeholder))).toBe(false);
     expect(
-      signed.signatures.find(({ publicKey }) => publicKey.equals(adminKeypair.publicKey))
+      signed.signatures.find(({ publicKey }) => publicKey.equals(operatorKeypair.publicKey))
         ?.signature,
     ).not.toBeNull();
   });
@@ -128,7 +128,7 @@ describe("OracleService", () => {
     service.cleanupOldRecords(-1);
     const { randomHash, gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
     const program = (service as any).program as anchor.Program;
-    const adminKeypair = (service as any).adminKeypair as Keypair;
+    const operatorKeypair = (service as any).operatorKeypair as Keypair;
     const creator = Keypair.generate();
     const oracle = PublicKey.findProgramAddressSync([Buffer.from("oracle")], program.programId)[0];
     const tokenMint = Keypair.generate().publicKey;
@@ -149,7 +149,7 @@ describe("OracleService", () => {
         { pubkey: new PublicKey(gameAddress), isSigner: false, isWritable: true },
         { pubkey: creator.publicKey, isSigner: true, isWritable: true },
         { pubkey: oracle, isSigner: false, isWritable: false },
-        { pubkey: adminKeypair.publicKey, isSigner: true, isWritable: false },
+        { pubkey: operatorKeypair.publicKey, isSigner: true, isWritable: false },
         { pubkey: tokenMint, isSigner: false, isWritable: false },
         { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
         { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false },
@@ -166,7 +166,7 @@ describe("OracleService", () => {
       keys: [
         { pubkey: new PublicKey(gameAddress), isSigner: false, isWritable: true },
         { pubkey: creator.publicKey, isSigner: true, isWritable: true },
-        { pubkey: adminKeypair.publicKey, isSigner: true, isWritable: false },
+        { pubkey: operatorKeypair.publicKey, isSigner: true, isWritable: false },
         { pubkey: tokenMint, isSigner: false, isWritable: false },
         { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
         { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false },
@@ -215,7 +215,7 @@ describe("OracleService", () => {
       signed.signatures.find(({ publicKey }) => publicKey.equals(creator.publicKey))?.signature,
     ).toEqual(creatorSignature);
     expect(
-      signed.signatures.find(({ publicKey }) => publicKey.equals(adminKeypair.publicKey))
+      signed.signatures.find(({ publicKey }) => publicKey.equals(operatorKeypair.publicKey))
         ?.signature,
     ).not.toBeNull();
   });
@@ -559,8 +559,8 @@ describe("OracleService", () => {
     }
   });
 
-  // loadAdminKeypair rejects world-readable file
-  it("rejects admin keypair file with insecure permissions", () => {
+  // loadOperatorKeypair rejects world-readable file
+  it("rejects operator keypair file with insecure permissions", () => {
     const service = OracleService.getInstance();
     // Create a temporary keypair file
     const tempFile = `/tmp/insecure-keypair-${Date.now()}.json`;
@@ -572,10 +572,10 @@ describe("OracleService", () => {
       fs.chmodSync(tempFile, 0o777);
 
       // Attempt to read it using the private method
-      // Note: readAdminKeypairFromFile returns { keypair, error }.
+      // Note: readOperatorKeypairFromFile returns { keypair, error }.
       // It catches errors. So we check if it returns an error about permissions.
 
-      const result = (service as any).readAdminKeypairFromFile(tempFile);
+      const result = (service as any).readOperatorKeypairFromFile(tempFile);
 
       // We expect an error because of insecure permissions
       expect(result.error).toBeDefined();

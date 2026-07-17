@@ -11,7 +11,8 @@ Network=timba.network
 EnvironmentFile=%h/timba/oracle/.env
 Environment=ORACLE_PORT=3001
 Environment=ORACLE_API_TOKEN_FILE=/run/secrets/oracle_api_token
-Volume=%h/timba/oracle/admin-keypair.json:/app/admin-keypair.json:ro,Z
+Environment=OPERATOR_KEYPAIR_PATH=/run/secrets/operator_keypair.json
+Volume=%h/timba/oracle/operator-keypair.json:/run/secrets/operator_keypair.json:ro,Z
 Volume=%h/timba/oracle/secrets/oracle-api-token:/run/secrets/oracle_api_token:ro,Z
 Volume=%h/timba/oracle/oracle.sqlite:/app/oracle.sqlite:Z
 NoNewPrivileges=true

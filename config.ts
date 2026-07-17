@@ -5,7 +5,8 @@ import * as fs from "node:fs";
 
 export const DEFAULT_ORACLE_PORT = 3001;
 const DEFAULT_DATABASE_FILE = "oracle.sqlite";
-const DEFAULT_KEYPAIR_FILE = "admin-keypair.json";
+const DEFAULT_KEYPAIR_FILE = "operator-keypair.json";
+const LEGACY_KEYPAIR_FILE = "admin-keypair.json";
 
 function parseBoolean(
   value: string | undefined,
@@ -99,8 +100,8 @@ export interface OracleRuntimeConfig {
   readonly solanaNetworks: readonly string[];
   readonly oraclePort: number;
   readonly databaseFile: string;
-  readonly adminKeypairPath: string;
-  readonly adminKeypairSource: string;
+  readonly operatorKeypairPath: string;
+  readonly operatorKeypairSource: string;
   readonly scanThrottleMs: number;
   readonly playerEventFlushDebounceMs: number;
   readonly playerEventFlushMaxOperations: number;
@@ -120,8 +121,14 @@ function loadConfig(): OracleRuntimeConfig {
   const solanaNetwork = solanaNetworks[0]!;
 
   const databaseFile = readEnv("DATABASE_FILE") ?? DEFAULT_DATABASE_FILE;
-  const adminKeypairSource = readEnv("ORACLE_KEYPAIR_PATH") ?? DEFAULT_KEYPAIR_FILE;
-  const adminKeypairPath = resolvePath(adminKeypairSource);
+  const configuredOperatorKeypair =
+    readEnv("OPERATOR_KEYPAIR_PATH") ?? readEnv("ORACLE_KEYPAIR_PATH");
+  const operatorKeypairSource = configuredOperatorKeypair
+    ? configuredOperatorKeypair
+    : fs.existsSync(resolvePath(DEFAULT_KEYPAIR_FILE))
+      ? DEFAULT_KEYPAIR_FILE
+      : LEGACY_KEYPAIR_FILE;
+  const operatorKeypairPath = resolvePath(operatorKeypairSource);
 
   const oraclePort = parseInteger(readEnv("ORACLE_PORT"), {
     defaultValue: DEFAULT_ORACLE_PORT,
@@ -170,8 +177,8 @@ function loadConfig(): OracleRuntimeConfig {
     solanaNetworks,
     oraclePort,
     databaseFile,
-    adminKeypairPath,
-    adminKeypairSource,
+    operatorKeypairPath,
+    operatorKeypairSource,
     scanThrottleMs,
     playerEventFlushDebounceMs,
     playerEventFlushMaxOperations,

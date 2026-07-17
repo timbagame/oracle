@@ -66,7 +66,7 @@ describe("GameCompletionManager.executeGameCompletion transaction handling", () 
       metrics: mockMetrics,
       getConnection: () => connection as any,
       getProgram: () => program as any,
-      adminKeypair: Keypair.generate() as unknown as anchor.web3.Keypair,
+      operatorKeypair: Keypair.generate() as unknown as anchor.web3.Keypair,
       readinessCache: new Map(),
       secretKeyLength: 32,
       noSecretKeyMessage: "missing",

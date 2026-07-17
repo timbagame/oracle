@@ -985,7 +985,7 @@ function createService(
     db: db as any,
     getProgram: () => programStub as any,
     getConnection: () => connectionStub as any,
-    adminKeypair: Keypair.generate() as any,
+    operatorKeypair: Keypair.generate() as any,
     metrics: {
       recordCompletion: () => {},
       recordScanCycle: () => {},

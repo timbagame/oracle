@@ -91,7 +91,7 @@ function createManager(
     metrics,
     getConnection: () => connection as any,
     getProgram: () => program as any,
-    adminKeypair: anchor.web3.Keypair.generate(),
+    operatorKeypair: anchor.web3.Keypair.generate(),
     readinessCache,
     secretKeyLength: overrides.secretKeyLength ?? 32,
     noSecretKeyMessage: "missing",

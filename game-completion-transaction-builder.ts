@@ -8,7 +8,7 @@ import { deriveGameAccounts } from "./oracle-accounts.ts";
 
 export interface GameCompletionTransactionBuilderOptions {
   getProgram: () => anchor.Program<Timba>;
-  adminKeypair: anchor.web3.Keypair;
+  operatorKeypair: anchor.web3.Keypair;
 }
 
 export class GameCompletionTransactionBuilder {
@@ -55,17 +55,17 @@ export class GameCompletionTransactionBuilder {
       .accountsPartial({
         game: gamePda,
         oracle: oraclePda,
-        oracleOperator: this.options.adminKeypair.publicKey,
+        oracleOperator: this.options.operatorKeypair.publicKey,
         winner: winnerAddress,
         creator: creatorPublicKey,
         gameTokenCtx,
         winnerTokenAccount,
       })
-      .signers([this.options.adminKeypair]);
+      .signers([this.options.operatorKeypair]);
 
     return {
       builder,
-      signers: [this.options.adminKeypair],
+      signers: [this.options.operatorKeypair],
     };
   }
 }

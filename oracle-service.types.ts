@@ -14,7 +14,7 @@ export interface CoreOracleDependencies {
   metrics: OracleMetrics;
   getConnection: () => anchor.web3.Connection;
   getProgram: () => anchor.Program<Timba>;
-  adminKeypair: anchor.web3.Keypair;
+  operatorKeypair: anchor.web3.Keypair;
 }
 
 export interface GameCompletionResult {

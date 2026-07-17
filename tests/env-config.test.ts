@@ -22,6 +22,7 @@ function resetEnv() {
     "ORACLE_AUTOCOMPLETE_DEBOUNCE_MS",
     "ORACLE_DISABLE_RPC_BATCH_TRANSACTIONS",
     "DATABASE_FILE",
+    "OPERATOR_KEYPAIR_PATH",
     "ORACLE_KEYPAIR_PATH",
     "ORACLE_API_TOKEN",
     "ORACLE_API_TOKEN_FILE",
@@ -162,14 +163,14 @@ describe("runtime config", () => {
 
   it("resolves relative paths and caches results until reset", () => {
     process.env["SOLANA_NETWORK"] = "https://rpc";
-    process.env["ORACLE_KEYPAIR_PATH"] = "keys/admin.json";
+    process.env["OPERATOR_KEYPAIR_PATH"] = "keys/operator.json";
     process.env["DATABASE_FILE"] = "./db/oracle.sqlite";
 
     const first = getConfig();
-    const expectedKeypair = path.join(process.cwd(), "keys/admin.json");
+    const expectedKeypair = path.join(process.cwd(), "keys/operator.json");
     const expectedDb = "./db/oracle.sqlite";
 
-    expect(first.adminKeypairPath).toBe(expectedKeypair);
+    expect(first.operatorKeypairPath).toBe(expectedKeypair);
     expect(first.databaseFile).toBe(expectedDb);
 
     process.env["DATABASE_FILE"] = "ignored.sqlite";
@@ -179,6 +180,13 @@ describe("runtime config", () => {
     resetConfigForTesting();
     const refreshed = getConfig();
     expect(refreshed.databaseFile).toBe("ignored.sqlite");
+  });
+
+  it("supports ORACLE_KEYPAIR_PATH as a legacy alias", () => {
+    process.env["SOLANA_NETWORK"] = "https://rpc";
+    process.env["ORACLE_KEYPAIR_PATH"] = "keys/legacy.json";
+
+    expect(getConfig().operatorKeypairPath).toBe(path.join(process.cwd(), "keys/legacy.json"));
   });
 
   it("supports multi-endpoint SOLANA_NETWORK definitions", () => {

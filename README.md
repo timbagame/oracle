@@ -59,7 +59,7 @@ bun run admin auto-complete <game-address> <on|off>
 ### Prerequisites
 
 - [Bun](https://bun.sh/) runtime
-- Solana admin keypair file
+- Solana operator keypair file
 - Access to a Solana RPC endpoint (mainnet-beta for production)
 
 ### Installation
@@ -79,11 +79,11 @@ bun run admin auto-complete <game-address> <on|off>
    # Edit .env with your configuration
    ```
 
-3. **Place admin keypair**
+3. **Place operator keypair**
 
    ```bash
-   # Place your admin-keypair.json in the project root
-   cp /path/to/your/admin-keypair.json ./admin-keypair.json
+   # Place the shared bot/oracle operator keypair in the project root
+   cp /path/to/your/operator-keypair.json ./operator-keypair.json
    ```
 
 4. **Start the Oracle**
@@ -104,7 +104,7 @@ SOLANA_NETWORK=["https://api.mainnet-beta.solana.com","https://rpc-backup.exampl
 ORACLE_PORT=3001
 ORACLE_API_TOKEN=<shared-random-secret>
 
-# Optional: allow the service to generate an ephemeral admin keypair when the
+# Optional: allow the service to generate an ephemeral operator keypair when the
 # configured keypair file is missing. This is automatically enabled during tests
 # and CI runs to avoid checking sensitive keys into the repository.
 # USE_FAKE_KEYPAIR=true

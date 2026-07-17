@@ -149,14 +149,14 @@ async function runExecuteGameCompletionScenario({
   mintOwner?: PublicKey;
   accountInfoImpl?: (pubkey: PublicKey) => Promise<{ owner: PublicKey | null } | null>;
   transactionFactory?: (context: {
-    adminKeypair: anchor.web3.Keypair;
+    operatorKeypair: anchor.web3.Keypair;
   }) => Promise<anchor.web3.Transaction | anchor.web3.VersionedTransaction>;
   connectionOverrides?: ConnectionOverrides;
 } = {}) {
   const service = OracleService.createWith(OracleDatabase.getInstance());
   const originalProgram = (service as any).program;
   const originalConnection = (service as any).connection;
-  const adminKeypair = (service as any).adminKeypair;
+  const operatorKeypair = (service as any).operatorKeypair;
   const winner = Keypair.generate().publicKey;
   const creator = Keypair.generate().publicKey;
   const programId = Keypair.generate().publicKey;
@@ -232,13 +232,13 @@ async function runExecuteGameCompletionScenario({
   (service as any).connection = mockConnection;
 
   const defaultTransactionFactory = async ({
-    adminKeypair,
+    operatorKeypair,
   }: {
-    adminKeypair: anchor.web3.Keypair;
+    operatorKeypair: anchor.web3.Keypair;
   }) => {
     const tx = new anchor.web3.Transaction();
     tx.add(createNoopInstruction());
-    tx.feePayer = adminKeypair.publicKey;
+    tx.feePayer = operatorKeypair.publicKey;
     tx.recentBlockhash = TEST_INITIAL_BLOCKHASH;
     return tx;
   };
@@ -259,7 +259,7 @@ async function runExecuteGameCompletionScenario({
                   return {
                     transaction: async () => {
                       const factory = transactionFactory ?? defaultTransactionFactory;
-                      const tx = await factory({ adminKeypair });
+                      const tx = await factory({ operatorKeypair });
                       calls.transactionUsed = tx;
                       return tx;
                     },
@@ -314,11 +314,11 @@ async function runExecuteGameCompletionScenario({
     expectedWinnerAta: derived.winnerTokenAccount,
     expectedGameAta: derived.gameTokenAccount,
     expectedTokenProgram: tokenProgramId,
-    oracleOperator: adminKeypair.publicKey,
+    oracleOperator: operatorKeypair.publicKey,
     winner,
     creator,
     tokenMint,
-    adminKeypair,
+    operatorKeypair,
   };
 }
 
@@ -346,7 +346,7 @@ describe("OracleService internals", () => {
     }
   });
 
-  it("falls back to an ephemeral admin keypair when the keypair file cannot be read", () => {
+  it("falls back to an ephemeral operator keypair when the keypair file cannot be read", () => {
     // Create a temporary keypair file with insecure permissions
     const tempDir = fs.mkdtempSync(path.join(tmpdir(), "oracle-fallback-"));
     const keypairPath = path.join(tempDir, "insecure-keypair.json");
@@ -371,7 +371,7 @@ describe("OracleService internals", () => {
       const fileKeypair = Keypair.fromSecretKey(
         new Uint8Array(JSON.parse(fs.readFileSync(keypairPath, "utf-8"))),
       );
-      expect((service as any).adminKeypair.publicKey.toBase58()).not.toBe(
+      expect((service as any).operatorKeypair.publicKey.toBase58()).not.toBe(
         fileKeypair.publicKey.toBase58(),
       );
     } finally {
@@ -384,7 +384,7 @@ describe("OracleService internals", () => {
     }
   });
 
-  it("rejects admin keypairs containing values outside the byte range", async () => {
+  it("rejects operator keypairs containing values outside the byte range", async () => {
     const tempDir = fs.mkdtempSync(path.join(tmpdir(), "oracle-invalid-keypair-"));
     const keypairPath = path.join(tempDir, "bad-keypair.json");
     const invalidSecret = Array.from({ length: 64 }, (_value, index) => (index === 0 ? 999 : 0));
@@ -2187,7 +2187,7 @@ describe("OracleService internals", () => {
     );
     expect(accounts?.winnerTokenAccount.toBase58()).toBe(result.expectedWinnerAta.toBase58());
     expect(tokenCtx?.gameTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
-    expect(result.calls.signers).toEqual([result.adminKeypair]);
+    expect(result.calls.signers).toEqual([result.operatorKeypair]);
     expect(result.calls.confirmed).toMatchObject({
       signature: "tx-abc",
       blockhash: TEST_LATEST_BLOCKHASH,
@@ -2197,9 +2197,9 @@ describe("OracleService internals", () => {
 
   it("executeGameCompletion sends versioned transactions via sendRawTransaction", async () => {
     const result = await runExecuteGameCompletionScenario({
-      transactionFactory: async ({ adminKeypair }) => {
+      transactionFactory: async ({ operatorKeypair }) => {
         const message = new anchor.web3.TransactionMessage({
-          payerKey: adminKeypair.publicKey,
+          payerKey: operatorKeypair.publicKey,
           recentBlockhash: TEST_INITIAL_BLOCKHASH,
           instructions: [createNoopInstruction()],
         }).compileToV0Message();

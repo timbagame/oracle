@@ -58,7 +58,7 @@ export class GameCompletionManager {
   constructor(private readonly options: GameCompletionManagerOptions) {
     this.transactionBuilder = new GameCompletionTransactionBuilder({
       getProgram: () => options.getProgram(),
-      adminKeypair: options.adminKeypair,
+      operatorKeypair: options.operatorKeypair,
     });
 
     this.registrySyncManager = new RegistrySyncManager({
@@ -677,7 +677,7 @@ export class GameCompletionManager {
 
       tx.feePayer = tx.feePayer ?? signers[0]!.publicKey;
       tx.recentBlockhash = latestBlockhash.blockhash;
-      // We assume adminKeypair is the signer
+      // We assume operatorKeypair is the signer
       tx.partialSign(...signers);
       return tx.serialize();
     });

@@ -8,7 +8,7 @@ Copy `env.example` to `.env` and set the production values. `SOLANA_NETWORK` acc
 
 Keep these files outside `.env` and set them to mode `600`:
 
-- `admin-keypair.json`
+- `operator-keypair.json` (the shared bot/oracle operator)
 - `secrets/oracle-api-token`
 
 The API token must match the Bot repository copy. The configured keypair must be the Oracle operator stored on chain.

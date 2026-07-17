@@ -62,7 +62,7 @@ export class OracleService {
   private readonly metrics: OracleMetrics;
   private readonly connection: anchor.web3.Connection;
   private readonly rpcEndpointManager: RpcEndpointManager;
-  private readonly adminKeypair: anchor.web3.Keypair;
+  private readonly operatorKeypair: anchor.web3.Keypair;
   private readonly program: anchor.Program<Timba>;
   private readonly interGameDelayMs: number;
   private readonly eventProcessor: OracleEventProcessor;
@@ -77,7 +77,7 @@ export class OracleService {
     this.metrics = metrics ?? getOracleMetrics();
     this.rpcEndpointManager = this.initRpcEndpointManager();
     this.connection = this.rpcEndpointManager.getConnection();
-    this.adminKeypair = this.loadAdminKeypair();
+    this.operatorKeypair = this.loadOperatorKeypair();
     this.program = this.initProgram();
     this.registrySync = this.initPlayerRegistrySync();
     this.interGameDelayMs = this.config.scanThrottleMs;
@@ -120,7 +120,7 @@ export class OracleService {
       metrics: this.metrics,
       getConnection: () => this.connection,
       getProgram: () => this.program,
-      adminKeypair: this.adminKeypair,
+      operatorKeypair: this.operatorKeypair,
       readinessCache: this.readinessCache,
       secretKeyLength: SECRET_KEY_LENGTH,
       noSecretKeyMessage: NO_SECRET_KEY_MESSAGE,
@@ -228,29 +228,29 @@ export class OracleService {
     }
   }
 
-  private loadAdminKeypair(): anchor.web3.Keypair {
-    const { adminKeypairPath, adminKeypairSource, useEphemeralKeypair } = this.config;
-    const { keypair, error } = this.readAdminKeypairFromFile(adminKeypairPath);
+  private loadOperatorKeypair(): anchor.web3.Keypair {
+    const { operatorKeypairPath, operatorKeypairSource, useEphemeralKeypair } = this.config;
+    const { keypair, error } = this.readOperatorKeypairFromFile(operatorKeypairPath);
 
     if (keypair) {
-      this.logAdminKeypairLoaded(keypair);
+      this.logOperatorKeypairLoaded(keypair);
       return keypair;
     }
 
     if (useEphemeralKeypair && error) {
-      const reason = this.describeAdminKeypairError(adminKeypairSource, error);
-      return this.createEphemeralAdminKeypair(adminKeypairSource, reason);
+      const reason = this.describeOperatorKeypairError(operatorKeypairSource, error);
+      return this.createEphemeralOperatorKeypair(operatorKeypairSource, reason);
     }
 
     const details = error
-      ? this.describeAdminKeypairError(adminKeypairSource, error)
-      : `Failed to load admin keypair from ${adminKeypairSource}`;
+      ? this.describeOperatorKeypairError(operatorKeypairSource, error)
+      : `Failed to load operator keypair from ${operatorKeypairSource}`;
 
-    this.logAdminKeypairFailure(adminKeypairPath, error);
+    this.logOperatorKeypairFailure(operatorKeypairPath, error);
     throw new Error(details);
   }
 
-  private readAdminKeypairFromFile(path: string): {
+  private readOperatorKeypairFromFile(path: string): {
     keypair?: anchor.web3.Keypair;
     error?: unknown;
   } {
@@ -259,22 +259,22 @@ export class OracleService {
       const mode = stats.mode & 0o777;
       if ((mode & 0o077) !== 0) {
         throw new Error(
-          `Admin keypair file ${path} has insecure permissions (${mode.toString(8)}). It must be accessible only by the owner (e.g. 600).`,
+          `Operator keypair file ${path} has insecure permissions (${mode.toString(8)}). It must be accessible only by the owner (e.g. 600).`,
         );
       }
 
       const content = fs.readFileSync(path, "utf-8");
       const parsed = JSON.parse(content);
       if (!Array.isArray(parsed)) {
-        throw new Error("Admin keypair file must contain an array of numbers");
+        throw new Error("Operator keypair file must contain an array of numbers");
       }
 
       const numbers = parsed.map((value) => {
         if (typeof value !== "number" || !Number.isInteger(value)) {
-          throw new Error("Admin keypair file must contain integer byte values");
+          throw new Error("Operator keypair file must contain integer byte values");
         }
         if (value < 0 || value > 255) {
-          throw new Error("Admin keypair file contains byte values outside the 0-255 range");
+          throw new Error("Operator keypair file contains byte values outside the 0-255 range");
         }
         return value;
       });
@@ -314,7 +314,7 @@ export class OracleService {
     return typeof message === "string" && /permission denied/i.test(message);
   }
 
-  private describeAdminKeypairError(source: string, error: unknown): string {
+  private describeOperatorKeypairError(source: string, error: unknown): string {
     if (this.isMissingFileError(error)) {
       return `${source} was not found.`;
     }
@@ -328,26 +328,26 @@ export class OracleService {
     return `${source} could not be loaded: ${message}`;
   }
 
-  private createEphemeralAdminKeypair(source: string, reason?: string): anchor.web3.Keypair {
+  private createEphemeralOperatorKeypair(source: string, reason?: string): anchor.web3.Keypair {
     const keypair = anchor.web3.Keypair.generate();
     logger.warning(
-      `Using ephemeral admin keypair ${keypair.publicKey.toBase58()} because ${reason ?? `${source} was not found.`}`,
+      `Using ephemeral operator keypair ${keypair.publicKey.toBase58()} because ${reason ?? `${source} was not found.`}`,
     );
     return keypair;
   }
 
-  private logAdminKeypairLoaded(keypair: anchor.web3.Keypair): void {
-    logger.success(`Loaded admin keypair: ${keypair.publicKey.toBase58()}`);
+  private logOperatorKeypairLoaded(keypair: anchor.web3.Keypair): void {
+    logger.success(`Loaded operator keypair: ${keypair.publicKey.toBase58()}`);
   }
 
-  private logAdminKeypairFailure(path: string, error: unknown): void {
+  private logOperatorKeypairFailure(path: string, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
-    logger.failure(`Failed to load admin keypair from ${path}:`, message);
+    logger.failure(`Failed to load operator keypair from ${path}:`, message);
   }
 
   private initProgram(): anchor.Program<Timba> {
-    const adminWallet = new anchor.Wallet(this.adminKeypair);
-    const provider = new anchor.AnchorProvider(this.connection, adminWallet, {
+    const operatorWallet = new anchor.Wallet(this.operatorKeypair);
+    const provider = new anchor.AnchorProvider(this.connection, operatorWallet, {
       commitment: "confirmed",
     });
     anchor.setProvider(provider);
@@ -444,7 +444,7 @@ export class OracleService {
     return {
       randomHash: randomHash.toString("hex"),
       gameAddress,
-      oracleOperator: this.adminKeypair.publicKey.toBase58(),
+      oracleOperator: this.operatorKeypair.publicKey.toBase58(),
     };
   }
 
@@ -485,9 +485,9 @@ export class OracleService {
     if (!oracleOperator.isSigner || oracleOperator.isWritable) {
       throw new Error("Invalid oracle operator account");
     }
-    const userSignedFirst = oracleOperator.pubkey.equals(this.adminKeypair.publicKey);
+    const userSignedFirst = oracleOperator.pubkey.equals(this.operatorKeypair.publicKey);
     const oracleOperatorPlaceholder = userSignedFirst ? null : oracleOperator.pubkey;
-    if (!userSignedFirst) oracleOperator.pubkey = this.adminKeypair.publicKey;
+    if (!userSignedFirst) oracleOperator.pubkey = this.operatorKeypair.publicKey;
 
     const expectedOracle = PublicKey.findProgramAddressSync(
       [Buffer.from("oracle")],
@@ -531,7 +531,7 @@ export class OracleService {
       const initializeTokenMint = initialize.keys[4]!;
       const joinOracle = join.keys[10]!;
       const hasExpectedOperator = isPrivate
-        ? optionalOperator.pubkey.equals(this.adminKeypair.publicKey) &&
+        ? optionalOperator.pubkey.equals(this.operatorKeypair.publicKey) &&
           optionalOperator.isSigner &&
           !optionalOperator.isWritable
         : optionalOperator.pubkey.equals(this.program.programId) && !optionalOperator.isSigner;
@@ -565,7 +565,7 @@ export class OracleService {
           `Unsupported setup instruction in game transaction: ${instruction.programId.toBase58()}`,
         );
       }
-      if (instruction.keys.some(({ pubkey }) => pubkey.equals(this.adminKeypair.publicKey))) {
+      if (instruction.keys.some(({ pubkey }) => pubkey.equals(this.operatorKeypair.publicKey))) {
         throw new Error("Oracle operator cannot be referenced by setup instructions");
       }
     }
@@ -585,7 +585,7 @@ export class OracleService {
         ({ publicKey }) => !publicKey.equals(oracleOperatorPlaceholder),
       );
     }
-    transaction.partialSign(this.adminKeypair);
+    transaction.partialSign(this.operatorKeypair);
     const serialized = transaction.serialize({ requireAllSignatures: false }).toString("base64");
     this.db.markSecretKeySigned(expectedGame.toBase58());
     return serialized;
