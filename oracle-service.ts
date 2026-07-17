@@ -1,5 +1,5 @@
 import * as anchor from "@anchor-lang/core";
-import { PublicKey, SystemProgram } from "@solana/web3.js";
+import { ComputeBudgetProgram, PublicKey, SystemProgram } from "@solana/web3.js";
 import { randomBytes, createHash } from "crypto";
 import * as fs from "fs";
 import {
@@ -549,7 +549,8 @@ export class OracleService {
       if (
         !instruction.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID) &&
         !instruction.programId.equals(SystemProgram.programId) &&
-        !instruction.programId.equals(TOKEN_PROGRAM_ID)
+        !instruction.programId.equals(TOKEN_PROGRAM_ID) &&
+        !instruction.programId.equals(ComputeBudgetProgram.programId)
       ) {
         throw new Error("Unsupported setup instruction in game transaction");
       }

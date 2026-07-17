@@ -5,6 +5,7 @@ import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 import * as anchor from "@anchor-lang/core";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
+  ComputeBudgetProgram,
   Keypair,
   PublicKey,
   SystemProgram,
@@ -179,7 +180,7 @@ describe("OracleService", () => {
     const transaction = new Transaction({
       feePayer: creator.publicKey,
       recentBlockhash: PublicKey.default.toBase58(),
-    }).add(initialize, join);
+    }).add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 }), initialize, join);
     transaction.partialSign(creator);
     const creatorSignature = transaction.signatures.find(({ publicKey }) =>
       publicKey.equals(creator.publicKey),
