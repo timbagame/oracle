@@ -2,7 +2,15 @@ import { beforeAll, afterAll, describe, it, expect, spyOn } from "bun:test";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
-import { Keypair } from "@solana/web3.js";
+import * as anchor from "@anchor-lang/core";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import {
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  TransactionInstruction,
+} from "@solana/web3.js";
 import * as delayModule from "../delay.ts";
 import type { TimbaGameAccount } from "../types/timba.ts";
 
@@ -55,6 +63,65 @@ afterAll(() => {
 });
 
 describe("OracleService", () => {
+  it("replaces and signs a distinct initialize-game operator placeholder", () => {
+    const service = OracleService.getInstance();
+    service.cleanupOldRecords(-1);
+    const { randomHash, gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
+    const program = (service as any).program as anchor.Program;
+    const adminKeypair = (service as any).adminKeypair as Keypair;
+    const creator = Keypair.generate();
+    const placeholder = Keypair.generate().publicKey;
+    const oracle = PublicKey.findProgramAddressSync([Buffer.from("oracle")], program.programId)[0];
+    const data = new anchor.BorshInstructionCoder(program.idl).encode("initializeGame", {
+      config: {
+        gameType: { coinflip: {} },
+        amount: new anchor.BN(1),
+        maxTickets: 2,
+        minTickets: 2,
+        timeout: new anchor.BN(60),
+        isPrivate: false,
+      },
+      randomHash: Array.from(Buffer.from(randomHash, "hex")),
+    });
+    const instruction = new TransactionInstruction({
+      programId: program.programId,
+      data,
+      keys: [
+        { pubkey: new PublicKey(gameAddress), isSigner: false, isWritable: true },
+        { pubkey: creator.publicKey, isSigner: true, isWritable: true },
+        { pubkey: oracle, isSigner: false, isWritable: false },
+        { pubkey: placeholder, isSigner: true, isWritable: false },
+        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false },
+        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false },
+        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ],
+    });
+    const transaction = new Transaction({
+      feePayer: creator.publicKey,
+      recentBlockhash: PublicKey.default.toBase58(),
+    }).add(instruction);
+
+    const signedBase64 = service.signGameTransaction(
+      transaction
+        .serialize({ requireAllSignatures: false, verifySignatures: false })
+        .toString("base64"),
+    );
+    const signed = Transaction.from(Buffer.from(signedBase64, "base64"));
+    const signedInitialize = signed.instructions[0]!;
+
+    expect(signedInitialize.keys[3]!.pubkey.equals(adminKeypair.publicKey)).toBe(true);
+    expect(signed.signatures.some(({ publicKey }) => publicKey.equals(placeholder))).toBe(false);
+    expect(
+      signed.signatures.find(({ publicKey }) => publicKey.equals(adminKeypair.publicKey))
+        ?.signature,
+    ).not.toBeNull();
+  });
+
   it("generates secrets and stores them", () => {
     const service = OracleService.getInstance();
     service.cleanupOldRecords(-1);

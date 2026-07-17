@@ -479,6 +479,7 @@ export class OracleService {
     if (!oracleOperator.isSigner || oracleOperator.isWritable) {
       throw new Error("Invalid oracle operator account");
     }
+    const oracleOperatorPlaceholder = oracleOperator.pubkey;
     oracleOperator.pubkey = this.adminKeypair.publicKey;
 
     const expectedOracle = PublicKey.findProgramAddressSync(
@@ -516,6 +517,12 @@ export class OracleService {
       }
     }
 
+    // Transaction.from() retains an empty signature entry for the placeholder.
+    // Once its account meta is replaced, that stale entry is an unknown signer
+    // and must be removed before web3.js recompiles and signs the message.
+    transaction.signatures = transaction.signatures.filter(
+      ({ publicKey }) => !publicKey.equals(oracleOperatorPlaceholder),
+    );
     transaction.partialSign(this.adminKeypair);
     const serialized = transaction.serialize({ requireAllSignatures: false }).toString("base64");
     this.db.markSecretKeySigned(expectedGame.toBase58());
