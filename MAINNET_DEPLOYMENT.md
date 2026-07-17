@@ -35,6 +35,27 @@ journalctl --user -u timba-oracle.service -f
 
 Do not publish port 3001 on the VPS host, run another service copy against the same databases, or use `sudo` for rootless Podman. If the checkout path changes, update the `%h/timba/oracle` paths in the installed Quadlet.
 
+## Private web access
+
+The web Worker reaches the oracle through a Cloudflare Workers VPC Service. The
+oracle remains private: do not create a public hostname or publish port 3001.
+
+After creating the remotely managed tunnel, store its connector token at
+`~/timba/cloudflared/secrets/tunnel-token`. Keep the `secrets` directory mode
+`700`; the bind-mounted file must be mode `644` so the non-root connector can
+read it inside the container.
+Install and start the connector Quadlet:
+
+```bash
+cp deploy/quadlet/timba-cloudflared.container ~/.config/containers/systemd/
+systemctl --user daemon-reload
+systemctl --user start timba-cloudflared.service
+```
+
+Attach the Workers VPC HTTP service to this tunnel with internal hostname
+`oracle` and HTTP port `3001`. Bind only that VPC Service to the web Worker;
+do not bind the entire private network.
+
 ## Service Checks
 
 ```bash

@@ -1,0 +1,24 @@
+[Unit]
+Description=Timba private Cloudflare tunnel
+Wants=network-online.target
+After=network-online.target timba-oracle.service
+Requires=timba-oracle.service
+
+[Container]
+Image=docker.io/cloudflare/cloudflared:latest
+ContainerName=cloudflared
+AutoUpdate=registry
+Network=timba.network
+Volume=%h/timba/cloudflared/secrets/tunnel-token:/run/secrets/tunnel-token:ro,Z
+Exec=tunnel --no-autoupdate run --token-file /run/secrets/tunnel-token
+NoNewPrivileges=true
+DropCapability=all
+PidsLimit=128
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
