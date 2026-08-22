@@ -19,7 +19,7 @@ import {
 import { Transaction } from "@solana/web3.js";
 
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
-const IS_TEST_ENV = isTestEnvironment();
+const IS_TEST_ENV = process.env["TIMBA_ORACLE_TEST_RUNNER"] === "true" || isTestEnvironment();
 const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = IS_TEST_ENV ? 50 : 5000;
 const EVENT_LISTENER_SHUTDOWN_TIMEOUT_MS = IS_TEST_ENV ? 50 : 5000;
 const INTERNAL_SERVER_ERROR_MESSAGE = "Internal server error";
