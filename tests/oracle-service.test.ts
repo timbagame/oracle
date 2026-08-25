@@ -3,7 +3,7 @@ import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 import * as anchor from "@anchor-lang/core";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "../token-program.ts";
 import {
   ComputeBudgetProgram,
   Keypair,

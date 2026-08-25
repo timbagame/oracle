@@ -3,7 +3,7 @@ import * as anchor from "@anchor-lang/core";
 import { GameCompletionManager } from "../oracle-completion-manager.ts";
 import type { GameCompletionManagerOptions } from "../oracle-completion-manager.ts";
 import { Keypair, PublicKey, type BlockhashWithExpiryBlockHeight } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID } from "../token-program.ts";
 import type { OracleMetrics } from "../metrics.ts";
 import type {
   GameCompletionResult,

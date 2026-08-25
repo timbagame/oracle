@@ -13,7 +13,7 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { tmpdir } from "os";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "../token-program.ts";
 import {
   createEmptyCompletionStats,
   deriveGameAccounts,
