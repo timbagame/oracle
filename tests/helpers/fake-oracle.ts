@@ -2,6 +2,9 @@ import type { OracleApi } from "../../index.ts";
 import { createEmptyStats } from "../../database.ts";
 import { createEmptyCompletionStats } from "../../oracle-service.ts";
 
+const TEST_ADDRESS = "32Jr4JnXWvqq9GqPQynkooHsszaucUUvZfNLh2hdX2L5";
+const TEST_OPERATOR = "11111111111111111111111111111111";
+
 type OracleStats = ReturnType<OracleApi["getStats"]>;
 
 type CleanupStats = ReturnType<OracleApi["cleanupOldRecords"]>;
@@ -56,8 +59,9 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
     generateGameSecrets:
       generateGameSecrets ??
       ((_options?: Parameters<OracleApi["generateGameSecrets"]>[0]) => ({
-        randomHash: "test-hash",
-        gameAddress: "game-123",
+        randomHash: "ab".repeat(32),
+        gameAddress: TEST_ADDRESS,
+        oracleOperator: TEST_OPERATOR,
       })),
     signGameTransaction,
     getStats: getStats ?? (() => createBasicStats(stats)),

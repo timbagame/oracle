@@ -168,7 +168,6 @@ export async function confirmTransaction(
   latestBlockhash?: BlockhashWithExpiryBlockHeight,
 ): Promise<void> {
   const conn = connection as anchor.web3.Connection & {
-    confirmTransaction?: (...args: any[]) => unknown;
     getLatestBlockhash?: () => Promise<{ blockhash: string; lastValidBlockHeight: number }>;
   };
 
@@ -194,7 +193,7 @@ export async function confirmTransaction(
 
   // Legacy confirmation fallback
   if (typeof conn.confirmTransaction === "function") {
-    const legacyResult = conn.confirmTransaction(signature as any);
+    const legacyResult = conn.confirmTransaction(signature);
     if (legacyResult && typeof (legacyResult as PromiseLike<unknown>).then === "function") {
       await legacyResult;
     }

@@ -4,6 +4,9 @@ import { createBasicOracle } from "./helpers/fake-oracle.ts";
 import { OracleService } from "../oracle-service.ts";
 import { buildHandlers } from "../index.ts";
 
+const TEST_ADDRESS = "32Jr4JnXWvqq9GqPQynkooHsszaucUUvZfNLh2hdX2L5";
+const TEST_OPERATOR = "11111111111111111111111111111111";
+
 let testEnv: Awaited<ReturnType<typeof createTestEnv>>;
 
 beforeAll(async () => {
@@ -55,7 +58,11 @@ describe("API handlers", () => {
       createBasicOracle({
         generateGameSecrets: (options) => {
           receivedGameType = options?.gameType;
-          return { randomHash: "forwarded-hash", gameAddress: "forwarded-game" };
+          return {
+            randomHash: "ab".repeat(32),
+            gameAddress: TEST_ADDRESS,
+            oracleOperator: TEST_OPERATOR,
+          };
         },
       }),
     );

@@ -9,7 +9,6 @@ import { getConfig, DEFAULT_ORACLE_PORT } from "./config.ts";
 import type { CompletionStats, GameCompletionResult } from "./oracle-service.types.ts";
 import type { ToggleAutoCompleteResult } from "./database.ts";
 import { logger } from "./logger.ts";
-import { normalizeGameType } from "./game-type.ts";
 import {
   MAX_REQUEST_BODY_BYTES,
   createRouteRateLimiter,
@@ -17,13 +16,22 @@ import {
   type RateLimitResult,
 } from "./api-security.ts";
 import { Transaction } from "@solana/web3.js";
+import {
+  CompleteGameNowRequestSchema,
+  CompleteGameNowResponseSchema,
+  GenerateHashRequestSchema,
+  GenerateHashResponseSchema,
+  OracleHealthResponseSchema,
+  OracleStatsResponseSchema,
+  SignGameTransactionRequestSchema,
+  SignGameTransactionResponseSchema,
+} from "@timbagame/protocol/oracle";
 
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
 const IS_TEST_ENV = process.env["TIMBA_ORACLE_TEST_RUNNER"] === "true" || isTestEnvironment();
 const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = IS_TEST_ENV ? 50 : 5000;
 const EVENT_LISTENER_SHUTDOWN_TIMEOUT_MS = IS_TEST_ENV ? 50 : 5000;
 const INTERNAL_SERVER_ERROR_MESSAGE = "Internal server error";
-const GAME_TYPE_FIELD = "gameType";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
@@ -132,7 +140,7 @@ async function closeOracle(oracle: OracleApi): Promise<void> {
 }
 
 async function stopServer(oracle: OracleApi, exitCode?: number): Promise<void> {
-  server?.stop();
+  await server?.stop();
   await abortBackgroundLoop();
   await closeOracle(oracle);
 
@@ -147,8 +155,7 @@ function createResponse(data: unknown, status: number = 200): Response {
     return new Response(null, { status, headers: JSON_HEADERS });
   }
 
-  const jsonInput = data as Parameters<typeof JSON.stringify>[0];
-  const body = typeof data === "string" ? data : JSON.stringify(jsonInput);
+  const body = typeof data === "string" ? data : JSON.stringify(data);
   return new Response(body, { status, headers: JSON_HEADERS });
 }
 
@@ -202,6 +209,13 @@ function createInternalServerErrorResponse(): Response {
 
 function createSuccessResponse(payload: Record<string, unknown> = {}): Response {
   return createServiceResponse({ success: true, payload });
+}
+
+function createContractResponse(
+  schema: { parse(value: unknown): unknown },
+  payload: Record<string, unknown> = {},
+): Response {
+  return createResponse(schema.parse(buildServicePayload({ success: true, ...payload })));
 }
 
 function buildServicePayload(extra: Record<string, unknown> = {}) {
@@ -261,7 +275,7 @@ async function readJsonBody(request: Request | undefined): Promise<JsonBodyResul
     if (!rawBody) {
       return { body: null };
     }
-    const parsed = JSON.parse(rawBody);
+    const parsed: unknown = JSON.parse(rawBody);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return { body: parsed as Record<string, unknown> };
     }
@@ -276,7 +290,7 @@ async function readJsonBody(request: Request | undefined): Promise<JsonBodyResul
 export function buildHandlers(oracle: OracleApi) {
   return {
     async handleHealth(_request?: Request): Promise<Response> {
-      return createSuccessResponse({ status: "healthy" });
+      return createContractResponse(OracleHealthResponseSchema, { status: "healthy" });
     },
 
     async handleGenerateHash(request?: Request): Promise<Response> {
@@ -289,25 +303,13 @@ export function buildHandlers(oracle: OracleApi) {
             return createErrorResponse(parseError, 400);
           }
 
-          const provided = body ? body[GAME_TYPE_FIELD] : undefined;
-          if (provided !== undefined) {
-            if (typeof provided !== "string") {
-              return createErrorResponse("gameType must be a string", 400);
-            }
-
-            const normalized = normalizeGameType(provided);
-            if (normalized.error) {
-              return createErrorResponse(normalized.error, 400);
-            }
-
-            if (normalized.value) {
-              gameType = normalized.value;
-            }
-          }
+          const parsed = GenerateHashRequestSchema.safeParse(body ?? {});
+          if (!parsed.success) return createErrorResponse("gameType is invalid", 400);
+          gameType = parsed.data.gameType;
         }
 
         const secrets = oracle.generateGameSecrets({ gameType });
-        return createSuccessResponse({
+        return createContractResponse(GenerateHashResponseSchema, {
           randomHash: secrets.randomHash,
           gameAddress: secrets.gameAddress,
           oracleOperator: secrets.oracleOperator,
@@ -326,12 +328,11 @@ export function buildHandlers(oracle: OracleApi) {
         }
         const { body, parseError } = await readJsonBody(request);
         if (parseError) return createErrorResponse(parseError, 400);
-        const txBase64 = body?.["txBase64"];
-        if (typeof txBase64 !== "string" || !txBase64) {
-          return createErrorResponse("txBase64 is required", 400);
-        }
+        const parsed = SignGameTransactionRequestSchema.safeParse(body);
+        if (!parsed.success) return createErrorResponse("txBase64 is required", 400);
+        const { txBase64 } = parsed.data;
         txForDiagnostics = txBase64;
-        return createSuccessResponse({
+        return createContractResponse(SignGameTransactionResponseSchema, {
           txBase64: oracle.signGameTransaction(txBase64),
         });
       } catch (error: unknown) {
@@ -351,7 +352,7 @@ export function buildHandlers(oracle: OracleApi) {
 
     async handleStats(_request?: Request): Promise<Response> {
       const stats = oracle.getStats();
-      return createSuccessResponse({ stats });
+      return createContractResponse(OracleStatsResponseSchema, { stats });
     },
 
     async handleRequeueGame(request?: Request): Promise<Response> {
@@ -399,23 +400,20 @@ export function buildHandlers(oracle: OracleApi) {
           return createErrorResponse(parseError, 400);
         }
 
-        const providedValue = body ? body["gameAddress"] : undefined;
-        const providedAddress = typeof providedValue === "string" ? providedValue.trim() : "";
-
-        if (!providedAddress) {
-          return createErrorResponse("gameAddress is required", 400);
-        }
+        const parsed = CompleteGameNowRequestSchema.safeParse(body);
+        if (!parsed.success) return createErrorResponse("gameAddress is required", 400);
+        const providedAddress = parsed.data.gameAddress;
 
         const result = await oracle.completeGameNow(providedAddress);
         if (result === null) {
-          return createSuccessResponse({
+          return createContractResponse(CompleteGameNowResponseSchema, {
             gameAddress: providedAddress,
             status: "in-flight",
           });
         }
 
         if (result.success) {
-          return createSuccessResponse({
+          return createContractResponse(CompleteGameNowResponseSchema, {
             gameAddress: providedAddress,
             status: "completed",
             txHash: result.txHash,
@@ -425,7 +423,7 @@ export function buildHandlers(oracle: OracleApi) {
         }
 
         if (result.notReady) {
-          return createSuccessResponse({
+          return createContractResponse(CompleteGameNowResponseSchema, {
             gameAddress: providedAddress,
             status: "not-ready",
           });
