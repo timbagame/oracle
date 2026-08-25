@@ -625,12 +625,11 @@ export class OracleEventProcessor {
     this.playerMutationBuffers.set(gameAddress, entry);
 
     try {
-      const applyPlayerMutations = (this.options.db as any).applyPlayerMutations as
-        ((address: string, ops: ReadonlyArray<PlayerMutation>) => void) | undefined;
-
-      if (typeof applyPlayerMutations === "function") {
-        // Important: call through the db instance to preserve `this` binding for class methods.
-        (this.options.db as any).applyPlayerMutations(gameAddress, operations);
+      const database = this.options.db as unknown as {
+        applyPlayerMutations?: (address: string, mutations: ReadonlyArray<PlayerMutation>) => void;
+      };
+      if (typeof database.applyPlayerMutations === "function") {
+        database.applyPlayerMutations.call(this.options.db, gameAddress, operations);
       } else {
         for (const op of operations) {
           if (op.action === "joined") {

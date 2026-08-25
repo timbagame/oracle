@@ -20,10 +20,7 @@ export class GameCompletionTransactionBuilder {
     randomHashBuffer: Buffer;
     secretKeyBuffer: Buffer;
     winnerIndex: number;
-  }): Promise<{
-    builder: any; // Using any to avoid deep import issues with Anchor types
-    signers: anchor.web3.Keypair[];
-  }> {
+  }) {
     const program = this.options.getProgram();
     const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
 

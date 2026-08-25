@@ -33,6 +33,10 @@ import { PlayerRegistrySync } from "./player-registry-sync.ts";
 import type { Timba } from "./idl/idlType.ts";
 import { contractIdl } from "./contract-idl.ts";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./token-program.ts";
+import {
+  CompletedGameNotificationResponseSchema,
+  CompletedGameNotificationSchema,
+} from "@timbagame/protocol/bot";
 
 export { deriveGameAccounts, type DerivedGameAccounts } from "./oracle-accounts.ts";
 export {
@@ -264,7 +268,7 @@ export class OracleService {
       }
 
       const content = fs.readFileSync(path, "utf-8");
-      const parsed = JSON.parse(content);
+      const parsed: unknown = JSON.parse(content);
       if (!Array.isArray(parsed)) {
         throw new Error("Operator keypair file must contain an array of numbers");
       }
@@ -727,21 +731,24 @@ export class OracleService {
       return;
     }
 
+    const payload = CompletedGameNotificationSchema.parse({
+      gameAddress,
+      winnerAddress: result.winnerAddress,
+      winnerTxSignature: result.txHash,
+      totalPot: result.totalPot,
+    });
     const response = await fetch(`${botUrl}/internal/completed`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        gameAddress,
-        winnerAddress: result.winnerAddress,
-        winnerTxSignature: result.txHash,
-        totalPot: result.totalPot,
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       logger.warning(`Bot notification failed (${response.status}): ${text}`);
+      return;
     }
+    CompletedGameNotificationResponseSchema.parse(await response.json());
   }
 
   private mapResetFailure(

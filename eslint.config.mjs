@@ -14,7 +14,7 @@ export default tseslint.config(
       globals: { ...globals.node, ...globals.bunBuiltin },
     },
     rules: {
-      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-empty-object-type": "off",
       "@typescript-eslint/no-require-imports": "off",
       "@typescript-eslint/no-unused-vars": "off",
@@ -27,9 +27,23 @@ export default tseslint.config(
     },
   },
   {
-    files: ["tests/**"],
+    files: ["index.ts", "oracle-service.ts", "oracle-service.types.ts"],
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
+    rules: {
+      "@typescript-eslint/no-floating-promises": "error",
+      "@typescript-eslint/no-unsafe-assignment": "error",
+      "@typescript-eslint/no-unsafe-return": "error",
+      "@typescript-eslint/switch-exhaustiveness-check": "error",
+      "@typescript-eslint/consistent-type-imports": "error",
+    },
+  },
+  {
+    files: ["tests/**", "scripts/**"],
     rules: {
       "@typescript-eslint/ban-ts-comment": "off",
+      "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-expressions": "off",
     },
   },

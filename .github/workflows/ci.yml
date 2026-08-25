@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 env:
   REGISTRY: ghcr.io
@@ -32,6 +33,8 @@ jobs:
           restore-keys: |
             bun-install-${{ runner.os }}-
       - name: Install dependencies
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
         run: bun install --frozen-lockfile
       - name: Audit dependencies
         run: bun audit
@@ -43,6 +46,14 @@ jobs:
         run: bun x tsc -p tsconfig.json --noEmit
       - name: Tests
         run: bun test --no-summarize
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes podman
+      - name: Build production image
+        env:
+          PACKAGE_TOKEN: ${{ github.token }}
+        run: podman build --secret=id=npm_token,env=PACKAGE_TOKEN --platform linux/amd64 --format oci --file Containerfile --tag timba-oracle:ci .
 
   publish:
     name: Publish OCI image
@@ -87,7 +98,9 @@ jobs:
           echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
 
       - name: Build OCI image
-        run: podman build --platform linux/amd64 --format oci --file Containerfile --tag "${IMAGE_TAG}" .
+        env:
+          PACKAGE_TOKEN: ${{ github.token }}
+        run: podman build --secret=id=npm_token,env=PACKAGE_TOKEN --platform linux/amd64 --format oci --file Containerfile --tag "${IMAGE_TAG}" .
 
       - name: Push OCI image
         run: podman push --digestfile /tmp/image-digest "${IMAGE_TAG}"

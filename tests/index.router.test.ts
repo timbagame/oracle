@@ -11,14 +11,19 @@ import {
   type IndexRouterTestContext,
 } from "./helpers/index-test-utils.ts";
 
+const CONTRACT_GAME_ADDRESS = "32Jr4JnXWvqq9GqPQynkooHsszaucUUvZfNLh2hdX2L5";
+const CONTRACT_WINNER_ADDRESS = "11111111111111111111111111111111";
+const CONTRACT_SIGNATURE = "1".repeat(64);
+
 let context: IndexRouterTestContext;
 
 describe("index router", () => {
   beforeAll(async () => {
     context = await createIndexRouterTestContext("index-router", {
       generateGameSecrets: (_options) => ({
-        randomHash: "abc",
-        gameAddress: "game123",
+        randomHash: "ab".repeat(32),
+        gameAddress: CONTRACT_GAME_ADDRESS,
+        oracleOperator: CONTRACT_WINNER_ADDRESS,
       }),
       getStats: () => ({
         ...createBasicStats(),
@@ -96,12 +101,12 @@ describe("index router", () => {
     });
     expect(response.status).toBe(200);
     expect((json as any).success).toBe(true);
-    expect((json as any).randomHash).toBe("abc");
+    expect((json as any).randomHash).toBe("ab".repeat(32));
   });
 
   test("POST /sign-game-transaction returns the oracle-signed transaction", async () => {
     const signingContext = await createIndexRouterTestContext("index-router-sign", {
-      signGameTransaction: (txBase64) => `signed:${txBase64}`,
+      signGameTransaction: () => "BAUGBw==",
     });
     try {
       const { response, json } = await executeJsonRequest(
@@ -110,11 +115,11 @@ describe("index router", () => {
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ txBase64: "unsigned" }),
+          body: JSON.stringify({ txBase64: "AQIDBA==" }),
         },
       );
       expect(response.status).toBe(200);
-      expect((json as any).txBase64).toBe("signed:unsigned");
+      expect((json as any).txBase64).toBe("BAUGBw==");
     } finally {
       signingContext.testEnv.cleanup();
     }
@@ -173,7 +178,11 @@ describe("index router", () => {
         if (options?.gameType) {
           calls.push(options.gameType);
         }
-        return { randomHash: "abc", gameAddress: "game123" };
+        return {
+          randomHash: "ab".repeat(32),
+          gameAddress: CONTRACT_GAME_ADDRESS,
+          oracleOperator: CONTRACT_WINNER_ADDRESS,
+        };
       },
     });
 
@@ -205,7 +214,11 @@ describe("index router", () => {
         if (options?.gameType) {
           calls.push(options.gameType);
         }
-        return { randomHash: "abc", gameAddress: "game123" };
+        return {
+          randomHash: "ab".repeat(32),
+          gameAddress: CONTRACT_GAME_ADDRESS,
+          oracleOperator: CONTRACT_WINNER_ADDRESS,
+        };
       },
     });
 
@@ -263,7 +276,11 @@ describe("index router", () => {
         if (options?.gameType) {
           calls.push(options.gameType);
         }
-        return { randomHash: "abc", gameAddress: "game123" };
+        return {
+          randomHash: "ab".repeat(32),
+          gameAddress: CONTRACT_GAME_ADDRESS,
+          oracleOperator: CONTRACT_WINNER_ADDRESS,
+        };
       },
     });
 
@@ -357,8 +374,8 @@ describe("index router", () => {
         completeCalls.push(gameAddress);
         return {
           success: true,
-          txHash: "tx123",
-          winnerAddress: "winner123",
+          txHash: CONTRACT_SIGNATURE,
+          winnerAddress: CONTRACT_WINNER_ADDRESS,
           totalPot: 42,
         };
       },
@@ -371,15 +388,15 @@ describe("index router", () => {
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ gameAddress: "game123" }),
+          body: JSON.stringify({ gameAddress: CONTRACT_GAME_ADDRESS }),
         },
       );
 
       expect(response.status).toBe(200);
       expect((json as any).success).toBe(true);
       expect((json as any).status).toBe("completed");
-      expect((json as any).txHash).toBe("tx123");
-      expect(completeCalls).toEqual(["game123"]);
+      expect((json as any).txHash).toBe(CONTRACT_SIGNATURE);
+      expect(completeCalls).toEqual([CONTRACT_GAME_ADDRESS]);
     } finally {
       completeContext.testEnv.cleanup();
     }
@@ -397,7 +414,7 @@ describe("index router", () => {
       const notReady = await executeJsonRequest(notReadyContext.router, "/games/complete-now", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ gameAddress: "game123" }),
+        body: JSON.stringify({ gameAddress: CONTRACT_GAME_ADDRESS }),
       });
       expect(notReady.response.status).toBe(200);
       expect((notReady.json as any).status).toBe("not-ready");
@@ -405,7 +422,7 @@ describe("index router", () => {
       const inFlight = await executeJsonRequest(inFlightContext.router, "/games/complete-now", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ gameAddress: "game123" }),
+        body: JSON.stringify({ gameAddress: CONTRACT_GAME_ADDRESS }),
       });
       expect(inFlight.response.status).toBe(200);
       expect((inFlight.json as any).status).toBe("in-flight");
@@ -436,11 +453,11 @@ describe("index router", () => {
       const failure = await executeJsonRequest(failingContext.router, "/games/complete-now", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ gameAddress: "game123" }),
+        body: JSON.stringify({ gameAddress: CONTRACT_GAME_ADDRESS }),
       });
       expect(failure.response.status).toBe(409);
       expect((failure.json as any).error).toBe("missing secret");
-      expect(calls).toEqual(["game123"]);
+      expect(calls).toEqual([CONTRACT_GAME_ADDRESS]);
     } finally {
       failingContext.testEnv.cleanup();
     }
