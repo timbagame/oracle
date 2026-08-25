@@ -32,7 +32,7 @@ import { coercePublicKey, confirmTransaction } from "./solana-utils.ts";
 import { PlayerRegistrySync } from "./player-registry-sync.ts";
 import type { Timba } from "./idl/idlType.ts";
 import { contractIdl } from "./contract-idl.ts";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./token-program.ts";
 
 export { deriveGameAccounts, type DerivedGameAccounts } from "./oracle-accounts.ts";
 export {
