@@ -55,6 +55,11 @@ export type RequeueGameFailureReason =
 export type RequeueGameResult =
   { success: true } | { success: false; reason: RequeueGameFailureReason };
 
+/** A client-supplied transaction failed the oracle's signing policy. */
+export class GameTransactionValidationError extends Error {
+  public override readonly name = "GameTransactionValidationError";
+}
+
 export class OracleService {
   private static instance: OracleService;
   public static readonly EVENT_HANDLER_CONFIG = EVENT_HANDLER_CONFIG;
@@ -452,29 +457,45 @@ export class OracleService {
 
   public signGameTransaction(txBase64: string): string {
     if (!txBase64 || txBase64.length > 4_000) {
-      throw new Error("Invalid transaction payload");
+      throw new GameTransactionValidationError("Invalid transaction payload");
     }
 
-    const transaction = anchor.web3.Transaction.from(Buffer.from(txBase64, "base64"));
+    let transaction: anchor.web3.Transaction;
+    try {
+      transaction = anchor.web3.Transaction.from(Buffer.from(txBase64, "base64"));
+    } catch (error) {
+      throw new GameTransactionValidationError("Invalid transaction payload", { cause: error });
+    }
     const feePayer = transaction.feePayer;
     if (!feePayer || !transaction.recentBlockhash) {
-      throw new Error("Transaction must include a fee payer and recent blockhash");
+      throw new GameTransactionValidationError(
+        "Transaction must include a fee payer and recent blockhash",
+      );
     }
 
     const programInstructions = transaction.instructions.filter((instruction) =>
       instruction.programId.equals(this.program.programId),
     );
     if (programInstructions.length < 1 || programInstructions.length > 2) {
-      throw new Error("Transaction must contain initialization and an optional creator join");
+      throw new GameTransactionValidationError(
+        "Transaction must contain initialization and an optional creator join",
+      );
     }
 
     const initialize = programInstructions[0]!;
-    const decoded = new anchor.BorshInstructionCoder(this.program.idl).decode(initialize.data);
+    let decoded: ReturnType<anchor.BorshInstructionCoder["decode"]>;
+    try {
+      decoded = new anchor.BorshInstructionCoder(this.program.idl).decode(initialize.data);
+    } catch (error) {
+      throw new GameTransactionValidationError("Invalid game instruction data", { cause: error });
+    }
     if (!decoded || decoded.name !== "initializeGame") {
-      throw new Error("Oracle only signs game initialization transactions");
+      throw new GameTransactionValidationError(
+        "Oracle only signs game initialization transactions",
+      );
     }
     if (initialize.keys.length !== 12) {
-      throw new Error("Invalid initialize-game account list");
+      throw new GameTransactionValidationError("Invalid initialize-game account list");
     }
 
     const game = initialize.keys[0]!;
@@ -482,10 +503,12 @@ export class OracleService {
     const oracle = initialize.keys[2]!;
     const oracleOperator = initialize.keys[3]!;
     if (!creator.pubkey.equals(feePayer) || !creator.isSigner || !creator.isWritable) {
-      throw new Error("Creator must be the transaction fee payer and signer");
+      throw new GameTransactionValidationError(
+        "Creator must be the transaction fee payer and signer",
+      );
     }
     if (!oracleOperator.isSigner || oracleOperator.isWritable) {
-      throw new Error("Invalid oracle operator account");
+      throw new GameTransactionValidationError("Invalid oracle operator account");
     }
     const userSignedFirst = oracleOperator.pubkey.equals(this.operatorKeypair.publicKey);
     const oracleOperatorPlaceholder = userSignedFirst ? null : oracleOperator.pubkey;
@@ -496,35 +519,54 @@ export class OracleService {
       this.program.programId,
     )[0];
     if (!oracle.pubkey.equals(expectedOracle) || oracle.isSigner || oracle.isWritable) {
-      throw new Error("Invalid oracle account");
+      throw new GameTransactionValidationError("Invalid oracle account");
     }
 
     const instructionData = decoded.data as Record<string, unknown>;
     const config = instructionData["config"] as { isPrivate?: boolean } | undefined;
     const isPrivate = config?.isPrivate === true;
     const randomHashValue = instructionData["randomHash"] ?? instructionData["_randomHash"];
-    const randomHash = Buffer.from(randomHashValue as number[]);
+    let randomHash: Buffer;
+    try {
+      if (!(randomHashValue instanceof Uint8Array) && !Array.isArray(randomHashValue)) {
+        throw new TypeError("Random hash must be a byte array");
+      }
+      randomHash = Buffer.from(randomHashValue);
+    } catch (error) {
+      throw new GameTransactionValidationError("Invalid random hash", { cause: error });
+    }
     if (randomHash.length !== 32) {
-      throw new Error("Invalid random hash");
+      throw new GameTransactionValidationError("Invalid random hash");
     }
 
     const expectedGame = this.completion.getGamePDA(randomHash);
     if (!game.pubkey.equals(expectedGame) || !game.isWritable) {
-      throw new Error("Game account does not match the committed random hash");
+      throw new GameTransactionValidationError(
+        "Game account does not match the committed random hash",
+      );
     }
 
     const secret = this.db.getSecretKeyInfo(expectedGame.toBase58());
     if (!secret || secret.used || secret.randomHash !== randomHash.toString("hex")) {
-      throw new Error("Random hash is not an unused oracle commitment");
+      throw new GameTransactionValidationError("Random hash is not an unused oracle commitment");
     }
 
     const join = programInstructions[1];
     if (join) {
       if (!userSignedFirst)
-        throw new Error("Atomic creator join requires the creator to sign first");
-      const decodedJoin = new anchor.BorshInstructionCoder(this.program.idl).decode(join.data);
+        throw new GameTransactionValidationError(
+          "Atomic creator join requires the creator to sign first",
+        );
+      let decodedJoin: ReturnType<anchor.BorshInstructionCoder["decode"]>;
+      try {
+        decodedJoin = new anchor.BorshInstructionCoder(this.program.idl).decode(join.data);
+      } catch (error) {
+        throw new GameTransactionValidationError("Invalid creator join instruction", {
+          cause: error,
+        });
+      }
       if (!decodedJoin || decodedJoin.name !== "joinGame" || join.keys.length !== 11) {
-        throw new Error("Invalid creator join instruction");
+        throw new GameTransactionValidationError("Invalid creator join instruction");
       }
       const joinGame = join.keys[0]!;
       const joinPlayer = join.keys[1]!;
@@ -538,19 +580,23 @@ export class OracleService {
           !optionalOperator.isWritable
         : optionalOperator.pubkey.equals(this.program.programId) && !optionalOperator.isSigner;
       if (!joinGame.pubkey.equals(game.pubkey) || !joinGame.isWritable)
-        throw new Error("Creator join uses an invalid game account");
+        throw new GameTransactionValidationError("Creator join uses an invalid game account");
       if (
         !joinPlayer.pubkey.equals(creator.pubkey) ||
         !joinPlayer.isSigner ||
         !joinPlayer.isWritable
       )
-        throw new Error("Creator join uses an invalid creator account");
+        throw new GameTransactionValidationError("Creator join uses an invalid creator account");
       if (!hasExpectedOperator)
-        throw new Error("Creator join uses an invalid optional oracle operator");
+        throw new GameTransactionValidationError(
+          "Creator join uses an invalid optional oracle operator",
+        );
       if (!joinTokenMint.pubkey.equals(initializeTokenMint.pubkey))
-        throw new Error("Creator join token mint does not match initialization");
+        throw new GameTransactionValidationError(
+          "Creator join token mint does not match initialization",
+        );
       if (!joinOracle.pubkey.equals(expectedOracle))
-        throw new Error("Creator join uses an invalid oracle account");
+        throw new GameTransactionValidationError("Creator join uses an invalid oracle account");
     }
 
     for (const instruction of transaction.instructions) {
@@ -563,12 +609,14 @@ export class OracleService {
         !instruction.programId.equals(PHANTOM_LIGHTHOUSE_PROGRAM_ID) &&
         !instruction.programId.equals(PHANTOM_ASSERT_OWNER_PROGRAM_ID)
       ) {
-        throw new Error(
+        throw new GameTransactionValidationError(
           `Unsupported setup instruction in game transaction: ${instruction.programId.toBase58()}`,
         );
       }
       if (instruction.keys.some(({ pubkey }) => pubkey.equals(this.operatorKeypair.publicKey))) {
-        throw new Error("Oracle operator cannot be referenced by setup instructions");
+        throw new GameTransactionValidationError(
+          "Oracle operator cannot be referenced by setup instructions",
+        );
       }
     }
 
@@ -580,15 +628,20 @@ export class OracleService {
         publicKey.equals(creator.pubkey),
       )?.signature;
       if (!creatorSignature || !transaction.verifySignatures(false)) {
-        throw new Error("Creator signature is missing or invalid");
+        throw new GameTransactionValidationError("Creator signature is missing or invalid");
       }
     } else if (oracleOperatorPlaceholder) {
       transaction.signatures = transaction.signatures.filter(
         ({ publicKey }) => !publicKey.equals(oracleOperatorPlaceholder),
       );
     }
-    transaction.partialSign(this.operatorKeypair);
-    const serialized = transaction.serialize({ requireAllSignatures: false }).toString("base64");
+    let serialized: string;
+    try {
+      transaction.partialSign(this.operatorKeypair);
+      serialized = transaction.serialize({ requireAllSignatures: false }).toString("base64");
+    } catch (error) {
+      throw new GameTransactionValidationError("Transaction could not be signed", { cause: error });
+    }
     this.db.markSecretKeySigned(expectedGame.toBase58());
     return serialized;
   }

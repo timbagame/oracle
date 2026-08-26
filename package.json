@@ -13,7 +13,7 @@
   "dependencies": {
     "@anchor-lang/core": "1.1.2",
     "@solana/web3.js": "^1.98.4",
-    "@timbagame/protocol": "0.3.1"
+    "@timbagame/protocol": "0.3.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

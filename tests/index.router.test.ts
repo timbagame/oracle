@@ -1,6 +1,9 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Keypair, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import type { OracleService, RequeueGameFailureReason } from "../oracle-service.ts";
+import { GameTransactionValidationError } from "../oracle-service.ts";
+import { ApiErrorSchema } from "@timbagame/protocol/common";
+import { oracleContract } from "@timbagame/protocol/oracle";
 import { buildProductionOracleApi, summarizeGameTransaction } from "../index.ts";
 import { createBasicStats } from "./helpers/fake-oracle.ts";
 import {
@@ -169,6 +172,63 @@ describe("index router", () => {
     });
     expect(response.status).toBe(503);
     expect((json as any).success).toBe(false);
+  });
+
+  test("POST /sign-game-transaction hides validation diagnostics", async () => {
+    const rawError = `ZodError: [{"code":"invalid_type","path":["routePlan"]}]`;
+    const rejectingContext = await createIndexRouterTestContext("index-router-sign-invalid", {
+      signGameTransaction: () => {
+        throw new GameTransactionValidationError(rawError);
+      },
+    });
+
+    try {
+      const { response, json } = await executeJsonRequest(
+        rejectingContext.router,
+        "/sign-game-transaction",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ txBase64: "AQIDBA==" }),
+        },
+      );
+
+      expect(response.status).toBe(400);
+      expect(ApiErrorSchema.safeParse(json).success).toBe(true);
+      expect((json as any).error).toBe("Invalid game transaction");
+      expect(JSON.stringify(json)).not.toContain(rawError);
+      expect(JSON.stringify(json)).not.toContain("invalid_type");
+    } finally {
+      rejectingContext.testEnv.cleanup();
+    }
+  });
+
+  test("POST /sign-game-transaction treats unexpected service failures as internal", async () => {
+    const rawError = "ProtocolHttpError: Expected HTTP 200, received 503";
+    const failingContext = await createIndexRouterTestContext("index-router-sign-internal", {
+      signGameTransaction: () => {
+        throw new Error(rawError);
+      },
+    });
+
+    try {
+      const { response, json } = await executeJsonRequest(
+        failingContext.router,
+        "/sign-game-transaction",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ txBase64: "AQIDBA==" }),
+        },
+      );
+
+      expect(response.status).toBe(500);
+      expect(ApiErrorSchema.safeParse(json).success).toBe(true);
+      expect((json as any).error).toBe("Internal server error");
+      expect(JSON.stringify(json)).not.toContain(rawError);
+    } finally {
+      failingContext.testEnv.cleanup();
+    }
   });
 
   test("POST /generate-hash rejects overly large game type payloads", async () => {
@@ -456,7 +516,9 @@ describe("index router", () => {
         body: JSON.stringify({ gameAddress: CONTRACT_GAME_ADDRESS }),
       });
       expect(failure.response.status).toBe(409);
-      expect((failure.json as any).error).toBe("missing secret");
+      expect(ApiErrorSchema.safeParse(failure.json).success).toBe(true);
+      expect((failure.json as any).error).toBe("Game could not be completed");
+      expect(JSON.stringify(failure.json)).not.toContain("missing secret");
       expect(calls).toEqual([CONTRACT_GAME_ADDRESS]);
     } finally {
       failingContext.testEnv.cleanup();
@@ -615,7 +677,7 @@ describe("index router", () => {
     }
   });
 
-  test("POST /games/requeue sanitizes error messages", async () => {
+  test("POST /games/requeue does not reflect malicious addresses", async () => {
     const failingContext = await createIndexRouterTestContext("index-router-requeue-sanitize", {
       requeueGame: () => ({ success: false, reason: "not-found" }),
     });
@@ -630,14 +692,15 @@ describe("index router", () => {
 
       expect(response.status).toBe(404);
       const errorMessage = String((json as any).error ?? "");
-      expect(errorMessage).toContain("&lt;script&gt;");
+      expect(errorMessage).toBe("Game is not tracked");
       expect(errorMessage).not.toContain("<script>");
+      expect(errorMessage).not.toContain("&lt;script&gt;");
     } finally {
       failingContext.testEnv.cleanup();
     }
   });
 
-  test("POST /games/requeue strips control characters from error payloads", async () => {
+  test("POST /games/requeue does not reflect control-character payloads", async () => {
     const failingContext = await createIndexRouterTestContext("index-router-requeue-crlf", {
       requeueGame: () => ({ success: false, reason: "not-found" }),
     });
@@ -653,7 +716,8 @@ describe("index router", () => {
       expect(response.status).toBe(404);
       const errorMessage = String((json as any).error ?? "");
       expect(errorMessage).not.toMatch(/[\r\n]/);
-      expect(errorMessage).toContain("Set-Cookie: attack");
+      expect(errorMessage).toBe("Game is not tracked");
+      expect(errorMessage).not.toContain("Set-Cookie: attack");
     } finally {
       failingContext.testEnv.cleanup();
     }
@@ -765,6 +829,25 @@ describe("index router", () => {
     } finally {
       console.error = originalError;
     }
+  });
+
+  test("protected router errors conform to protocol error envelopes", async () => {
+    const securedRouter = context.module.buildFetchRouter(context.handlers, {
+      apiToken: "service-secret",
+      checkRateLimit: () => ({ allowed: false, retryAfterSeconds: 2 }),
+    });
+
+    const unauthorized = await executeJsonRequest(securedRouter, "/stats", { method: "GET" });
+    expect(unauthorized.response.status).toBe(401);
+    expect(oracleContract.stats.responses[401].safeParse(unauthorized.json).success).toBe(true);
+
+    const limited = await executeJsonRequest(securedRouter, "/stats", {
+      method: "GET",
+      headers: { authorization: "Bearer service-secret" },
+    });
+    expect(limited.response.status).toBe(429);
+    expect(limited.response.headers.get("Retry-After")).toBe("2");
+    expect(oracleContract.stats.responses[429].safeParse(limited.json).success).toBe(true);
   });
 
   test("router emits error when handler implementation is missing", async () => {
