@@ -1,5 +1,6 @@
 import { delay, DEFAULT_DELAY_MS } from "./delay.ts";
 import {
+  GameTransactionValidationError,
   OracleService,
   type RequeueGameFailureReason,
   type RequeueGameResult,
@@ -31,7 +32,28 @@ const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
 const IS_TEST_ENV = process.env["TIMBA_ORACLE_TEST_RUNNER"] === "true" || isTestEnvironment();
 const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = IS_TEST_ENV ? 50 : 5000;
 const EVENT_LISTENER_SHUTDOWN_TIMEOUT_MS = IS_TEST_ENV ? 50 : 5000;
-const INTERNAL_SERVER_ERROR_MESSAGE = "Internal server error";
+const PUBLIC_ERROR_MESSAGES = {
+  autoCompleteAlreadySet: "Auto-complete is already set to the requested value",
+  autoCompleteBooleanRequired: "autoCompleteDisabled must be a boolean",
+  endpointNotFound: "Endpoint not found",
+  failedToGenerateHash: "Failed to generate hash",
+  gameAlreadyFinalized: "Game is already finalized",
+  gameAlreadyQueued: "Game is already queued for completion",
+  gameAddressRequired: "gameAddress is required",
+  gameCompletionConflict: "Game could not be completed",
+  gameMissingSecret: "Game is missing its secret key",
+  gameNotTracked: "Game is not tracked",
+  gameTransactionSigningUnavailable: "Game transaction signing is unavailable",
+  internalServerError: "Internal server error",
+  invalidGameTransaction: "Invalid game transaction",
+  invalidGameType: "gameType is invalid",
+  invalidJson: "Invalid JSON payload",
+  requestBodyRequired: "Request body required",
+  requestBodyTooLarge: "Request body too large",
+  tooManyRequests: "Too many requests",
+  unauthorized: "Unauthorized",
+} as const;
+type PublicErrorCode = keyof typeof PUBLIC_ERROR_MESSAGES;
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
@@ -175,27 +197,11 @@ function createHtmlResponse(html: string): Response {
   return new Response(html, { headers: { "Content-Type": "text/html" } });
 }
 
-function sanitizeErrorMessage(error: string): string {
-  const normalized = error.replace(/[\x00-\x1F\x7F]+/g, " ");
-  const collapsed = normalized.replace(/\s+/g, " ").trim();
-  if (collapsed.length === 0) {
-    return "Unknown error";
-  }
-
-  const escapeMap: Record<string, string> = {
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-  };
-
-  return collapsed.replace(/[&<>]/g, (char) => escapeMap[char] ?? char);
-}
-
-function createErrorResponse(error: string, status: number = 500): Response {
+function createErrorResponse(code: PublicErrorCode, status: number = 500): Response {
   return createServiceResponse({
     success: false,
     status,
-    payload: { error: sanitizeErrorMessage(error) },
+    payload: { error: PUBLIC_ERROR_MESSAGES[code] },
   });
 }
 
@@ -203,7 +209,7 @@ function createInternalServerErrorResponse(): Response {
   return createServiceResponse({
     success: false,
     status: 500,
-    payload: { error: INTERNAL_SERVER_ERROR_MESSAGE },
+    payload: { error: PUBLIC_ERROR_MESSAGES.internalServerError },
   });
 }
 
@@ -252,7 +258,7 @@ export interface OracleApi {
 
 interface JsonBodyResult {
   body: Record<string, unknown> | null;
-  parseError?: string;
+  parseError?: PublicErrorCode;
 }
 
 async function readJsonBody(request: Request | undefined): Promise<JsonBodyResult> {
@@ -267,7 +273,7 @@ async function readJsonBody(request: Request | undefined): Promise<JsonBodyResul
 
   const contentLength = Number(request.headers.get("content-length") ?? "0");
   if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
-    return { body: null, parseError: "Request body too large" };
+    return { body: null, parseError: "requestBodyTooLarge" };
   }
 
   try {
@@ -281,7 +287,7 @@ async function readJsonBody(request: Request | undefined): Promise<JsonBodyResul
     }
   } catch (error) {
     console.warn("⚠️  Failed to parse /generate-hash payload:", error);
-    return { body: null, parseError: "Invalid JSON payload" };
+    return { body: null, parseError: "invalidJson" };
   }
 
   return { body: null };
@@ -304,7 +310,7 @@ export function buildHandlers(oracle: OracleApi) {
           }
 
           const parsed = GenerateHashRequestSchema.safeParse(body ?? {});
-          if (!parsed.success) return createErrorResponse("gameType is invalid", 400);
+          if (!parsed.success) return createErrorResponse("invalidGameType", 400);
           gameType = parsed.data.gameType;
         }
 
@@ -316,7 +322,7 @@ export function buildHandlers(oracle: OracleApi) {
         });
       } catch (error: unknown) {
         logger.failure("Error generating hash:", error);
-        return createErrorResponse("Failed to generate hash", 500);
+        return createErrorResponse("failedToGenerateHash", 500);
       }
     },
 
@@ -324,12 +330,12 @@ export function buildHandlers(oracle: OracleApi) {
       let txForDiagnostics = "";
       try {
         if (!request || !oracle.signGameTransaction) {
-          return createErrorResponse("Game transaction signing is unavailable", 503);
+          return createErrorResponse("gameTransactionSigningUnavailable", 503);
         }
         const { body, parseError } = await readJsonBody(request);
         if (parseError) return createErrorResponse(parseError, 400);
         const parsed = SignGameTransactionRequestSchema.safeParse(body);
-        if (!parsed.success) return createErrorResponse("txBase64 is required", 400);
+        if (!parsed.success) return createErrorResponse("invalidGameTransaction", 400);
         const { txBase64 } = parsed.data;
         txForDiagnostics = txBase64;
         return createContractResponse(SignGameTransactionResponseSchema, {
@@ -346,7 +352,9 @@ export function buildHandlers(oracle: OracleApi) {
               : { parseError: "Missing transaction payload" },
           }),
         );
-        return createErrorResponse(message, 400);
+        return error instanceof GameTransactionValidationError
+          ? createErrorResponse("invalidGameTransaction", 400)
+          : createInternalServerErrorResponse();
       }
     },
 
@@ -358,7 +366,7 @@ export function buildHandlers(oracle: OracleApi) {
     async handleRequeueGame(request?: Request): Promise<Response> {
       try {
         if (!request) {
-          return createErrorResponse("Request body required", 400);
+          return createErrorResponse("requestBodyRequired", 400);
         }
 
         const { body, parseError } = await readJsonBody(request);
@@ -370,13 +378,13 @@ export function buildHandlers(oracle: OracleApi) {
         const providedAddress = typeof providedValue === "string" ? providedValue.trim() : "";
 
         if (!providedAddress) {
-          return createErrorResponse("gameAddress is required", 400);
+          return createErrorResponse("gameAddressRequired", 400);
         }
 
         const result = oracle.requeueGame(providedAddress);
         if (!result.success) {
           const outcome = mapRequeueFailureToResponse(providedAddress, result.reason);
-          return createErrorResponse(outcome.message, outcome.status);
+          return createErrorResponse(outcome.code, outcome.status);
         }
 
         return createSuccessResponse({
@@ -392,7 +400,7 @@ export function buildHandlers(oracle: OracleApi) {
     async handleCompleteGameNow(request?: Request): Promise<Response> {
       try {
         if (!request) {
-          return createErrorResponse("Request body required", 400);
+          return createErrorResponse("requestBodyRequired", 400);
         }
 
         const { body, parseError } = await readJsonBody(request);
@@ -401,7 +409,7 @@ export function buildHandlers(oracle: OracleApi) {
         }
 
         const parsed = CompleteGameNowRequestSchema.safeParse(body);
-        if (!parsed.success) return createErrorResponse("gameAddress is required", 400);
+        if (!parsed.success) return createErrorResponse("gameAddressRequired", 400);
         const providedAddress = parsed.data.gameAddress;
 
         const result = await oracle.completeGameNow(providedAddress);
@@ -429,10 +437,11 @@ export function buildHandlers(oracle: OracleApi) {
           });
         }
 
-        return createErrorResponse(
-          result.error ?? `Game ${providedAddress} could not be completed`,
-          409,
-        );
+        logger.warning("Immediate game completion was rejected:", {
+          gameAddress: providedAddress,
+          error: result.error,
+        });
+        return createErrorResponse("gameCompletionConflict", 409);
       } catch (error: unknown) {
         logger.failure("Error completing game now:", error);
         return createInternalServerErrorResponse();
@@ -442,7 +451,7 @@ export function buildHandlers(oracle: OracleApi) {
     async handleToggleAutoComplete(request?: Request): Promise<Response> {
       try {
         if (!request) {
-          return createErrorResponse("Request body required", 400);
+          return createErrorResponse("requestBodyRequired", 400);
         }
 
         const { body, parseError } = await readJsonBody(request);
@@ -455,17 +464,17 @@ export function buildHandlers(oracle: OracleApi) {
         const providedDisabled = body?.["autoCompleteDisabled"];
 
         if (!providedAddress) {
-          return createErrorResponse("gameAddress is required", 400);
+          return createErrorResponse("gameAddressRequired", 400);
         }
 
         if (typeof providedDisabled !== "boolean") {
-          return createErrorResponse("autoCompleteDisabled must be a boolean", 400);
+          return createErrorResponse("autoCompleteBooleanRequired", 400);
         }
 
         const result = oracle.setAutoCompleteDisabled(providedAddress, providedDisabled);
         if (!result.success) {
           const outcome = mapToggleAutoCompleteFailure(providedAddress, result);
-          return createErrorResponse(outcome.message, outcome.status);
+          return createErrorResponse(outcome.code, outcome.status);
         }
 
         return createSuccessResponse({
@@ -481,52 +490,52 @@ export function buildHandlers(oracle: OracleApi) {
 }
 
 function mapRequeueFailureToResponse(
-  gameAddress: string,
+  _gameAddress: string,
   reason: RequeueGameFailureReason,
-): { status: number; message: string } {
+): { status: number; code: PublicErrorCode } {
   switch (reason) {
     case "invalid-address":
-      return { status: 400, message: "gameAddress is required" };
+      return { status: 400, code: "gameAddressRequired" };
     case "not-found":
-      return { status: 404, message: `Game ${gameAddress} is not tracked` };
+      return { status: 404, code: "gameNotTracked" };
     case "finalized":
       return {
         status: 409,
-        message: `Game ${gameAddress} is already finalized`,
+        code: "gameAlreadyFinalized",
       };
     case "missing-secret":
       return {
         status: 409,
-        message: `Game ${gameAddress} is missing its secret key`,
+        code: "gameMissingSecret",
       };
     case "unchanged":
     default:
       return {
         status: 409,
-        message: `Game ${gameAddress} is already queued for completion`,
+        code: "gameAlreadyQueued",
       };
   }
 }
 
 function mapToggleAutoCompleteFailure(
-  gameAddress: string,
+  _gameAddress: string,
   result: Extract<ToggleAutoCompleteResult, { success: false }>,
-): { status: number; message: string } {
+): { status: number; code: PublicErrorCode } {
   switch (result.reason) {
     case "invalid-address":
-      return { status: 400, message: "gameAddress is required" };
+      return { status: 400, code: "gameAddressRequired" };
     case "not-found":
-      return { status: 404, message: `Game ${gameAddress} is not tracked` };
+      return { status: 404, code: "gameNotTracked" };
     case "finalized":
       return {
         status: 409,
-        message: `Game ${gameAddress} is already finalized`,
+        code: "gameAlreadyFinalized",
       };
     case "unchanged":
     default:
       return {
         status: 409,
-        message: `Auto-complete state for ${gameAddress} is already set to the requested value`,
+        code: "autoCompleteAlreadySet",
       };
   }
 }
@@ -716,12 +725,12 @@ export function buildFetchRouter(
         !security.apiToken ||
         !hasValidBearerToken(request.headers.get("authorization"), security.apiToken)
       ) {
-        return createErrorResponse("Unauthorized", 401);
+        return createErrorResponse("unauthorized", 401);
       }
 
       const rateLimit = checkRateLimit(path);
       if (!rateLimit.allowed) {
-        const response = createErrorResponse("Too many requests", 429);
+        const response = createErrorResponse("tooManyRequests", 429);
         response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds ?? 1));
         return response;
       }
@@ -735,7 +744,7 @@ export function buildFetchRouter(
           : undefined);
 
       if (!route) {
-        return createErrorResponse("Endpoint not found", 404);
+        return createErrorResponse("endpointNotFound", 404);
       }
 
       const handler = handlers[route.handler];
