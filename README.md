@@ -6,6 +6,7 @@ A robust Oracle service for Solana-based games that generates cryptographic secr
 
 - **🔑 Cryptographic Secret Generation**: Secure random secret generation for new games
 - **✍️ Initialization Approval**: Validates and partially signs creator-funded game transactions
+- **🪙 Creation Policy**: Stores and enforces enabled mints and minimum raw game amounts
 - **🎯 Game Type Support**: Supports Coinflip and Giveaway games
 - **🎧 Event-Driven Completion**: Real-time game completion via Solana event listeners
 - **🔄 Fallback Scanning**: Periodic scanning as backup for missed events
@@ -38,16 +39,21 @@ The Oracle service uses a hybrid approach with performance optimizations:
 | `/health`                | GET    | Service health                                   | None                  |
 | `/generate-hash`         | POST   | Generate and retain a secret; return commitment  | `gameType` (optional) |
 | `/sign-game-transaction` | POST   | Validate and partially sign game initialization  | `txBase64`            |
+| `/token-policies`        | GET    | Return the current token creation policies       | None                  |
 | `/stats`                 | GET    | Oracle statistics and metrics                    | None                  |
 | `/games/complete-now`    | POST   | Attempt immediate completion of one tracked game | `gameAddress`         |
 | `/`                      | GET    | Generated API documentation                      | None                  |
 
-All endpoints except `/health` and `/` require bearer authentication. Rootless Podman reads the token from the permission-checked `secrets/oracle-api-token` file; local development may use `ORACLE_API_TOKEN`. Administrative requeue and auto-complete controls are intentionally CLI-only:
+All endpoints except `/health` and `/` require bearer authentication. Rootless Podman reads the token from the permission-checked `secrets/oracle-api-token` file; local development may use `ORACLE_API_TOKEN`. Administrative requeue, auto-complete, and token-policy controls are intentionally CLI-only:
 
 ```bash
 bun run admin requeue <game-address>
 bun run admin auto-complete <game-address> <on|off>
+bun run admin token-policy list
+bun run admin token-policy set <mint> <on|off> <minimum-amount-raw>
 ```
+
+The Oracle uses the Timba v0.3.0 IDL. Every initialization signature re-reads the durable policy for the transaction mint. Missing, disabled, and below-minimum policies are rejected with typed Protocol v0.4.0 errors.
 
 ### Game Types Supported
 

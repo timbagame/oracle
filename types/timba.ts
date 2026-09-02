@@ -32,6 +32,7 @@ export interface TimbaEventMap {
   gameInitialized: TimbaGameInitializedEvent;
   gameCompleted: TimbaGameStatusEvent;
   gameClosed: TimbaGameStatusEvent;
+  operatorGameClosed: TimbaGameStatusEvent;
 }
 
 export type TimbaEvent = TimbaEventMap[keyof TimbaEventMap];

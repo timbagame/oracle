@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bu
 import { rmSync } from "fs";
 import { OracleDatabase } from "../database.ts";
 import { createTestEnv } from "./helpers/create-test-env.ts";
+import { Keypair } from "@solana/web3.js";
 
 let testEnv: Awaited<ReturnType<typeof createTestEnv>>;
 
@@ -164,6 +165,37 @@ describe("OracleDatabase", () => {
 
     const notFound = db.setAutoCompleteDisabled("missing-auto", true);
     expect(notFound).toEqual({ success: false, reason: "not-found" });
+  });
+
+  it("persists token policies and increments their revisions", () => {
+    const db = OracleDatabase.getInstance();
+    const mint = Keypair.generate().publicKey.toBase58();
+
+    const initial = db.setTokenPolicy(mint, true, "1000");
+    expect(initial).toMatchObject({ mint, enabled: true, minimumAmountRaw: "1000", revision: 1 });
+    expect(Number.isFinite(initial.effectiveAtMs)).toBe(true);
+
+    const updated = db.setTokenPolicy(mint, false, "2500");
+    expect(updated).toMatchObject({ mint, enabled: false, minimumAmountRaw: "2500", revision: 2 });
+
+    db.close();
+    const reopened = OracleDatabase.getInstance();
+    expect(reopened.getTokenPolicies()).toEqual([updated]);
+  });
+
+  it("rejects invalid token policy values", () => {
+    const db = OracleDatabase.getInstance();
+    const mint = Keypair.generate().publicKey.toBase58();
+
+    expect(() => db.setTokenPolicy("not-a-mint", true, "1")).toThrow(
+      "mint must be a valid Solana address",
+    );
+    expect(() => db.setTokenPolicy(mint, true, "-1")).toThrow(
+      "minimum amount must be a non-negative integer",
+    );
+    expect(() => db.setTokenPolicy(mint, true, "18446744073709551616")).toThrow(
+      "minimum amount exceeds u64",
+    );
   });
 
   it("resets completion attempts for eligible games", () => {

@@ -89,10 +89,10 @@ describe("OracleService event handling", () => {
     );
 
     await service.startEventListening();
-    expect(programStub.addCalls.length).toBe(5);
+    expect(programStub.addCalls.length).toBe(EVENT_HANDLER_CONFIG.length);
 
     await service.stopEventListening();
-    expect(programStub.removeCalls).toEqual([1, 2, 3, 4, 5]);
+    expect(programStub.removeCalls).toEqual([1, 2, 3, 4, 5, 6]);
 
     const statsAfterStop = service.getStats();
     expect(statsAfterStop.eventListening).toBe(false);
@@ -109,7 +109,7 @@ describe("OracleService event handling", () => {
     expect(service.events.getActiveListenerCount()).toBe(EVENT_HANDLER_CONFIG.length);
 
     await service.stopEventListening();
-    expect(programStub.removeCalls).toEqual([1, 2, 3, 4, 5]);
+    expect(programStub.removeCalls).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
   it("deduplicates concurrent listener startups", async () => {

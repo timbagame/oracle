@@ -13,6 +13,13 @@ Keep these files outside `.env` and set them to mode `600`:
 
 The API token must match the Bot repository copy. The configured keypair must be the Oracle operator stored on chain.
 
+After starting the v0.3.0 Oracle and before activating Bot or Web game creation, define every supported mint in the durable Oracle database. A missing policy disables game creation for that mint:
+
+```bash
+podman exec oracle bun run admin token-policy set <mint> on <minimum-amount-raw>
+podman exec oracle bun run admin token-policy list
+```
+
 ## Rootless Podman Quadlet
 
 The production checkout is expected at `~/timba/oracle`. Install the shared network and Oracle service before the Bot:
@@ -68,6 +75,8 @@ Administrative service commands also run inside the container:
 ```bash
 podman exec oracle bun run admin requeue <game-address>
 podman exec oracle bun run admin auto-complete <game-address> <on|off>
+podman exec oracle bun run admin token-policy list
+podman exec oracle bun run admin token-policy set <mint> <on|off> <minimum-amount-raw>
 ```
 
 Monitor logs for subscription failures, `/stats` for completion activity, and the operator wallet balance for transaction fees.

@@ -31,8 +31,18 @@ import type { PublicKeyLike } from "./solana-utils.ts";
 import { coercePublicKey, confirmTransaction } from "./solana-utils.ts";
 import { PlayerRegistrySync } from "./player-registry-sync.ts";
 import type { Timba } from "./idl/idlType.ts";
-import { contractIdl } from "./contract-idl.ts";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./token-program.ts";
+import { contractIdl, contractVersion } from "./contract-idl.ts";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  deriveAssociatedTokenAddress,
+} from "./token-program.ts";
+import { GAME_VAULT_SEED } from "./oracle-accounts.ts";
+import {
+  toApiTokenPolicy,
+  type CreationPolicyRejectionCode,
+  type TokenPolicy,
+} from "./token-policy.ts";
 import { createRestClient } from "@timbagame/protocol/common";
 import { botContract } from "@timbagame/protocol/bot";
 
@@ -57,7 +67,25 @@ export type RequeueGameResult =
 
 /** A client-supplied transaction failed the oracle's signing policy. */
 export class GameTransactionValidationError extends Error {
-  public override readonly name = "GameTransactionValidationError";
+  public override readonly name: string = "GameTransactionValidationError";
+}
+
+/** A valid initialize-game transaction was rejected by the current creation policy. */
+export class CreationPolicyValidationError extends GameTransactionValidationError {
+  public override readonly name = "CreationPolicyValidationError";
+
+  public constructor(
+    public readonly code: CreationPolicyRejectionCode,
+    message: string,
+    public readonly details: {
+      mint?: string;
+      minimumAmountRaw?: string;
+      revision?: number;
+    } = {},
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
 }
 
 export class OracleService {
@@ -358,7 +386,7 @@ export class OracleService {
       commitment: "confirmed",
     });
     anchor.setProvider(provider);
-    logger.info("Using Timba contract ABI 0.2.0");
+    logger.info(`Using Timba contract ABI ${contractVersion}`);
     return new anchor.Program(contractIdl as Timba, provider) as anchor.Program<Timba>;
   }
 
@@ -494,7 +522,7 @@ export class OracleService {
         "Oracle only signs game initialization transactions",
       );
     }
-    if (initialize.keys.length !== 12) {
+    if (initialize.keys.length !== 11) {
       throw new GameTransactionValidationError("Invalid initialize-game account list");
     }
 
@@ -502,6 +530,16 @@ export class OracleService {
     const creator = initialize.keys[1]!;
     const oracle = initialize.keys[2]!;
     const oracleOperator = initialize.keys[3]!;
+    const tokenMint = initialize.keys[4]!;
+    const gameVault = initialize.keys[5]!;
+    const gameVaultTokenAccount = initialize.keys[6]!;
+    const tokenProgram = initialize.keys[7]!;
+    const associatedTokenProgram = initialize.keys[8]!;
+    const creatorTokenAccount = initialize.keys[9]!;
+    const systemProgram = initialize.keys[10]!;
+    if (game.isSigner || !game.isWritable) {
+      throw new GameTransactionValidationError("Invalid game account flags");
+    }
     if (!creator.pubkey.equals(feePayer) || !creator.isSigner || !creator.isWritable) {
       throw new GameTransactionValidationError(
         "Creator must be the transaction fee payer and signer",
@@ -520,6 +558,64 @@ export class OracleService {
     )[0];
     if (!oracle.pubkey.equals(expectedOracle) || oracle.isSigner || oracle.isWritable) {
       throw new GameTransactionValidationError("Invalid oracle account");
+    }
+
+    if (tokenMint.isSigner || tokenMint.isWritable) {
+      throw new GameTransactionValidationError("Invalid token mint account flags");
+    }
+    const expectedGameVault = PublicKey.findProgramAddressSync(
+      [GAME_VAULT_SEED, tokenMint.pubkey.toBuffer()],
+      this.program.programId,
+    )[0];
+    if (!gameVault.pubkey.equals(expectedGameVault) || gameVault.isSigner || gameVault.isWritable) {
+      throw new GameTransactionValidationError("Invalid game vault account");
+    }
+    const expectedGameVaultTokenAccount = deriveAssociatedTokenAddress(
+      tokenMint.pubkey,
+      expectedGameVault,
+      true,
+      TOKEN_PROGRAM_ID,
+    );
+    if (
+      !gameVaultTokenAccount.pubkey.equals(expectedGameVaultTokenAccount) ||
+      gameVaultTokenAccount.isSigner ||
+      !gameVaultTokenAccount.isWritable
+    ) {
+      throw new GameTransactionValidationError("Invalid game vault token account");
+    }
+    if (
+      !tokenProgram.pubkey.equals(TOKEN_PROGRAM_ID) ||
+      tokenProgram.isSigner ||
+      tokenProgram.isWritable
+    ) {
+      throw new GameTransactionValidationError("Invalid token program account");
+    }
+    if (
+      !associatedTokenProgram.pubkey.equals(ASSOCIATED_TOKEN_PROGRAM_ID) ||
+      associatedTokenProgram.isSigner ||
+      associatedTokenProgram.isWritable
+    ) {
+      throw new GameTransactionValidationError("Invalid associated token program account");
+    }
+    const expectedCreatorTokenAccount = deriveAssociatedTokenAddress(
+      tokenMint.pubkey,
+      creator.pubkey,
+      false,
+      TOKEN_PROGRAM_ID,
+    );
+    if (
+      !creatorTokenAccount.pubkey.equals(expectedCreatorTokenAccount) ||
+      creatorTokenAccount.isSigner ||
+      !creatorTokenAccount.isWritable
+    ) {
+      throw new GameTransactionValidationError("Invalid creator token account");
+    }
+    if (
+      !systemProgram.pubkey.equals(SystemProgram.programId) ||
+      systemProgram.isSigner ||
+      systemProgram.isWritable
+    ) {
+      throw new GameTransactionValidationError("Invalid system program account");
     }
 
     const instructionData = decoded.data as Record<string, unknown>;
@@ -551,6 +647,17 @@ export class OracleService {
       throw new GameTransactionValidationError("Random hash is not an unused oracle commitment");
     }
 
+    const amountValue = instructionData["config"];
+    const rawAmount = (amountValue as { amount?: unknown } | undefined)?.amount;
+    let amount: bigint;
+    try {
+      if (rawAmount === undefined || rawAmount === null) throw new TypeError("Missing amount");
+      amount = BigInt(String(rawAmount));
+    } catch (error) {
+      throw new GameTransactionValidationError("Invalid game amount", { cause: error });
+    }
+    this.assertCreationPolicy(tokenMint.pubkey, amount);
+
     const join = programInstructions[1];
     if (join) {
       if (!userSignedFirst)
@@ -565,20 +672,26 @@ export class OracleService {
           cause: error,
         });
       }
-      if (!decodedJoin || decodedJoin.name !== "joinGame" || join.keys.length !== 11) {
+      if (!decodedJoin || decodedJoin.name !== "joinGame" || join.keys.length !== 10) {
         throw new GameTransactionValidationError("Invalid creator join instruction");
       }
       const joinGame = join.keys[0]!;
       const joinPlayer = join.keys[1]!;
       const optionalOperator = join.keys[2]!;
       const joinTokenMint = join.keys[3]!;
-      const initializeTokenMint = initialize.keys[4]!;
-      const joinOracle = join.keys[10]!;
+      const joinGameVault = join.keys[4]!;
+      const joinGameVaultTokenAccount = join.keys[5]!;
+      const joinTokenProgram = join.keys[6]!;
+      const joinAssociatedTokenProgram = join.keys[7]!;
+      const joinPlayerTokenAccount = join.keys[8]!;
+      const joinOracle = join.keys[9]!;
       const hasExpectedOperator = isPrivate
         ? optionalOperator.pubkey.equals(this.operatorKeypair.publicKey) &&
           optionalOperator.isSigner &&
           !optionalOperator.isWritable
-        : optionalOperator.pubkey.equals(this.program.programId) && !optionalOperator.isSigner;
+        : optionalOperator.pubkey.equals(this.program.programId) &&
+          !optionalOperator.isSigner &&
+          !optionalOperator.isWritable;
       if (!joinGame.pubkey.equals(game.pubkey) || !joinGame.isWritable)
         throw new GameTransactionValidationError("Creator join uses an invalid game account");
       if (
@@ -591,11 +704,51 @@ export class OracleService {
         throw new GameTransactionValidationError(
           "Creator join uses an invalid optional oracle operator",
         );
-      if (!joinTokenMint.pubkey.equals(initializeTokenMint.pubkey))
+      if (
+        !joinTokenMint.pubkey.equals(tokenMint.pubkey) ||
+        joinTokenMint.isSigner ||
+        joinTokenMint.isWritable
+      )
         throw new GameTransactionValidationError(
           "Creator join token mint does not match initialization",
         );
-      if (!joinOracle.pubkey.equals(expectedOracle))
+      if (
+        !joinGameVault.pubkey.equals(expectedGameVault) ||
+        joinGameVault.isSigner ||
+        joinGameVault.isWritable
+      )
+        throw new GameTransactionValidationError("Creator join uses an invalid game vault");
+      if (
+        !joinGameVaultTokenAccount.pubkey.equals(expectedGameVaultTokenAccount) ||
+        joinGameVaultTokenAccount.isSigner ||
+        !joinGameVaultTokenAccount.isWritable
+      )
+        throw new GameTransactionValidationError(
+          "Creator join uses an invalid game vault token account",
+        );
+      if (
+        !joinTokenProgram.pubkey.equals(TOKEN_PROGRAM_ID) ||
+        joinTokenProgram.isSigner ||
+        joinTokenProgram.isWritable
+      )
+        throw new GameTransactionValidationError("Creator join uses an invalid token program");
+      if (
+        !joinAssociatedTokenProgram.pubkey.equals(ASSOCIATED_TOKEN_PROGRAM_ID) ||
+        joinAssociatedTokenProgram.isSigner ||
+        joinAssociatedTokenProgram.isWritable
+      )
+        throw new GameTransactionValidationError(
+          "Creator join uses an invalid associated token program",
+        );
+      if (
+        !joinPlayerTokenAccount.pubkey.equals(expectedCreatorTokenAccount) ||
+        joinPlayerTokenAccount.isSigner ||
+        !joinPlayerTokenAccount.isWritable
+      )
+        throw new GameTransactionValidationError(
+          "Creator join uses an invalid player token account",
+        );
+      if (!joinOracle.pubkey.equals(expectedOracle) || joinOracle.isSigner || joinOracle.isWritable)
         throw new GameTransactionValidationError("Creator join uses an invalid oracle account");
     }
 
@@ -644,6 +797,53 @@ export class OracleService {
     }
     this.db.markSecretKeySigned(expectedGame.toBase58());
     return serialized;
+  }
+
+  private assertCreationPolicy(tokenMint: PublicKey, amount: bigint): void {
+    const mint = tokenMint.toBase58();
+    let policy;
+    try {
+      policy = this.db.getTokenPolicy(mint);
+    } catch (error) {
+      throw new CreationPolicyValidationError(
+        "policy_unavailable",
+        "Token creation policy is unavailable",
+        { mint },
+        { cause: error },
+      );
+    }
+
+    if (!policy) {
+      throw new CreationPolicyValidationError("unsupported_mint", "Token mint is not supported", {
+        mint,
+      });
+    }
+    if (!policy.enabled) {
+      throw new CreationPolicyValidationError("token_disabled", "Token mint is disabled", {
+        mint,
+        minimumAmountRaw: policy.minimumAmountRaw,
+        revision: policy.revision,
+      });
+    }
+    if (amount < BigInt(policy.minimumAmountRaw)) {
+      throw new CreationPolicyValidationError(
+        "amount_below_minimum",
+        "Game amount is below the token minimum",
+        {
+          mint,
+          minimumAmountRaw: policy.minimumAmountRaw,
+          revision: policy.revision,
+        },
+      );
+    }
+  }
+
+  public getTokenPolicies(): TokenPolicy[] {
+    return this.db.getTokenPolicies().map(toApiTokenPolicy);
+  }
+
+  public setTokenPolicy(mint: string, enabled: boolean, minimumAmountRaw: string): TokenPolicy {
+    return toApiTokenPolicy(this.db.setTokenPolicy(mint, enabled, minimumAmountRaw));
   }
 
   public async completeGame(

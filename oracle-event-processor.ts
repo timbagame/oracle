@@ -1014,6 +1014,10 @@ export const EVENT_HANDLER_CONFIG: ReadonlyArray<EventHandlerConfig<keyof TimbaE
     event: "gameClosed",
     createHandler: (ctx) => (event) => ctx.handleGameStatusChange("closed", event),
   },
+  {
+    event: "operatorGameClosed",
+    createHandler: (ctx) => (event) => ctx.handleGameStatusChange("closed", event),
+  },
 ];
 
 export { RegistrySyncScheduler };

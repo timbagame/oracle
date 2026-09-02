@@ -29,20 +29,26 @@ export class GameCompletionTransactionBuilder {
 
     const programId = ensurePublicKey(program.programId);
 
-    const { gamePda, oraclePda, gameTokenPda, gameVaultPda, winnerTokenAccount, gameTokenAccount } =
-      deriveGameAccounts({
-        programId,
-        randomHash: randomHashBuffer,
-        tokenMint,
-        winner: winnerAddress,
-        tokenProgramId: TOKEN_PROGRAM_ID,
-      });
-
-    const gameTokenCtx = {
+    const {
+      gamePda,
+      oraclePda,
+      gameVaultPda,
+      winnerTokenAccount,
+      gameVaultTokenAccount,
+      oracleOperatorTokenAccount,
+    } = deriveGameAccounts({
+      programId,
+      randomHash: randomHashBuffer,
       tokenMint,
-      gameToken: gameTokenPda,
+      winner: winnerAddress,
+      oracleOperator: this.options.operatorKeypair.publicKey,
+      tokenProgramId: TOKEN_PROGRAM_ID,
+    });
+
+    const gameVaultCtx = {
+      tokenMint,
       gameVault: gameVaultPda,
-      gameTokenAccount,
+      gameVaultTokenAccount,
       tokenProgram: TOKEN_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
     } as const;
@@ -55,8 +61,9 @@ export class GameCompletionTransactionBuilder {
         oracleOperator: this.options.operatorKeypair.publicKey,
         winner: winnerAddress,
         creator: creatorPublicKey,
-        gameTokenCtx,
+        gameVaultCtx,
         winnerTokenAccount,
+        oracleOperatorTokenAccount,
       })
       .signers([this.options.operatorKeypair]);
 
