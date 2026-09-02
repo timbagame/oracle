@@ -77,6 +77,6 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
     completeGameNow: completeGameNow ?? (async () => ({ success: false, notReady: true })),
     setAutoCompleteDisabled:
       setAutoCompleteDisabled ?? (() => ({ success: true, autoCompleteDisabled: false })),
-    getTokenPolicies: getTokenPolicies ?? (() => []),
+    getTokenPolicies: getTokenPolicies ?? (async () => []),
   };
 }

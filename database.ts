@@ -1,11 +1,7 @@
 import { Database } from "bun:sqlite";
 import { getConfig } from "./config.ts";
 import { logger } from "./logger.ts";
-import {
-  normalizeMinimumAmountRaw,
-  normalizeMint,
-  type StoredTokenPolicy,
-} from "./token-policy.ts";
+import { normalizeMint, normalizeTokenDecimals, type StoredTokenPolicy } from "./token-policy.ts";
 
 // Constants
 const DEFAULT_STATUS = "pending";
@@ -47,11 +43,12 @@ const SQL_STATEMENTS = Object.freeze({
     "UPDATE game_tracking SET status = ?, completed_at = NULL, last_checked = ? WHERE game_address = ?",
   setAutoCompleteDisabled:
     "UPDATE game_tracking SET auto_complete_disabled = ?, last_checked = ? WHERE game_address = ?",
-  upsertTokenPolicy: `INSERT INTO token_policies (mint, enabled, minimum_amount_raw, revision, effective_at)
-    VALUES (?, ?, ?, 1, ?)
+  upsertTokenPolicy: `INSERT INTO token_policies (mint, enabled, minimum_amount_raw, decimals, revision, effective_at)
+    VALUES (?, ?, '0', ?, 1, ?)
     ON CONFLICT(mint) DO UPDATE SET
       enabled = excluded.enabled,
-      minimum_amount_raw = excluded.minimum_amount_raw,
+      minimum_amount_raw = '0',
+      decimals = excluded.decimals,
       revision = token_policies.revision + 1,
       effective_at = excluded.effective_at`,
 } satisfies Record<string, string>);
@@ -89,9 +86,9 @@ const SQL_QUERIES = Object.freeze({
   selectPlayerTicketStats:
     "SELECT COUNT(*) as count, MAX(ticket_index) as max_index, MIN(ticket_index) as min_index FROM game_players WHERE game_address = ?",
   selectTokenPolicy:
-    "SELECT mint, enabled, minimum_amount_raw, revision, effective_at FROM token_policies WHERE mint = ?",
+    "SELECT mint, enabled, decimals, revision, effective_at FROM token_policies WHERE mint = ?",
   selectTokenPolicies:
-    "SELECT mint, enabled, minimum_amount_raw, revision, effective_at FROM token_policies ORDER BY mint ASC",
+    "SELECT mint, enabled, decimals, revision, effective_at FROM token_policies ORDER BY mint ASC",
 } satisfies Record<string, string>);
 
 const COMPLETED_GAME_SUBQUERY = `
@@ -187,7 +184,8 @@ const TABLE_DEFINITIONS: ReadonlyArray<{
       CREATE TABLE IF NOT EXISTS token_policies (
         mint TEXT PRIMARY KEY,
         enabled BOOLEAN NOT NULL,
-        minimum_amount_raw TEXT NOT NULL,
+        minimum_amount_raw TEXT NOT NULL DEFAULT '0',
+        decimals INTEGER NOT NULL CHECK (decimals >= 0 AND decimals <= 15),
         revision INTEGER NOT NULL CHECK (revision > 0),
         effective_at INTEGER NOT NULL
       )
@@ -322,6 +320,7 @@ export class OracleDatabase {
     this.ensureSecretSchema();
     this.ensureTicketSchema();
     this.ensureTrackingSchema();
+    this.ensureTokenPolicySchema();
     this.ensureTrackingIndexes();
   }
 
@@ -394,6 +393,25 @@ export class OracleDatabase {
         },
       ]);
     }
+  }
+
+  private ensureTokenPolicySchema(): void {
+    const tableInfo = this.db.query("PRAGMA table_info('token_policies')").all() as Array<{
+      name: string;
+    }>;
+    if (!tableInfo.some((column) => column.name === "decimals")) {
+      this.executeSchemaSteps([
+        {
+          sql: "ALTER TABLE token_policies ADD COLUMN decimals INTEGER",
+          log: "Adding decimals column to token_policies",
+          error: "Failed to add decimals column to token_policies",
+        },
+      ]);
+    }
+    this.runStatement(
+      "UPDATE token_policies SET enabled = FALSE, decimals = 0 WHERE decimals IS NULL",
+      "Failed to disable legacy token policies",
+    );
   }
 
   private executeDbOperation<T>(operation: () => T, errorMessage: string, defaultValue?: T): T {
@@ -732,10 +750,10 @@ export class OracleDatabase {
   public setTokenPolicy(
     mint: string,
     enabled: boolean,
-    minimumAmountRaw: string,
+    decimals: string | number,
   ): StoredTokenPolicy {
     const normalizedMint = normalizeMint(mint);
-    const normalizedMinimum = normalizeMinimumAmountRaw(minimumAmountRaw);
+    const normalizedDecimals = normalizeTokenDecimals(decimals);
     const effectiveAtMs = Date.now();
 
     this.runStatement(
@@ -743,7 +761,7 @@ export class OracleDatabase {
       `Failed to update token policy for ${normalizedMint}`,
       normalizedMint,
       enabled,
-      normalizedMinimum,
+      normalizedDecimals,
       effectiveAtMs,
     );
 
@@ -759,7 +777,7 @@ export class OracleDatabase {
     const row = this.queryOneStrict<{
       mint: string;
       enabled: number | boolean;
-      minimum_amount_raw: string;
+      decimals: number | null;
       revision: number;
       effective_at: number;
     }>(SQL_QUERIES.selectTokenPolicy, "Failed to get token policy", normalizedMint);
@@ -771,7 +789,7 @@ export class OracleDatabase {
     return this.queryAllStrict<{
       mint: string;
       enabled: number | boolean;
-      minimum_amount_raw: string;
+      decimals: number | null;
       revision: number;
       effective_at: number;
     }>(SQL_QUERIES.selectTokenPolicies, "Failed to list token policies").map((row) =>
@@ -782,14 +800,14 @@ export class OracleDatabase {
   private mapTokenPolicy(row: {
     mint: string;
     enabled: number | boolean;
-    minimum_amount_raw: string;
+    decimals: number | null;
     revision: number;
     effective_at: number;
   }): StoredTokenPolicy {
     return {
       mint: row.mint,
       enabled: Boolean(row.enabled),
-      minimumAmountRaw: row.minimum_amount_raw,
+      decimals: normalizeTokenDecimals(row.decimals ?? ""),
       revision: row.revision,
       effectiveAtMs: row.effective_at,
     };

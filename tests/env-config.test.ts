@@ -26,6 +26,8 @@ function resetEnv() {
     "ORACLE_KEYPAIR_PATH",
     "ORACLE_API_TOKEN",
     "ORACLE_API_TOKEN_FILE",
+    "JUPITER_API_KEY",
+    "JUPITER_API_KEY_FILE",
   ];
   for (const key of keys) {
     delete process.env[key];
@@ -152,6 +154,33 @@ describe("runtime config", () => {
       process.env["SOLANA_NETWORK"] = "https://rpc";
       process.env["ORACLE_API_TOKEN_FILE"] = file;
       expect(getConfig().apiToken).toBe("service-secret");
+
+      resetConfigForTesting();
+      chmodSync(file, 0o640);
+      expect(() => getConfig()).toThrow("insecure permissions");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes the Jupiter API key", () => {
+    process.env["SOLANA_NETWORK"] = "https://rpc";
+    process.env["JUPITER_API_KEY"] = "  jupiter-secret  ";
+    expect(getConfig().jupiterApiKey).toBe("jupiter-secret");
+
+    resetConfigForTesting();
+    process.env["JUPITER_API_KEY"] = "   ";
+    expect(getConfig().jupiterApiKey).toBeNull();
+  });
+
+  it("loads the Jupiter API key only from a protected regular file", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "jupiter-secret-"));
+    const file = path.join(dir, "token");
+    try {
+      writeFileSync(file, "jupiter-secret\n", { mode: 0o600 });
+      process.env["SOLANA_NETWORK"] = "https://rpc";
+      process.env["JUPITER_API_KEY_FILE"] = file;
+      expect(getConfig().jupiterApiKey).toBe("jupiter-secret");
 
       resetConfigForTesting();
       chmodSync(file, 0o640);

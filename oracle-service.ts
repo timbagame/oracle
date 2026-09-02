@@ -39,10 +39,15 @@ import {
 } from "./token-program.ts";
 import { GAME_VAULT_SEED } from "./oracle-accounts.ts";
 import {
+  computeMinimumAmountRaw,
+  normalizeMint,
+  normalizeTokenDecimals,
   toApiTokenPolicy,
   type CreationPolicyRejectionCode,
+  type StoredTokenPolicy,
   type TokenPolicy,
 } from "./token-policy.ts";
+import { JupiterTokenPriceResolver, type TokenPriceResolver } from "./token-price.ts";
 import { createRestClient } from "@timbagame/protocol/common";
 import { botContract } from "@timbagame/protocol/bot";
 
@@ -80,6 +85,7 @@ export class CreationPolicyValidationError extends GameTransactionValidationErro
     public readonly details: {
       mint?: string;
       minimumAmountRaw?: string;
+      acceptedMinimumAmountRaw?: string;
       revision?: number;
     } = {},
     options?: ErrorOptions,
@@ -104,14 +110,21 @@ export class OracleService {
   private readonly completion: GameCompletionManager;
   private readonly scanner: ScanLoopRunner;
   private readonly registrySync: PlayerRegistrySync;
+  private readonly tokenPriceResolver: TokenPriceResolver;
   public readonly readinessCache: Map<string, GameReadinessSnapshot>;
 
-  private constructor(db?: OracleDatabase, metrics?: OracleMetrics) {
+  private constructor(
+    db?: OracleDatabase,
+    metrics?: OracleMetrics,
+    tokenPriceResolver?: TokenPriceResolver,
+  ) {
     this.config = getConfig();
     this.db = db ?? OracleDatabase.getInstance();
     this.metrics = metrics ?? getOracleMetrics();
     this.rpcEndpointManager = this.initRpcEndpointManager();
     this.connection = this.rpcEndpointManager.getConnection();
+    this.tokenPriceResolver =
+      tokenPriceResolver ?? new JupiterTokenPriceResolver(this.config.jupiterApiKey);
     this.operatorKeypair = this.loadOperatorKeypair();
     this.program = this.initProgram();
     this.registrySync = this.initPlayerRegistrySync();
@@ -133,9 +146,9 @@ export class OracleService {
 
   public static createWith(
     db: OracleDatabase,
-    options: { metrics?: OracleMetrics } = {},
+    options: { metrics?: OracleMetrics; tokenPriceResolver?: TokenPriceResolver } = {},
   ): OracleService {
-    return new OracleService(db, options.metrics);
+    return new OracleService(db, options.metrics, options.tokenPriceResolver);
   }
 
   private initRpcEndpointManager(): RpcEndpointManager {
@@ -483,7 +496,7 @@ export class OracleService {
     };
   }
 
-  public signGameTransaction(txBase64: string): string {
+  public async signGameTransaction(txBase64: string): Promise<string> {
     if (!txBase64 || txBase64.length > 4_000) {
       throw new GameTransactionValidationError("Invalid transaction payload");
     }
@@ -671,8 +684,6 @@ export class OracleService {
     } catch (error) {
       throw new GameTransactionValidationError("Invalid game amount", { cause: error });
     }
-    this.assertCreationPolicy(tokenMint.pubkey, amount);
-
     const join = programInstructions[1];
     if (join) {
       if (!userSignedFirst)
@@ -803,6 +814,7 @@ export class OracleService {
         ({ publicKey }) => !publicKey.equals(oracleOperatorPlaceholder),
       );
     }
+    await this.assertCreationPolicy(tokenMint.pubkey, amount);
     let serialized: string;
     try {
       transaction.partialSign(this.operatorKeypair);
@@ -814,7 +826,15 @@ export class OracleService {
     return serialized;
   }
 
-  private assertCreationPolicy(tokenMint: PublicKey, amount: bigint): void {
+  private async resolveTokenPolicy(policy: StoredTokenPolicy): Promise<TokenPolicy> {
+    if (!policy.enabled) return toApiTokenPolicy(policy, 0n);
+    const prices = await this.tokenPriceResolver.getTokenUsdPrices([policy.mint]);
+    const priceUsd = prices.get(policy.mint);
+    if (priceUsd === undefined) throw new Error(`Token price is unavailable for ${policy.mint}`);
+    return toApiTokenPolicy(policy, computeMinimumAmountRaw(priceUsd, policy.decimals));
+  }
+
+  private async assertCreationPolicy(tokenMint: PublicKey, amount: bigint): Promise<void> {
     const mint = tokenMint.toBase58();
     let policy;
     try {
@@ -836,29 +856,71 @@ export class OracleService {
     if (!policy.enabled) {
       throw new CreationPolicyValidationError("token_disabled", "Token mint is disabled", {
         mint,
-        minimumAmountRaw: policy.minimumAmountRaw,
         revision: policy.revision,
       });
     }
-    if (amount < BigInt(policy.minimumAmountRaw)) {
+    let resolved: TokenPolicy;
+    try {
+      resolved = await this.resolveTokenPolicy(policy);
+    } catch (error) {
+      throw new CreationPolicyValidationError(
+        "policy_unavailable",
+        "Token creation policy is unavailable",
+        { mint, revision: policy.revision },
+        { cause: error },
+      );
+    }
+    if (amount < BigInt(resolved.acceptedMinimumAmountRaw)) {
       throw new CreationPolicyValidationError(
         "amount_below_minimum",
         "Game amount is below the token minimum",
         {
           mint,
-          minimumAmountRaw: policy.minimumAmountRaw,
+          minimumAmountRaw: resolved.minimumAmountRaw,
+          acceptedMinimumAmountRaw: resolved.acceptedMinimumAmountRaw,
           revision: policy.revision,
         },
       );
     }
   }
 
-  public getTokenPolicies(): TokenPolicy[] {
-    return this.db.getTokenPolicies().map(toApiTokenPolicy);
+  public async getTokenPolicies(): Promise<TokenPolicy[]> {
+    const policies = this.db.getTokenPolicies();
+    const enabled = policies.filter((policy) => policy.enabled);
+    let prices: Map<string, number>;
+    try {
+      prices = await this.tokenPriceResolver.getTokenUsdPrices(
+        enabled.map((policy) => policy.mint),
+      );
+    } catch (error) {
+      throw new Error("Token prices are unavailable", { cause: error });
+    }
+    return policies.map((policy) => {
+      if (!policy.enabled) return toApiTokenPolicy(policy, 0n);
+      const priceUsd = prices.get(policy.mint);
+      if (priceUsd === undefined) throw new Error(`Token price is unavailable for ${policy.mint}`);
+      return toApiTokenPolicy(policy, computeMinimumAmountRaw(priceUsd, policy.decimals));
+    });
   }
 
-  public setTokenPolicy(mint: string, enabled: boolean, minimumAmountRaw: string): TokenPolicy {
-    return toApiTokenPolicy(this.db.setTokenPolicy(mint, enabled, minimumAmountRaw));
+  public async setTokenPolicy(
+    mint: string,
+    enabled: boolean,
+    decimals: string | number,
+  ): Promise<TokenPolicy> {
+    const normalizedMint = normalizeMint(mint);
+    const normalizedDecimals = normalizeTokenDecimals(decimals);
+    let minimumAmountRaw = 0n;
+    if (enabled) {
+      const prices = await this.tokenPriceResolver.getTokenUsdPrices([normalizedMint]);
+      const priceUsd = prices.get(normalizedMint);
+      if (priceUsd === undefined)
+        throw new Error(`Token price is unavailable for ${normalizedMint}`);
+      minimumAmountRaw = computeMinimumAmountRaw(priceUsd, normalizedDecimals);
+    }
+
+    const policy = this.db.setTokenPolicy(normalizedMint, enabled, normalizedDecimals);
+    return toApiTokenPolicy(policy, minimumAmountRaw);
   }
 
   public async completeGame(

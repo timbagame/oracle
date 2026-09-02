@@ -96,11 +96,12 @@ describe("index router", () => {
   test("GET /token-policies returns the authenticated creation policy", async () => {
     const mint = Keypair.generate().publicKey.toBase58();
     const policyContext = await createIndexRouterTestContext("index-router-token-policy", {
-      getTokenPolicies: () => [
+      getTokenPolicies: async () => [
         {
           mint,
           enabled: true,
           minimumAmountRaw: "1000",
+          acceptedMinimumAmountRaw: "950",
           revision: 3,
           effectiveAt: "2026-09-02T00:00:00.000Z",
         },
@@ -149,7 +150,7 @@ describe("index router", () => {
 
   test("POST /sign-game-transaction returns the oracle-signed transaction", async () => {
     const signingContext = await createIndexRouterTestContext("index-router-sign", {
-      signGameTransaction: () => "BAUGBw==",
+      signGameTransaction: async () => "BAUGBw==",
     });
     try {
       const { response, json } = await executeJsonRequest(
@@ -196,12 +197,12 @@ describe("index router", () => {
     );
   });
 
-  test("production API exposes game transaction signing", () => {
+  test("production API exposes game transaction signing", async () => {
     const api = buildProductionOracleApi({
-      signGameTransaction: (txBase64: string) => `signed:${txBase64}`,
-    } as OracleService);
+      signGameTransaction: async (txBase64: string) => `signed:${txBase64}`,
+    } as unknown as OracleService);
 
-    expect(api.signGameTransaction?.("unsigned")).toBe("signed:unsigned");
+    await expect(api.signGameTransaction?.("unsigned")).resolves.toBe("signed:unsigned");
   });
 
   test("POST /sign-game-transaction requires a transaction", async () => {
@@ -250,7 +251,12 @@ describe("index router", () => {
         throw new CreationPolicyValidationError(
           "amount_below_minimum",
           "Game amount is below the token minimum",
-          { mint, minimumAmountRaw: "1000", revision: 4 },
+          {
+            mint,
+            minimumAmountRaw: "1000",
+            acceptedMinimumAmountRaw: "950",
+            revision: 4,
+          },
         );
       },
     });
@@ -271,6 +277,7 @@ describe("index router", () => {
         code: "amount_below_minimum",
         mint,
         minimumAmountRaw: "1000",
+        acceptedMinimumAmountRaw: "950",
         revision: 4,
       });
     } finally {

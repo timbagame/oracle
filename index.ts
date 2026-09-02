@@ -345,7 +345,7 @@ export function buildHandlers(oracle: OracleApi) {
         const { txBase64 } = parsed.data;
         txForDiagnostics = txBase64;
         return createContractResponse(SignGameTransactionResponseSchema, {
-          txBase64: oracle.signGameTransaction(txBase64),
+          txBase64: await oracle.signGameTransaction(txBase64),
         });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : "Invalid transaction";
@@ -380,7 +380,7 @@ export function buildHandlers(oracle: OracleApi) {
     async handleTokenPolicies(_request?: Request): Promise<Response> {
       try {
         return createContractResponse(TokenPoliciesResponseSchema, {
-          policies: oracle.getTokenPolicies(),
+          policies: await oracle.getTokenPolicies(),
         });
       } catch (error: unknown) {
         logger.failure("Error loading token policies:", error);

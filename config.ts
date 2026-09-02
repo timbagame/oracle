@@ -111,6 +111,7 @@ export interface OracleRuntimeConfig {
   readonly environment: string;
   readonly botInternalUrl: string | null;
   readonly apiToken: string | null;
+  readonly jupiterApiKey: string | null;
 }
 
 let cachedConfig: OracleRuntimeConfig | null = null;
@@ -171,6 +172,10 @@ function loadConfig(): OracleRuntimeConfig {
   const apiToken = apiTokenFile
     ? readProtectedSecret(apiTokenFile, "Oracle API token file")
     : readEnv("ORACLE_API_TOKEN")?.trim() || null;
+  const jupiterApiKeyFile = readEnv("JUPITER_API_KEY_FILE")?.trim();
+  const jupiterApiKey = jupiterApiKeyFile
+    ? readProtectedSecret(jupiterApiKeyFile, "Jupiter API key file")
+    : readEnv("JUPITER_API_KEY")?.trim() || null;
 
   return {
     solanaNetwork,
@@ -188,6 +193,7 @@ function loadConfig(): OracleRuntimeConfig {
     environment,
     botInternalUrl,
     apiToken,
+    jupiterApiKey,
   } as const;
 }
 

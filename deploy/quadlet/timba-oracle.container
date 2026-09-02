@@ -11,9 +11,11 @@ Network=timba.network
 EnvironmentFile=%h/timba/oracle/.env
 Environment=ORACLE_PORT=3001
 Environment=ORACLE_API_TOKEN_FILE=/run/secrets/oracle_api_token
+Environment=JUPITER_API_KEY_FILE=/run/secrets/jupiter_api_key
 Environment=OPERATOR_KEYPAIR_PATH=/run/secrets/operator_keypair.json
 Volume=%h/timba/oracle/operator-keypair.json:/run/secrets/operator_keypair.json:ro,Z
 Volume=%h/timba/oracle/secrets/oracle-api-token:/run/secrets/oracle_api_token:ro,Z
+Volume=%h/timba/oracle/secrets/jupiter-api-key:/run/secrets/jupiter_api_key:ro,Z
 Volume=%h/timba/oracle/oracle.sqlite:/app/oracle.sqlite:Z
 NoNewPrivileges=true
 DropCapability=all

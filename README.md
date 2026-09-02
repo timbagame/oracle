@@ -6,7 +6,7 @@ A robust Oracle service for Solana-based games that generates cryptographic secr
 
 - **🔑 Cryptographic Secret Generation**: Secure random secret generation for new games
 - **✍️ Initialization Approval**: Validates and partially signs creator-funded game transactions
-- **🪙 Creation Policy**: Stores and enforces enabled mints and minimum raw game amounts
+- **🪙 Creation Policy**: Stores enabled mints and enforces a live USD minimum
 - **🎯 Game Type Support**: Supports Coinflip and Giveaway games
 - **🎧 Event-Driven Completion**: Real-time game completion via Solana event listeners
 - **🔄 Fallback Scanning**: Periodic scanning as backup for missed events
@@ -50,10 +50,16 @@ All endpoints except `/health` and `/` require bearer authentication. Rootless P
 bun run admin requeue <game-address>
 bun run admin auto-complete <game-address> <on|off>
 bun run admin token-policy list
-bun run admin token-policy set <mint> <on|off> <minimum-amount-raw>
+bun run admin token-policy set <mint> <on|off> <token-decimals>
 ```
 
-The Oracle uses the Timba v0.3.0 IDL. Every initialization signature re-reads the durable policy for the transaction mint. Missing, disabled, and below-minimum policies are rejected with typed Protocol v0.4.0 errors.
+The Oracle uses the Timba v0.3.0 IDL. Every initialization signature re-reads
+the durable policy for the transaction mint. For enabled mints, it converts a
+USD 0.10 target to raw tokens with the current Jupiter price. It accepts up to
+5% below the recommendation so small price changes do not reject a recently
+quoted amount. Prices are cached for 60 seconds, and signing fails closed when a
+current price is unavailable. Missing, disabled, and below-minimum policies are
+rejected with typed Protocol v0.5.0 errors.
 
 ### Game Types Supported
 
@@ -109,6 +115,7 @@ SOLANA_NETWORK=["https://api.mainnet-beta.solana.com","https://rpc-backup.exampl
 # Optional: API server port (default: 3001)
 ORACLE_PORT=3001
 ORACLE_API_TOKEN=<shared-random-secret>
+JUPITER_API_KEY=<jupiter-api-key>
 
 # Optional: allow the service to generate an ephemeral operator keypair when the
 # configured keypair file is missing. This is automatically enabled during tests

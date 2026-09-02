@@ -10,15 +10,22 @@ Keep these files outside `.env` and set them to mode `600`:
 
 - `operator-keypair.json` (the shared bot/oracle operator)
 - `secrets/oracle-api-token`
+- `secrets/jupiter-api-key`
 
 The API token must match the Bot repository copy. The configured keypair must be the Oracle operator stored on chain.
 
 After starting the v0.3.0 Oracle and before activating Bot or Web game creation, define every supported mint in the durable Oracle database. A missing policy disables game creation for that mint:
 
 ```bash
-podman exec oracle bun run admin token-policy set <mint> on <minimum-amount-raw>
+podman exec oracle bun run admin token-policy set <mint> on <token-decimals>
 podman exec oracle bun run admin token-policy list
 ```
+
+Oracle uses the mint decimals and a live Jupiter price to publish a USD 0.10
+recommended minimum. It accepts 5% below that recommendation to tolerate a
+small price move after the user receives a quote. Prices are cached for no more
+than 60 seconds, and Oracle refuses to sign creation transactions if the current
+price is unavailable.
 
 ## Rootless Podman Quadlet
 
@@ -76,7 +83,7 @@ Administrative service commands also run inside the container:
 podman exec oracle bun run admin requeue <game-address>
 podman exec oracle bun run admin auto-complete <game-address> <on|off>
 podman exec oracle bun run admin token-policy list
-podman exec oracle bun run admin token-policy set <mint> <on|off> <minimum-amount-raw>
+podman exec oracle bun run admin token-policy set <mint> <on|off> <token-decimals>
 ```
 
 Monitor logs for subscription failures, `/stats` for completion activity, and the operator wallet balance for transaction fees.

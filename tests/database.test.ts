@@ -3,6 +3,7 @@ import { rmSync } from "fs";
 import { OracleDatabase } from "../database.ts";
 import { createTestEnv } from "./helpers/create-test-env.ts";
 import { Keypair } from "@solana/web3.js";
+import { Database as SqliteDatabase } from "bun:sqlite";
 
 let testEnv: Awaited<ReturnType<typeof createTestEnv>>;
 
@@ -171,30 +172,55 @@ describe("OracleDatabase", () => {
     const db = OracleDatabase.getInstance();
     const mint = Keypair.generate().publicKey.toBase58();
 
-    const initial = db.setTokenPolicy(mint, true, "1000");
-    expect(initial).toMatchObject({ mint, enabled: true, minimumAmountRaw: "1000", revision: 1 });
+    const initial = db.setTokenPolicy(mint, true, "6");
+    expect(initial).toMatchObject({ mint, enabled: true, decimals: 6, revision: 1 });
     expect(Number.isFinite(initial.effectiveAtMs)).toBe(true);
 
-    const updated = db.setTokenPolicy(mint, false, "2500");
-    expect(updated).toMatchObject({ mint, enabled: false, minimumAmountRaw: "2500", revision: 2 });
+    const updated = db.setTokenPolicy(mint, false, "9");
+    expect(updated).toMatchObject({ mint, enabled: false, decimals: 9, revision: 2 });
 
     db.close();
     const reopened = OracleDatabase.getInstance();
     expect(reopened.getTokenPolicies()).toEqual([updated]);
   });
 
+  it("migrates fixed-minimum policies to a disabled state until they are reseeded", () => {
+    const mint = Keypair.generate().publicKey.toBase58();
+    const legacy = new SqliteDatabase(testEnv.tempDb.path);
+    legacy.run(`CREATE TABLE token_policies (
+      mint TEXT PRIMARY KEY,
+      enabled BOOLEAN NOT NULL,
+      minimum_amount_raw TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      effective_at INTEGER NOT NULL
+    )`);
+    legacy.run("INSERT INTO token_policies VALUES (?, TRUE, '1000', 4, 123)", [mint]);
+    legacy.close();
+
+    expect(OracleDatabase.getInstance().getTokenPolicy(mint)).toEqual({
+      mint,
+      enabled: false,
+      decimals: 0,
+      revision: 4,
+      effectiveAtMs: 123,
+    });
+  });
+
   it("rejects invalid token policy values", () => {
     const db = OracleDatabase.getInstance();
     const mint = Keypair.generate().publicKey.toBase58();
 
-    expect(() => db.setTokenPolicy("not-a-mint", true, "1")).toThrow(
+    expect(() => db.setTokenPolicy("not-a-mint", true, "6")).toThrow(
       "mint must be a valid Solana address",
     );
     expect(() => db.setTokenPolicy(mint, true, "-1")).toThrow(
-      "minimum amount must be a non-negative integer",
+      "token decimals must be an integer from 0 to 15",
     );
-    expect(() => db.setTokenPolicy(mint, true, "18446744073709551616")).toThrow(
-      "minimum amount exceeds u64",
+    expect(() => db.setTokenPolicy(mint, true, "16")).toThrow(
+      "token decimals must be an integer from 0 to 15",
+    );
+    expect(() => db.setTokenPolicy(mint, true, "1e1")).toThrow(
+      "token decimals must be an integer from 0 to 15",
     );
   });
 

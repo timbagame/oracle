@@ -118,9 +118,11 @@ function serializeUnsigned(transaction: Transaction): string {
     .toString("base64");
 }
 
-function captureError(operation: () => unknown): Error & { code?: string } {
+async function captureError(
+  operation: () => unknown | Promise<unknown>,
+): Promise<Error & { code?: string }> {
   try {
-    operation();
+    await operation();
   } catch (error) {
     return error as Error & { code?: string };
   }
@@ -129,11 +131,17 @@ function captureError(operation: () => unknown): Error & { code?: string } {
 
 let OracleService: OracleServiceClass;
 let OracleDatabase: OracleDatabaseClass;
+let testService: OracleServiceInstance;
 let cleanup: () => void;
 
 beforeAll(async () => {
   const env = await setupOracleServiceEnv("oracle-service-test");
   ({ OracleService, OracleDatabase } = env);
+  testService = OracleService.createWith(OracleDatabase.getInstance(), {
+    tokenPriceResolver: {
+      getTokenUsdPrices: async (mints) => new Map(mints.map((mint) => [mint, 1])),
+    },
+  });
   cleanup = env.cleanup;
 });
 
@@ -142,31 +150,41 @@ afterAll(() => {
 });
 
 describe("OracleService", () => {
-  it("enforces the current durable token policy on every initialization signature", () => {
-    const service = OracleService.getInstance();
+  it("enforces the current dynamic token policy with a five-percent grace band", async () => {
+    const service = testService;
     service.cleanupOldRecords(-1);
     const db = OracleDatabase.getInstance();
     const { tokenMint, transaction } = buildInitializeTransaction(service);
 
     expect(
-      captureError(() => service.signGameTransaction(serializeUnsigned(transaction))),
+      await captureError(() => service.signGameTransaction(serializeUnsigned(transaction))),
     ).toMatchObject({ code: "unsupported_mint", message: "Token mint is not supported" });
 
-    db.setTokenPolicy(tokenMint.toBase58(), false, "1");
+    db.setTokenPolicy(tokenMint.toBase58(), false, "0");
     expect(
-      captureError(() => service.signGameTransaction(serializeUnsigned(transaction))),
+      await captureError(() => service.signGameTransaction(serializeUnsigned(transaction))),
     ).toMatchObject({ code: "token_disabled", message: "Token mint is disabled" });
 
-    db.setTokenPolicy(tokenMint.toBase58(), true, "2");
+    db.setTokenPolicy(tokenMint.toBase58(), true, "3");
+    await expect(service.getTokenPolicies()).resolves.toContainEqual(
+      expect.objectContaining({
+        mint: tokenMint.toBase58(),
+        minimumAmountRaw: "100",
+        acceptedMinimumAmountRaw: "95",
+      }),
+    );
     expect(
-      captureError(() => service.signGameTransaction(serializeUnsigned(transaction))),
+      await captureError(() => service.signGameTransaction(serializeUnsigned(transaction))),
     ).toMatchObject({
       code: "amount_below_minimum",
       message: "Game amount is below the token minimum",
+      details: { minimumAmountRaw: "100", acceptedMinimumAmountRaw: "95" },
     });
 
-    db.setTokenPolicy(tokenMint.toBase58(), true, "1");
-    expect(() => service.signGameTransaction(serializeUnsigned(transaction))).not.toThrow();
+    const graceAmount = buildInitializeTransaction(service, { tokenMint, amount: 95 });
+    await expect(
+      service.signGameTransaction(serializeUnsigned(graceAmount.transaction)),
+    ).resolves.toEqual(expect.any(String));
 
     const unavailable = buildInitializeTransaction(service, { tokenMint });
     const policyLookup = spyOn(db, "getTokenPolicy").mockImplementation(() => {
@@ -174,7 +192,9 @@ describe("OracleService", () => {
     });
     try {
       expect(
-        captureError(() => service.signGameTransaction(serializeUnsigned(unavailable.transaction))),
+        await captureError(() =>
+          service.signGameTransaction(serializeUnsigned(unavailable.transaction)),
+        ),
       ).toMatchObject({
         code: "policy_unavailable",
         message: "Token creation policy is unavailable",
@@ -184,13 +204,28 @@ describe("OracleService", () => {
     }
   });
 
-  it("rejects durable-nonce initialization transactions", () => {
-    const service = OracleService.getInstance();
+  it("does not persist an enabled policy when its live price is unavailable", async () => {
+    const db = OracleDatabase.getInstance();
+    const mint = Keypair.generate().publicKey.toBase58();
+    const service = OracleService.createWith(db, {
+      tokenPriceResolver: {
+        getTokenUsdPrices: async () => {
+          throw new Error("price unavailable");
+        },
+      },
+    });
+
+    await expect(service.setTokenPolicy(mint, true, 6)).rejects.toThrow("price unavailable");
+    expect(db.getTokenPolicy(mint)).toBeNull();
+  });
+
+  it("rejects durable-nonce initialization transactions", async () => {
+    const service = testService;
     service.cleanupOldRecords(-1);
     const db = OracleDatabase.getInstance();
     const { tokenMint, transaction } = buildInitializeTransaction(service);
     const creator = transaction.feePayer!;
-    db.setTokenPolicy(tokenMint.toBase58(), true, "1");
+    db.setTokenPolicy(tokenMint.toBase58(), true, "0");
     transaction.instructions.unshift(
       SystemProgram.nonceAdvance({
         noncePubkey: Keypair.generate().publicKey,
@@ -198,17 +233,17 @@ describe("OracleService", () => {
       }),
     );
 
-    expect(() => service.signGameTransaction(serializeUnsigned(transaction))).toThrow(
+    await expect(service.signGameTransaction(serializeUnsigned(transaction))).rejects.toThrow(
       "Durable nonce transactions are not supported",
     );
   });
 
-  it("continues to allow ordinary System Program setup instructions", () => {
-    const service = OracleService.getInstance();
+  it("continues to allow ordinary System Program setup instructions", async () => {
+    const service = testService;
     service.cleanupOldRecords(-1);
     const db = OracleDatabase.getInstance();
     const { tokenMint, transaction } = buildInitializeTransaction(service);
-    db.setTokenPolicy(tokenMint.toBase58(), true, "1");
+    db.setTokenPolicy(tokenMint.toBase58(), true, "0");
     transaction.instructions.unshift(
       SystemProgram.transfer({
         fromPubkey: transaction.feePayer!,
@@ -217,24 +252,26 @@ describe("OracleService", () => {
       }),
     );
 
-    expect(() => service.signGameTransaction(serializeUnsigned(transaction))).not.toThrow();
+    await expect(service.signGameTransaction(serializeUnsigned(transaction))).resolves.toEqual(
+      expect.any(String),
+    );
   });
 
-  it("rejects a v0.3 initialization with a substituted vault account", () => {
-    const service = OracleService.getInstance();
+  it("rejects a v0.3 initialization with a substituted vault account", async () => {
+    const service = testService;
     service.cleanupOldRecords(-1);
     const db = OracleDatabase.getInstance();
     const { tokenMint, transaction } = buildInitializeTransaction(service);
-    db.setTokenPolicy(tokenMint.toBase58(), true, "1");
+    db.setTokenPolicy(tokenMint.toBase58(), true, "0");
     transaction.instructions[0]!.keys[5]!.pubkey = Keypair.generate().publicKey;
 
-    expect(() => service.signGameTransaction(serializeUnsigned(transaction))).toThrow(
+    await expect(service.signGameTransaction(serializeUnsigned(transaction))).rejects.toThrow(
       "Invalid game vault account",
     );
   });
 
-  it("replaces and signs a distinct initialize-game operator placeholder", () => {
-    const service = OracleService.getInstance();
+  it("replaces and signs a distinct initialize-game operator placeholder", async () => {
+    const service = testService;
     service.cleanupOldRecords(-1);
     const { randomHash, gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
     const program = (service as any).program as anchor.Program;
@@ -254,7 +291,7 @@ describe("OracleService", () => {
       TOKEN_PROGRAM_ID,
     );
     const creatorTokenAccount = deriveAssociatedTokenAddress(tokenMint, creator.publicKey);
-    OracleDatabase.getInstance().setTokenPolicy(tokenMint.toBase58(), true, "1");
+    OracleDatabase.getInstance().setTokenPolicy(tokenMint.toBase58(), true, "0");
     const data = new anchor.BorshInstructionCoder(program.idl).encode("initializeGame", {
       config: {
         gameType: { coinflip: {} },
@@ -288,7 +325,7 @@ describe("OracleService", () => {
       recentBlockhash: PublicKey.default.toBase58(),
     }).add(instruction);
 
-    const signedBase64 = service.signGameTransaction(
+    const signedBase64 = await service.signGameTransaction(
       transaction
         .serialize({ requireAllSignatures: false, verifySignatures: false })
         .toString("base64"),
@@ -304,8 +341,8 @@ describe("OracleService", () => {
     ).not.toBeNull();
   });
 
-  it("signs an atomic private-game creator join", () => {
-    const service = OracleService.getInstance();
+  it("signs an atomic private-game creator join", async () => {
+    const service = testService;
     service.cleanupOldRecords(-1);
     const { randomHash, gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
     const program = (service as any).program as anchor.Program;
@@ -324,7 +361,7 @@ describe("OracleService", () => {
       TOKEN_PROGRAM_ID,
     );
     const creatorTokenAccount = deriveAssociatedTokenAddress(tokenMint, creator.publicKey);
-    OracleDatabase.getInstance().setTokenPolicy(tokenMint.toBase58(), true, "1");
+    OracleDatabase.getInstance().setTokenPolicy(tokenMint.toBase58(), true, "0");
     const initialize = new TransactionInstruction({
       programId: program.programId,
       data: new anchor.BorshInstructionCoder(program.idl).encode("initializeGame", {
@@ -393,7 +430,7 @@ describe("OracleService", () => {
 
     const signed = Transaction.from(
       Buffer.from(
-        service.signGameTransaction(
+        await service.signGameTransaction(
           transaction
             .serialize({ requireAllSignatures: false, verifySignatures: false })
             .toString("base64"),
