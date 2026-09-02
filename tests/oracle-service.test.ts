@@ -184,6 +184,42 @@ describe("OracleService", () => {
     }
   });
 
+  it("rejects durable-nonce initialization transactions", () => {
+    const service = OracleService.getInstance();
+    service.cleanupOldRecords(-1);
+    const db = OracleDatabase.getInstance();
+    const { tokenMint, transaction } = buildInitializeTransaction(service);
+    const creator = transaction.feePayer!;
+    db.setTokenPolicy(tokenMint.toBase58(), true, "1");
+    transaction.instructions.unshift(
+      SystemProgram.nonceAdvance({
+        noncePubkey: Keypair.generate().publicKey,
+        authorizedPubkey: creator,
+      }),
+    );
+
+    expect(() => service.signGameTransaction(serializeUnsigned(transaction))).toThrow(
+      "Durable nonce transactions are not supported",
+    );
+  });
+
+  it("continues to allow ordinary System Program setup instructions", () => {
+    const service = OracleService.getInstance();
+    service.cleanupOldRecords(-1);
+    const db = OracleDatabase.getInstance();
+    const { tokenMint, transaction } = buildInitializeTransaction(service);
+    db.setTokenPolicy(tokenMint.toBase58(), true, "1");
+    transaction.instructions.unshift(
+      SystemProgram.transfer({
+        fromPubkey: transaction.feePayer!,
+        toPubkey: Keypair.generate().publicKey,
+        lamports: 1,
+      }),
+    );
+
+    expect(() => service.signGameTransaction(serializeUnsigned(transaction))).not.toThrow();
+  });
+
   it("rejects a v0.3 initialization with a substituted vault account", () => {
     const service = OracleService.getInstance();
     service.cleanupOldRecords(-1);

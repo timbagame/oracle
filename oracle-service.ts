@@ -1,5 +1,5 @@
 import * as anchor from "@anchor-lang/core";
-import { ComputeBudgetProgram, PublicKey, SystemProgram } from "@solana/web3.js";
+import { ComputeBudgetProgram, PublicKey, SystemInstruction, SystemProgram } from "@solana/web3.js";
 import { randomBytes, createHash } from "crypto";
 import * as fs from "fs";
 import {
@@ -499,6 +499,21 @@ export class OracleService {
       throw new GameTransactionValidationError(
         "Transaction must include a fee payer and recent blockhash",
       );
+    }
+
+    const firstInstruction = transaction.instructions[0];
+    if (firstInstruction?.programId.equals(SystemProgram.programId)) {
+      let instructionType: ReturnType<typeof SystemInstruction.decodeInstructionType>;
+      try {
+        instructionType = SystemInstruction.decodeInstructionType(firstInstruction);
+      } catch (error) {
+        throw new GameTransactionValidationError("Invalid system setup instruction", {
+          cause: error,
+        });
+      }
+      if (instructionType === "AdvanceNonceAccount") {
+        throw new GameTransactionValidationError("Durable nonce transactions are not supported");
+      }
     }
 
     const programInstructions = transaction.instructions.filter((instruction) =>
