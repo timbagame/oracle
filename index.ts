@@ -27,6 +27,9 @@ import {
   SignGameTransactionRequestSchema,
   SignGameTransactionResponseSchema,
 } from "@timbagame/protocol/oracle";
+import { IndexerDatabase } from "./indexer/database.ts";
+import { PublicIndexer } from "./indexer/service.ts";
+import { createIndexerApi } from "./indexer/api.ts";
 
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
 const IS_TEST_ENV = process.env["TIMBA_ORACLE_TEST_RUNNER"] === "true" || isTestEnvironment();
@@ -102,6 +105,7 @@ type HttpMethod = "GET" | "POST";
 let server: ReturnType<typeof Bun.serve> | undefined;
 let backgroundLoop: Promise<void> | undefined;
 let backgroundAbortController: AbortController | undefined;
+let indexerDatabase: IndexerDatabase | undefined;
 
 async function abortBackgroundLoop(): Promise<void> {
   backgroundAbortController?.abort();
@@ -165,6 +169,8 @@ async function stopServer(oracle: OracleApi, exitCode?: number): Promise<void> {
   await server?.stop();
   await abortBackgroundLoop();
   await closeOracle(oracle);
+  indexerDatabase?.close();
+  indexerDatabase = undefined;
 
   if (exitCode !== undefined && !IS_TEST_ENV) {
     process.exit(exitCode);
@@ -703,6 +709,7 @@ export interface RouterSecurityOptions {
   apiToken?: string | null;
   checkRateLimit?: (path: string) => RateLimitResult;
   enableAdminRoutesForTesting?: boolean;
+  handleIndexerRequest?: (request: Request) => Promise<Response>;
 }
 
 export function buildFetchRouter(
@@ -720,7 +727,8 @@ export function buildFetchRouter(
       return createHtmlResponse(API_DOCUMENTATION);
     }
 
-    if (PROTECTED_ROUTES.has(path) && security.apiToken !== undefined) {
+    const isIndexerRoute = path === "/indexer" || path.startsWith("/indexer/");
+    if ((PROTECTED_ROUTES.has(path) || isIndexerRoute) && security.apiToken !== undefined) {
       if (
         !security.apiToken ||
         !hasValidBearerToken(request.headers.get("authorization"), security.apiToken)
@@ -737,6 +745,10 @@ export function buildFetchRouter(
     }
 
     try {
+      if (isIndexerRoute && security.handleIndexerRequest) {
+        return await security.handleIndexerRequest(request);
+      }
+
       const route =
         ROUTE_METADATA.find((entry) => entry.path === path && entry.method === method) ??
         (security.enableAdminRoutesForTesting
@@ -788,9 +800,20 @@ if (!IS_TEST_ENV) {
   }
 
   const realOracle = OracleService.getInstance();
+  indexerDatabase = new IndexerDatabase(config.indexerDatabaseFile);
+  const publicIndexer = new PublicIndexer(
+    indexerDatabase,
+    realOracle.getConnection(),
+    realOracle.getProgramId(),
+    config.indexerPollIntervalMs,
+  );
+  const handleIndexerRequest = createIndexerApi(indexerDatabase, config.jupiterApiKey);
   const oracleApi = buildProductionOracleApi(realOracle);
   const handlers = buildHandlers(oracleApi);
-  const fetchRouter = buildFetchRouter(handlers, { apiToken: config.apiToken });
+  const fetchRouter = buildFetchRouter(handlers, {
+    apiToken: config.apiToken,
+    handleIndexerRequest,
+  });
   server = Bun.serve({
     port,
     maxRequestBodySize: MAX_REQUEST_BODY_BYTES,
@@ -843,7 +866,8 @@ if (!IS_TEST_ENV) {
       }
     };
 
-    backgroundLoop = runBackgroundLoop()
+    backgroundLoop = Promise.all([runBackgroundLoop(), publicIndexer.run(signal)])
+      .then(() => undefined)
       .catch((error) => {
         if (!signal.aborted) {
           logger.failure("Unhandled error in background scan supervisor:", error);
