@@ -21,4 +21,13 @@ describe("oracle API security", () => {
     now += 1_000;
     expect(limit("/generate-hash").allowed).toBe(true);
   });
+
+  test("caps public indexer traffic before it reaches SQLite", () => {
+    const limit = createRouteRateLimiter(() => 1_000);
+
+    for (let index = 0; index < 100; index += 1) {
+      expect(limit("/indexer/api/player-profile").allowed).toBe(true);
+    }
+    expect(limit("/indexer/api/player-profile").allowed).toBe(false);
+  });
 });

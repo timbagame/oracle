@@ -18,6 +18,16 @@ The service uses two independent SQLite files. `oracle.sqlite` contains secrets 
 
 ## One-time D1 migration
 
+First confirm that the existing Worker's historical backfill reports `complete: true`:
+
+```bash
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer $INDEXER_CRON_SECRET" \
+  https://<indexer-worker-url>/api/backfill
+```
+
+Do not continue with an incomplete backfill. The importer enforces this so player profiles and history cannot be silently truncated.
+
 Export the remote D1 database before switching Web traffic. From the old Web checkout:
 
 ```bash

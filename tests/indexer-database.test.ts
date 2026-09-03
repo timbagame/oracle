@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { Keypair } from "@solana/web3.js";
 import { IndexerDatabase } from "../indexer/database.ts";
 import { createIndexerApi } from "../indexer/api.ts";
 import type { IndexedEvents } from "../indexer/types.ts";
+import { createTempDatabaseFile } from "./helpers/test-db.ts";
 
 const databases: IndexerDatabase[] = [];
 afterEach(() => {
@@ -98,5 +100,49 @@ describe("IndexerDatabase", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ totalGames: 1, uniquePlayers: 1 });
+  });
+
+  test("migrates legacy active membership columns before creating indexes", () => {
+    const temporary = createTempDatabaseFile("indexer-legacy-membership");
+    try {
+      const legacy = new Database(temporary.path, { create: true, strict: true });
+      legacy.exec(`
+        CREATE TABLE active_game_players (
+          game_key TEXT NOT NULL, player TEXT NOT NULL, ticket_index INTEGER NOT NULL,
+          joined_at INTEGER NOT NULL, PRIMARY KEY (game_key, player)
+        );
+        CREATE INDEX idx_active_player ON active_game_players(player);
+        INSERT INTO active_game_players VALUES ('game', 'player', 0, 1000);
+      `);
+      legacy.close();
+
+      const migrated = new IndexerDatabase(temporary.path);
+      migrated.close();
+
+      const inspected = new Database(temporary.path, { readonly: true, strict: true });
+      expect(
+        inspected.query("SELECT is_joined, updated_slot FROM active_game_players").get(),
+      ).toEqual({ is_joined: 1, updated_slot: 0 });
+      const index = inspected
+        .query("SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_active_player'")
+        .get() as { sql: string } | null;
+      expect(index?.sql).toContain("player, is_joined");
+      inspected.close();
+    } finally {
+      temporary.cleanup();
+    }
+  });
+
+  test("rejects an import until historical player data is complete", () => {
+    const { database, events, completedSignature } = fixture();
+    database.apply(events, { signature: completedSignature, slot: 12 });
+
+    expect(() => database.assertD1ImportReady()).toThrow("historical backfill is incomplete");
+    database.importSql(`
+      INSERT INTO historical_backfill
+        (name, pages, transactions, initialized_events, closed_events, complete, updated_at)
+      VALUES ('game-lifecycle-v3-player-history', 1, 1, 1, 0, 1, 1000)
+    `);
+    expect(() => database.assertD1ImportReady()).not.toThrow();
   });
 });

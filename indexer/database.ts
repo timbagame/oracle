@@ -152,7 +152,35 @@ export class IndexerDatabase {
     this.sqlite.exec("PRAGMA journal_mode = WAL");
     this.sqlite.exec("PRAGMA foreign_keys = ON");
     this.sqlite.exec("PRAGMA busy_timeout = 5000");
+    this.migrateLegacySchema();
     this.sqlite.exec(SCHEMA);
+  }
+
+  private migrateLegacySchema(): void {
+    const table = this.sqlite
+      .query("SELECT 1 AS found FROM sqlite_master WHERE type='table' AND name=?")
+      .get("active_game_players");
+    if (!table) return;
+
+    const columns = new Set(
+      rows<{ name: string }>(this.sqlite.query("PRAGMA table_info(active_game_players)").all()).map(
+        (column) => column.name,
+      ),
+    );
+    let changed = false;
+    if (!columns.has("is_joined")) {
+      this.sqlite.exec(
+        "ALTER TABLE active_game_players ADD COLUMN is_joined INTEGER NOT NULL DEFAULT 1",
+      );
+      changed = true;
+    }
+    if (!columns.has("updated_slot")) {
+      this.sqlite.exec(
+        "ALTER TABLE active_game_players ADD COLUMN updated_slot INTEGER NOT NULL DEFAULT 0",
+      );
+      changed = true;
+    }
+    if (changed) this.sqlite.exec("DROP INDEX IF EXISTS idx_active_player");
   }
 
   close(): void {
@@ -166,6 +194,30 @@ export class IndexerDatabase {
   importSql(sql: string): void {
     this.sqlite.transaction(() => this.sqlite.exec(sql))();
     this.rebuildCaches();
+  }
+
+  assertD1ImportReady(): void {
+    const games = row<{ count: number }>(
+      this.sqlite
+        .query(
+          `SELECT COUNT(DISTINCT game_key) count FROM (
+             SELECT game_key FROM games UNION ALL
+             SELECT game_key FROM gameplay_events UNION ALL
+             SELECT game_key FROM active_games
+           )`,
+        )
+        .get(),
+    )?.count;
+    if ((games ?? 0) === 0) return;
+
+    const backfill = row<{ complete: number }>(
+      this.sqlite.query("SELECT complete FROM historical_backfill WHERE name=?").get(BACKFILL_NAME),
+    );
+    if (backfill?.complete !== 1) {
+      throw new Error(
+        "D1 historical backfill is incomplete; finish it in the existing Worker before exporting",
+      );
+    }
   }
 
   getCursor(): IndexerCursor | null {

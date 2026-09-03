@@ -3,6 +3,7 @@ import { timingSafeEqual } from "crypto";
 export const MAX_REQUEST_BODY_BYTES = 16 * 1024;
 
 const WINDOW_MS = 1_000;
+const INDEXER_ROUTE_LIMIT = 100;
 const ROUTE_LIMITS: Readonly<Record<string, number>> = {
   "/generate-hash": 20,
   "/sign-game-transaction": 20,
@@ -31,7 +32,9 @@ export function createRouteRateLimiter(
   const windows = new Map<string, { startedAt: number; count: number }>();
 
   return (path: string): RateLimitResult => {
-    const limit = ROUTE_LIMITS[path];
+    const limit =
+      ROUTE_LIMITS[path] ??
+      (path === "/indexer" || path.startsWith("/indexer/") ? INDEXER_ROUTE_LIMIT : undefined);
     if (limit === undefined) return { allowed: true };
 
     const currentTime = now();

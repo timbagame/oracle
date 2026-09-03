@@ -28,6 +28,7 @@ try {
 
   const indexer = new IndexerDatabase(temporary);
   try {
+    indexer.assertD1ImportReady();
     indexer.rebuildCaches();
   } finally {
     indexer.close();
