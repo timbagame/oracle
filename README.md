@@ -54,7 +54,7 @@ All endpoints except `/health` and `/` require bearer authentication. Rootless P
 bun run admin requeue <game-address>
 bun run admin auto-complete <game-address> <on|off>
 bun run admin token-policy list
-bun run admin token-policy set <mint> <on|off> <token-decimals>
+bun run admin token-policy set <mint> <on|off>
 ```
 
 The Oracle supports the Timba v0.2.0 and v0.3.0 IDLs. `CONTRACT_VERSION`
@@ -68,6 +68,10 @@ small price changes do not reject a recently quoted amount. Prices are cached
 for 60 seconds, and signing fails closed when a current price is unavailable.
 Missing, disabled, and below-minimum policies are rejected with typed Protocol
 errors.
+
+Enabling a token reads its decimals from the initialized legacy SPL mint and
+creates the Oracle operator's associated token account when it is missing. The
+operator pays that one-time account rent and transaction fee.
 
 ### Game Types Supported
 

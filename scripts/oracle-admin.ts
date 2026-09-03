@@ -6,7 +6,7 @@ function usage(): never {
       "  bun run admin requeue <game-address>\n" +
       "  bun run admin auto-complete <game-address> <on|off>\n" +
       "  bun run admin token-policy list\n" +
-      "  bun run admin token-policy set <mint> <on|off> <token-decimals>",
+      "  bun run admin token-policy set <mint> <on|off>",
   );
   process.exit(2);
 }
@@ -37,16 +37,16 @@ try {
       `Auto-complete ${result.autoCompleteDisabled ? "disabled" : "enabled"} for ${gameAddress}`,
     );
   } else if (command === "token-policy") {
-    const [action, mint, enabledValue, decimals] = args;
+    const [action, mint, enabledValue] = args;
     if (action === "list" && args.length === 1) {
       console.log(JSON.stringify(await oracle.getTokenPolicies(), null, 2));
     } else if (
       action === "set" &&
       mint &&
       (enabledValue === "on" || enabledValue === "off") &&
-      decimals
+      args.length === 3
     ) {
-      const policy = await oracle.setTokenPolicy(mint, enabledValue === "on", decimals);
+      const policy = await oracle.setTokenPolicy(mint, enabledValue === "on");
       console.log(JSON.stringify(policy, null, 2));
     } else {
       usage();

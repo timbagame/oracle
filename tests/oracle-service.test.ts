@@ -215,7 +215,7 @@ describe("OracleService", () => {
       },
     });
 
-    await expect(service.setTokenPolicy(mint, true, 6)).rejects.toThrow("price unavailable");
+    await expect(service.setTokenPolicy(mint, true)).rejects.toThrow("price unavailable");
     expect(db.getTokenPolicy(mint)).toBeNull();
   });
 

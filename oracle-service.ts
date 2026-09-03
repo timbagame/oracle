@@ -41,7 +41,6 @@ import { GAME_TOKEN_SEED, GAME_VAULT_SEED } from "./oracle-accounts.ts";
 import {
   computeMinimumAmountRaw,
   normalizeMint,
-  normalizeTokenDecimals,
   toApiTokenPolicy,
   type CreationPolicyRejectionCode,
   type StoredTokenPolicy,
@@ -50,6 +49,7 @@ import {
 import { JupiterTokenPriceResolver, type TokenPriceResolver } from "./token-price.ts";
 import { createRestClient } from "@timbagame/protocol/common";
 import { botContract } from "@timbagame/protocol/bot";
+import { prepareGameToken } from "./token-onboarding.ts";
 
 export { deriveGameAccounts, type DerivedGameAccounts } from "./oracle-accounts.ts";
 export {
@@ -950,19 +950,22 @@ export class OracleService {
     });
   }
 
-  public async setTokenPolicy(
-    mint: string,
-    enabled: boolean,
-    decimals: string | number,
-  ): Promise<TokenPolicy> {
+  public async setTokenPolicy(mint: string, enabled: boolean): Promise<TokenPolicy> {
     const normalizedMint = normalizeMint(mint);
-    const normalizedDecimals = normalizeTokenDecimals(decimals);
+    const existingPolicy = this.db.getTokenPolicy(normalizedMint);
+    let normalizedDecimals = existingPolicy?.decimals ?? 0;
     let minimumAmountRaw = 0n;
     if (enabled) {
       const prices = await this.tokenPriceResolver.getTokenUsdPrices([normalizedMint]);
       const priceUsd = prices.get(normalizedMint);
       if (priceUsd === undefined)
         throw new Error(`Token price is unavailable for ${normalizedMint}`);
+      const prepared = await prepareGameToken({
+        connection: this.connection,
+        operatorKeypair: this.operatorKeypair,
+        mint: new PublicKey(normalizedMint),
+      });
+      normalizedDecimals = prepared.decimals;
       minimumAmountRaw = computeMinimumAmountRaw(priceUsd, normalizedDecimals);
     }
 
