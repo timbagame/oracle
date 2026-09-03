@@ -7,7 +7,7 @@
       "dependencies": {
         "@anchor-lang/core": "1.1.2",
         "@solana/web3.js": "^1.98.4",
-        "@timbagame/protocol": "0.5.0",
+        "@timbagame/protocol": "0.5.1",
         "zod": "4.5.4",
       },
       "devDependencies": {
@@ -24,7 +24,6 @@
   },
   "overrides": {
     "uuid": "11.1.1",
-    "zod": "4.5.4",
   },
   "packages": {
     "@anchor-lang/borsh": ["@anchor-lang/borsh@1.1.2", "", { "dependencies": { "bn.js": "^5.2.3", "buffer-layout": "^1.2.0" }, "peerDependencies": { "@solana/web3.js": "^1.69.1" } }, "sha512-ilYszz4tZjBc2Kszdq/HIaiYozZuAl8ESUI/PvrHl5PvgaD5WPThVe44aDRcDDDY5Cz2Rdbqa+rlGwWW5i25cQ=="],
@@ -77,7 +76,7 @@
 
     "@swc/helpers": ["@swc/helpers@0.5.23", "", { "dependencies": { "tslib": "^2.8.0" } }, "sha512-5lSsMOTXURePglDfvuAQUqkGek9Hg2kksOYay2m0+XR++b2NWYL/4sWyuvVBIs8oKnJaxkdi9whaL/sqN13afw=="],
 
-    "@timbagame/protocol": ["@timbagame/protocol@0.5.0", "https://npm.pkg.github.com/download/@timbagame/protocol/0.5.0/eec51eb22a7fd79e508c5c5bed09b9b65a859813", { "dependencies": { "zod": "4.4.3" } }, "sha512-Rfcuo3zwryN8HNuOjRQnIACwQ2nASF5zUbYwK/cBz3ASUaqUYzqsuS+DGskHCBcGRw6oULpIYCknPmNY2gdSKw=="],
+    "@timbagame/protocol": ["@timbagame/protocol@0.5.1", "https://npm.pkg.github.com/download/@timbagame/protocol/0.5.1/cc9c336e8318dc9a4114624712a51fd51f06e3cc", { "dependencies": { "zod": "4.5.4" } }, "sha512-15aKxM7FM2Umma8rGmTdx6a1A3gFQ0c0IzpnYn21CD+DUYFK2CREBdZJfVWsB5uLf9C+EniNZZRK2PJL/2uDJw=="],
 
     "@types/bun": ["@types/bun@1.4.0", "", { "dependencies": { "bun-types": "1.4.0" } }, "sha512-K+lZULY23vRgK/CfTjFIV+tyifaNdSMlPh9j+6mQ/cLfpOznLyAuzgV/JQysyECpkBQLVMSyvjlr2fBUSA9wFQ=="],
 
