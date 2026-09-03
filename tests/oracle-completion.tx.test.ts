@@ -62,6 +62,7 @@ describe("GameCompletionManager.executeGameCompletion transaction handling", () 
     };
 
     const manager = new GameCompletionManager({
+      contractVersion: "0.3.0",
       db: mockDb as any,
       metrics: mockMetrics,
       getConnection: () => connection as any,

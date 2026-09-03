@@ -42,6 +42,7 @@ function resetSingleton(singleton: SingletonModule) {
 export function setupTestEnvironment(options: SetupOptions = {}): SetupResult {
   const tempDb = createTempDatabaseFile(options.prefix ?? "test-db");
   const additionalEnv = { ...options.env };
+  additionalEnv["CONTRACT_VERSION"] ??= "0.3.0";
   const registeredSingletons = new Set<SingletonModule>();
   let cleanedUp = false;
 

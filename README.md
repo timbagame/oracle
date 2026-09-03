@@ -25,7 +25,7 @@ The Oracle service uses a hybrid approach with performance optimizations:
 2. **Fallback**: Periodic scanning every 5 minutes for missed events
 3. **Database**: Persistent tracking of secrets and game states
 4. **Caching**: Local game metadata cache to avoid unnecessary blockchain calls
-5. **Public index**: Independent `indexer.sqlite` cursor and materialized statistics caches
+5. **Public index**: Independent `indexer.sqlite` cursor and materialized statistics caches, woken by the shared live subscription
 
 ### Performance Optimizations
 
@@ -57,13 +57,17 @@ bun run admin token-policy list
 bun run admin token-policy set <mint> <on|off> <token-decimals>
 ```
 
-The Oracle uses the Timba v0.3.0 IDL. Every initialization signature re-reads
-the durable policy for the transaction mint. For enabled mints, it converts a
-USD 0.10 target to raw tokens with the current Jupiter price. It accepts up to
-5% below the recommendation so small price changes do not reject a recently
-quoted amount. Prices are cached for 60 seconds, and signing fails closed when a
-current price is unavailable. Missing, disabled, and below-minimum policies are
-rejected with typed Protocol v0.5.0 errors.
+The Oracle supports the Timba v0.2.0 and v0.3.0 IDLs. `CONTRACT_VERSION`
+defaults to `0.2.0`, so this branch can run before the program upgrade. Change it
+to `0.3.0` only after the v0.3.0 program is deployed. In v0.2.0 mode, the
+contract's `GameToken` account enforces token creation policy. In v0.3.0 mode,
+every initialization signature re-reads the durable Oracle policy for the
+transaction mint. For enabled mints, it converts a USD 0.10 target to raw tokens
+with the current Jupiter price. It accepts up to 5% below the recommendation so
+small price changes do not reject a recently quoted amount. Prices are cached
+for 60 seconds, and signing fails closed when a current price is unavailable.
+Missing, disabled, and below-minimum policies are rejected with typed Protocol
+errors.
 
 ### Game Types Supported
 
@@ -116,13 +120,17 @@ Configure via environment variables in `.env`:
 # the ordered set automatically when it encounters transient RPC failures.
 SOLANA_NETWORK=["https://api.mainnet-beta.solana.com","https://rpc-backup.example.com"]
 
+# Keep 0.2.0 until the program upgrade; switch to 0.3.0 during migration.
+CONTRACT_VERSION=0.2.0
+
 # Optional: API server port (default: 3001)
 ORACLE_PORT=3001
 ORACLE_API_TOKEN=<shared-random-secret>
 
-# Public history database and polling interval
+# Public history database and missed-event recovery interval. Live program events
+# wake a prompt, coalesced cursor catch-up.
 INDEXER_DATABASE_FILE=./indexer.sqlite
-INDEXER_POLL_INTERVAL_MS=60000
+INDEXER_POLL_INTERVAL_MS=300000
 
 # Required in production for USD prices and dynamic minimum amounts
 JUPITER_API_KEY=<jupiter-api-key>

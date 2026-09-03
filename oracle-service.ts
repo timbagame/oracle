@@ -31,13 +31,13 @@ import type { PublicKeyLike } from "./solana-utils.ts";
 import { coercePublicKey, confirmTransaction } from "./solana-utils.ts";
 import { PlayerRegistrySync } from "./player-registry-sync.ts";
 import type { Timba } from "./idl/idlType.ts";
-import { contractIdl, contractVersion } from "./contract-idl.ts";
+import { getContractIdl } from "./contract-idl.ts";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   deriveAssociatedTokenAddress,
 } from "./token-program.ts";
-import { GAME_VAULT_SEED } from "./oracle-accounts.ts";
+import { GAME_TOKEN_SEED, GAME_VAULT_SEED } from "./oracle-accounts.ts";
 import {
   computeMinimumAmountRaw,
   normalizeMint,
@@ -172,6 +172,7 @@ export class OracleService {
 
   private initCompletion(): GameCompletionManager {
     return new GameCompletionManager({
+      contractVersion: this.config.contractVersion,
       db: this.db,
       metrics: this.metrics,
       getConnection: () => this.connection,
@@ -197,7 +198,10 @@ export class OracleService {
       db: this.db,
       tryAutoComplete: (gameKey, gameAddress, trigger) =>
         this.tryAutoComplete(gameKey ?? this.ensureGameKey(gameAddress), gameAddress, trigger),
-      config: EVENT_HANDLER_CONFIG,
+      config:
+        this.config.contractVersion === "0.2.0"
+          ? EVENT_HANDLER_CONFIG.filter(({ event }) => event !== "operatorGameClosed")
+          : EVENT_HANDLER_CONFIG,
       syncPlayerRegistry: (options) => this.syncPlayerRegistry(options),
       onGameFinalized: (gameAddress) => this.completion.resetRegistryPrefetchSchedule(gameAddress),
       playerEventFlushDebounceMs: this.config.playerEventFlushDebounceMs,
@@ -407,8 +411,11 @@ export class OracleService {
       commitment: "confirmed",
     });
     anchor.setProvider(provider);
-    logger.info(`Using Timba contract ABI ${contractVersion}`);
-    return new anchor.Program(contractIdl as Timba, provider) as anchor.Program<Timba>;
+    logger.info(`Using Timba contract ABI ${this.config.contractVersion}`);
+    return new anchor.Program(
+      getContractIdl(this.config.contractVersion) as Timba,
+      provider,
+    ) as anchor.Program<Timba>;
   }
 
   private initPlayerRegistrySync(): PlayerRegistrySync {
@@ -475,6 +482,10 @@ export class OracleService {
   public async stopEventListening(): Promise<void> {
     if (!this.eventProcessor.isListening()) return;
     await this.eventProcessor.stopListening();
+  }
+
+  public addProgramEventObserver(observer: () => void): () => void {
+    return this.eventProcessor.addProgramEventObserver(observer);
   }
 
   public async close(): Promise<void> {
@@ -558,7 +569,8 @@ export class OracleService {
         "Oracle only signs game initialization transactions",
       );
     }
-    if (initialize.keys.length !== 11) {
+    const usesLegacyGameToken = this.config.contractVersion === "0.2.0";
+    if (initialize.keys.length !== (usesLegacyGameToken ? 12 : 11)) {
       throw new GameTransactionValidationError("Invalid initialize-game account list");
     }
 
@@ -567,12 +579,14 @@ export class OracleService {
     const oracle = initialize.keys[2]!;
     const oracleOperator = initialize.keys[3]!;
     const tokenMint = initialize.keys[4]!;
-    const gameVault = initialize.keys[5]!;
-    const gameVaultTokenAccount = initialize.keys[6]!;
-    const tokenProgram = initialize.keys[7]!;
-    const associatedTokenProgram = initialize.keys[8]!;
-    const creatorTokenAccount = initialize.keys[9]!;
-    const systemProgram = initialize.keys[10]!;
+    const gameToken = usesLegacyGameToken ? initialize.keys[5]! : null;
+    const vaultOffset = usesLegacyGameToken ? 1 : 0;
+    const gameVault = initialize.keys[5 + vaultOffset]!;
+    const gameVaultTokenAccount = initialize.keys[6 + vaultOffset]!;
+    const tokenProgram = initialize.keys[7 + vaultOffset]!;
+    const associatedTokenProgram = initialize.keys[8 + vaultOffset]!;
+    const creatorTokenAccount = initialize.keys[9 + vaultOffset]!;
+    const systemProgram = initialize.keys[10 + vaultOffset]!;
     if (game.isSigner || !game.isWritable) {
       throw new GameTransactionValidationError("Invalid game account flags");
     }
@@ -598,6 +612,16 @@ export class OracleService {
 
     if (tokenMint.isSigner || tokenMint.isWritable) {
       throw new GameTransactionValidationError("Invalid token mint account flags");
+    }
+    const expectedGameToken = PublicKey.findProgramAddressSync(
+      [GAME_TOKEN_SEED, tokenMint.pubkey.toBuffer()],
+      this.program.programId,
+    )[0];
+    if (
+      gameToken &&
+      (!gameToken.pubkey.equals(expectedGameToken) || gameToken.isSigner || !gameToken.isWritable)
+    ) {
+      throw new GameTransactionValidationError("Invalid game token account");
     }
     const expectedGameVault = PublicKey.findProgramAddressSync(
       [GAME_VAULT_SEED, tokenMint.pubkey.toBuffer()],
@@ -706,19 +730,25 @@ export class OracleService {
           cause: error,
         });
       }
-      if (!decodedJoin || decodedJoin.name !== "joinGame" || join.keys.length !== 10) {
+      if (
+        !decodedJoin ||
+        decodedJoin.name !== "joinGame" ||
+        join.keys.length !== (usesLegacyGameToken ? 11 : 10)
+      ) {
         throw new GameTransactionValidationError("Invalid creator join instruction");
       }
       const joinGame = join.keys[0]!;
       const joinPlayer = join.keys[1]!;
       const optionalOperator = join.keys[2]!;
       const joinTokenMint = join.keys[3]!;
-      const joinGameVault = join.keys[4]!;
-      const joinGameVaultTokenAccount = join.keys[5]!;
-      const joinTokenProgram = join.keys[6]!;
-      const joinAssociatedTokenProgram = join.keys[7]!;
-      const joinPlayerTokenAccount = join.keys[8]!;
-      const joinOracle = join.keys[9]!;
+      const joinGameToken = usesLegacyGameToken ? join.keys[4]! : null;
+      const joinVaultOffset = usesLegacyGameToken ? 1 : 0;
+      const joinGameVault = join.keys[4 + joinVaultOffset]!;
+      const joinGameVaultTokenAccount = join.keys[5 + joinVaultOffset]!;
+      const joinTokenProgram = join.keys[6 + joinVaultOffset]!;
+      const joinAssociatedTokenProgram = join.keys[7 + joinVaultOffset]!;
+      const joinPlayerTokenAccount = join.keys[8 + joinVaultOffset]!;
+      const joinOracle = join.keys[9 + joinVaultOffset]!;
       const hasExpectedOperator = isPrivate
         ? optionalOperator.pubkey.equals(this.operatorKeypair.publicKey) &&
           optionalOperator.isSigner &&
@@ -746,6 +776,13 @@ export class OracleService {
         throw new GameTransactionValidationError(
           "Creator join token mint does not match initialization",
         );
+      if (
+        joinGameToken &&
+        (!joinGameToken.pubkey.equals(expectedGameToken) ||
+          joinGameToken.isSigner ||
+          !joinGameToken.isWritable)
+      )
+        throw new GameTransactionValidationError("Creator join uses an invalid game token");
       if (
         !joinGameVault.pubkey.equals(expectedGameVault) ||
         joinGameVault.isSigner ||
@@ -822,7 +859,9 @@ export class OracleService {
         ({ publicKey }) => !publicKey.equals(oracleOperatorPlaceholder),
       );
     }
-    await this.assertCreationPolicy(tokenMint.pubkey, amount);
+    if (!usesLegacyGameToken) {
+      await this.assertCreationPolicy(tokenMint.pubkey, amount);
+    }
     let serialized: string;
     try {
       transaction.partialSign(this.operatorKeypair);

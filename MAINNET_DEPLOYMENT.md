@@ -6,6 +6,10 @@ This guide covers only the Oracle service. Cross-project production operations a
 
 Copy `env.example` to `.env` and set the production values. `SOLANA_NETWORK` accepts a JSON array or comma-separated RPC list and fails over in order.
 
+Keep `CONTRACT_VERSION=0.2.0` while mainnet runs v0.2.0. After deploying the
+v0.3.0 program, set `CONTRACT_VERSION=0.3.0` before restarting the Oracle. The
+service validates the value and refuses unsupported versions.
+
 Keep these files outside `.env` and set them to mode `600`:
 
 - `operator-keypair.json` (the shared bot/oracle operator)
@@ -16,7 +20,7 @@ The API token must match the Bot repository copy. The configured keypair must be
 
 The service uses two independent SQLite files. `oracle.sqlite` contains secrets and completion state. `indexer.sqlite` contains only public chain history and cached statistics. Never replace one with the other.
 
-After starting the v0.3.0 Oracle and before activating Bot or Web game creation, define every supported mint in the durable Oracle database. A missing policy disables game creation for that mint:
+After switching the Oracle to v0.3.0 and before activating Bot or Web game creation, define every supported mint in the durable Oracle database. A missing policy disables game creation for that mint:
 
 ```bash
 podman exec oracle bun run admin token-policy set <mint> on <token-decimals>
@@ -59,7 +63,7 @@ chmod 600 indexer.sqlite secrets/jupiter-api-key
 systemctl --user start timba-oracle.service
 ```
 
-The imported Solana cursor lets the Oracle catch up every transaction after the export. Wait until `/indexer/api/stats` is current, then deploy Web. Keep the old D1 Worker until the Web smoke checks pass; it is no longer used after the Web cutover.
+The imported Solana cursor lets the Oracle catch up every transaction after the export. Live program events wake a coalesced cursor catch-up; `INDEXER_POLL_INTERVAL_MS` remains a five-minute recovery path with full active-game reconciliation for missed WebSocket events. Wait until `/indexer/api/stats` is current, then deploy Web. Keep the old D1 Worker until the Web smoke checks pass; it is no longer used after the Web cutover.
 
 ## Rootless Podman Quadlet
 

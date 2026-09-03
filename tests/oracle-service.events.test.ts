@@ -100,6 +100,32 @@ describe("OracleService event handling", () => {
     expect(service.events.getActiveListenerCount()).toBe(0);
   });
 
+  it("notifies public index observers from the shared live subscription", async () => {
+    const { db } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub);
+    let notifications = 0;
+    const unsubscribe = service.events.addProgramEventObserver(() => {
+      notifications += 1;
+    });
+
+    await service.startEventListening();
+    const initialized = programStub.addCalls.find(({ event }) => event === "gameInitialized")!;
+    initialized.handler({
+      gameKey: Keypair.generate().publicKey,
+      gameType: { coinflip: {} },
+    });
+    expect(notifications).toBe(1);
+
+    unsubscribe();
+    initialized.handler({
+      gameKey: Keypair.generate().publicKey,
+      gameType: { coinflip: {} },
+    });
+    expect(notifications).toBe(1);
+    await service.stopEventListening();
+  });
+
   it("awaits asynchronous event listener registration", async () => {
     const { db } = createDbStub();
     const programStub = createProgramStub({ asyncRegistration: true });
@@ -982,6 +1008,7 @@ function createService(
   };
 
   const completionManager = new GameCompletionManager({
+    contractVersion: "0.3.0",
     db: db as any,
     getProgram: () => programStub as any,
     getConnection: () => connectionStub as any,

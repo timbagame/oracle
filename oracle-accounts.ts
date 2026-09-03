@@ -4,11 +4,13 @@ import { deriveAssociatedTokenAddress } from "./token-program.ts";
 export const GAME_SEED = Buffer.from("game", "utf8");
 export const ORACLE_SEED = Buffer.from("oracle", "utf8");
 export const GAME_VAULT_SEED = Buffer.from("game_vault", "utf8");
+export const GAME_TOKEN_SEED = Buffer.from("game_token", "utf8");
 
 export interface DerivedGameAccounts {
   gamePda: PublicKey;
   oraclePda: PublicKey;
   gameVaultPda: PublicKey;
+  gameTokenPda: PublicKey;
   winnerTokenAccount: PublicKey;
   gameVaultTokenAccount: PublicKey;
   oracleOperatorTokenAccount: PublicKey;
@@ -34,6 +36,10 @@ export function deriveGameAccounts(params: {
     [GAME_VAULT_SEED, tokenMint.toBuffer()],
     programId,
   );
+  const [gameTokenPda] = PublicKey.findProgramAddressSync(
+    [GAME_TOKEN_SEED, tokenMint.toBuffer()],
+    programId,
+  );
   const winnerTokenAccount = deriveAssociatedTokenAddress(tokenMint, winner, false, tokenProgramId);
   const gameVaultTokenAccount = deriveAssociatedTokenAddress(
     tokenMint,
@@ -52,6 +58,7 @@ export function deriveGameAccounts(params: {
     gamePda: resolvedGamePda,
     oraclePda,
     gameVaultPda,
+    gameTokenPda,
     winnerTokenAccount,
     gameVaultTokenAccount,
     oracleOperatorTokenAccount,

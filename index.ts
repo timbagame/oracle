@@ -111,6 +111,7 @@ let server: ReturnType<typeof Bun.serve> | undefined;
 let backgroundLoop: Promise<void> | undefined;
 let backgroundAbortController: AbortController | undefined;
 let indexerDatabase: IndexerDatabase | undefined;
+let stopIndexerWake: (() => void) | undefined;
 
 async function abortBackgroundLoop(): Promise<void> {
   backgroundAbortController?.abort();
@@ -173,6 +174,8 @@ async function closeOracle(oracle: OracleApi): Promise<void> {
 async function stopServer(oracle: OracleApi, exitCode?: number): Promise<void> {
   await server?.stop();
   await abortBackgroundLoop();
+  stopIndexerWake?.();
+  stopIndexerWake = undefined;
   await closeOracle(oracle);
   indexerDatabase?.close();
   indexerDatabase = undefined;
@@ -844,6 +847,7 @@ if (!IS_TEST_ENV) {
     realOracle.getProgramId(),
     config.indexerPollIntervalMs,
   );
+  stopIndexerWake = realOracle.addProgramEventObserver(() => publicIndexer.requestCatchUp());
   const handleIndexerRequest = createIndexerApi(indexerDatabase, config.jupiterApiKey);
   const oracleApi = buildProductionOracleApi(realOracle);
   const handlers = buildHandlers(oracleApi);

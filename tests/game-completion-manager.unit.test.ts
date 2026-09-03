@@ -87,6 +87,7 @@ function createManager(
   const readinessCache = new Map<string, any>();
 
   const manager = new GameCompletionManager({
+    contractVersion: "0.3.0",
     db: db as any,
     metrics,
     getConnection: () => connection as any,
