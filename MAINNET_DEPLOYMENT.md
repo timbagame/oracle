@@ -10,8 +10,33 @@ Keep these files outside `.env` and set them to mode `600`:
 
 - `operator-keypair.json` (the shared bot/oracle operator)
 - `secrets/oracle-api-token`
+- `secrets/jupiter-api-key`
 
 The API token must match the Bot repository copy. The configured keypair must be the Oracle operator stored on chain.
+
+The service uses two independent SQLite files. `oracle.sqlite` contains secrets and completion state. `indexer.sqlite` contains only public chain history and cached statistics. Never replace one with the other.
+
+## One-time D1 migration
+
+Export the remote D1 database before switching Web traffic. From the old Web checkout:
+
+```bash
+bunx wrangler d1 export timba-games --remote \
+  --config workers/indexer/wrangler.toml \
+  --output timba-games.sql
+```
+
+Copy `timba-games.sql` to the VPS, stop the Oracle, and import it from the new Oracle checkout. The importer refuses to overwrite an existing target:
+
+```bash
+systemctl --user stop timba-oracle.service
+bun install --frozen-lockfile
+bun run indexer:import /path/to/timba-games.sql ./indexer.sqlite
+chmod 600 indexer.sqlite secrets/jupiter-api-key
+systemctl --user start timba-oracle.service
+```
+
+The imported Solana cursor lets the Oracle catch up every transaction after the export. Wait until `/indexer/api/stats` is current, then deploy Web. Keep the old D1 Worker until the Web smoke checks pass; it is no longer used after the Web cutover.
 
 ## Rootless Podman Quadlet
 
@@ -70,6 +95,6 @@ podman exec oracle bun run admin requeue <game-address>
 podman exec oracle bun run admin auto-complete <game-address> <on|off>
 ```
 
-Monitor logs for subscription failures, `/stats` for completion activity, and the operator wallet balance for transaction fees.
+Monitor logs for subscription failures, `/stats` for completion activity, `/indexer/api/stats` for the public index, and the operator wallet balance for transaction fees. Back up both SQLite files.
 
 For coordinated deployment order, chain administration, upgrades, and incident procedures, use `operations/DEPLOYMENT.md` and the relevant Operations runbook.

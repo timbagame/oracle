@@ -4,6 +4,7 @@
     "start": "bun run index.ts",
     "dev": "bun run --watch index.ts",
     "admin": "bun run scripts/oracle-admin.ts",
+    "indexer:import": "bun run scripts/import-indexer.ts",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "lint": "eslint . --max-warnings 0",
@@ -13,7 +14,8 @@
   "dependencies": {
     "@anchor-lang/core": "1.1.2",
     "@solana/web3.js": "^1.98.4",
-    "@timbagame/protocol": "0.3.2"
+    "@timbagame/protocol": "0.3.2",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
