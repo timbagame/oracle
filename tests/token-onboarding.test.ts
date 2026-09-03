@@ -1,48 +1,28 @@
 import { describe, expect, test } from "bun:test";
-import { AccountLayout, MintLayout } from "@solana/spl-token";
-import { Keypair, PublicKey, type AccountInfo } from "@solana/web3.js";
+import { Keypair, PublicKey, Transaction, type AccountInfo } from "@solana/web3.js";
 import { prepareGameToken } from "../token-onboarding.ts";
-import { TOKEN_PROGRAM_ID, deriveAssociatedTokenAddress } from "../token-program.ts";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  deriveAssociatedTokenAddress,
+} from "../token-program.ts";
 
 function accountInfo(data: Buffer, owner = TOKEN_PROGRAM_ID): AccountInfo<Buffer> {
   return { data, executable: false, lamports: 1, owner, rentEpoch: 0 };
 }
 
 function mintAccount(decimals: number, isInitialized = true): AccountInfo<Buffer> {
-  const data = Buffer.alloc(MintLayout.span);
-  MintLayout.encode(
-    {
-      mintAuthorityOption: 0,
-      mintAuthority: PublicKey.default,
-      supply: 0n,
-      decimals,
-      isInitialized,
-      freezeAuthorityOption: 0,
-      freezeAuthority: PublicKey.default,
-    },
-    data,
-  );
+  const data = Buffer.alloc(82);
+  data.writeUInt8(decimals, 44);
+  data.writeUInt8(isInitialized ? 1 : 0, 45);
   return accountInfo(data);
 }
 
 function tokenAccount(mint: PublicKey, owner: PublicKey): AccountInfo<Buffer> {
-  const data = Buffer.alloc(AccountLayout.span);
-  AccountLayout.encode(
-    {
-      mint,
-      owner,
-      amount: 0n,
-      delegateOption: 0,
-      delegate: PublicKey.default,
-      state: 1,
-      isNativeOption: 0,
-      isNative: 0n,
-      delegatedAmount: 0n,
-      closeAuthorityOption: 0,
-      closeAuthority: PublicKey.default,
-    },
-    data,
-  );
+  const data = Buffer.alloc(165);
+  mint.toBuffer().copy(data, 0);
+  owner.toBuffer().copy(data, 32);
+  data.writeUInt8(1, 108);
   return accountInfo(data);
 }
 
@@ -90,6 +70,9 @@ describe("game token onboarding", () => {
     expect(result.decimals).toBe(6);
     expect(result.creationSignature).toBe("ata-signature");
     expect(sentTransaction).toBeDefined();
+    const instruction = Transaction.from(sentTransaction!).instructions[0]!;
+    expect(instruction.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID)).toBe(true);
+    expect(instruction.data).toEqual(Buffer.from([1]));
     expect(confirmed).toEqual({
       signature: "ata-signature",
       blockhash: PublicKey.default.toBase58(),
