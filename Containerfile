@@ -1,5 +1,8 @@
 FROM docker.io/oven/bun:latest
 
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.revision="${VCS_REF}"
+
 WORKDIR /app
 
 # Copy dependency manifests first for better caching

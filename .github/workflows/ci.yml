@@ -53,7 +53,7 @@ jobs:
       - name: Build production image
         env:
           PACKAGE_TOKEN: ${{ github.token }}
-        run: podman build --secret=id=npm_token,env=PACKAGE_TOKEN --platform linux/amd64 --format oci --file Containerfile --tag timba-oracle:ci .
+        run: podman build --build-arg VCS_REF="${GITHUB_SHA}" --secret=id=npm_token,env=PACKAGE_TOKEN --platform linux/amd64 --format oci --file Containerfile --tag timba-oracle:ci .
 
   publish:
     name: Publish OCI image
@@ -100,7 +100,7 @@ jobs:
       - name: Build OCI image
         env:
           PACKAGE_TOKEN: ${{ github.token }}
-        run: podman build --secret=id=npm_token,env=PACKAGE_TOKEN --platform linux/amd64 --format oci --file Containerfile --tag "${IMAGE_TAG}" .
+        run: podman build --build-arg VCS_REF="${GITHUB_SHA}" --secret=id=npm_token,env=PACKAGE_TOKEN --platform linux/amd64 --format oci --file Containerfile --tag "${IMAGE_TAG}" .
 
       - name: Push OCI image
         run: podman push --digestfile /tmp/image-digest "${IMAGE_TAG}"
@@ -108,4 +108,15 @@ jobs:
       - name: Sign published image
         env:
           COSIGN_YES: "true"
-        run: cosign sign "${IMAGE}@$(cat /tmp/image-digest)"
+        shell: bash
+        run: |
+          image_ref="${IMAGE}@$(cat /tmp/image-digest)"
+          for attempt in 1 2 3 4 5; do
+            if cosign sign "${image_ref}"; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "5" ]]; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
