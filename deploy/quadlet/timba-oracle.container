@@ -8,6 +8,7 @@ Image=ghcr.io/timbagame/oracle:main
 ContainerName=oracle
 AutoUpdate=registry
 Network=timba.network
+IP=10.89.0.48
 EnvironmentFile=%h/timba/oracle/.env
 Environment=ORACLE_PORT=3001
 Environment=ORACLE_API_TOKEN_FILE=/run/secrets/oracle_api_token

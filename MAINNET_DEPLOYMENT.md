@@ -80,6 +80,11 @@ systemctl --user enable --now podman-auto-update.timer
 loginctl enable-linger "$USER"
 ```
 
+The shared network uses `10.89.0.0/24`, and the Oracle has the fixed address
+`10.89.0.48`. Keep this address synchronized with the Workers VPC Service.
+Changing it without updating the VPC Service interrupts Web access to the
+Oracle.
+
 The Quadlet uses `AutoUpdate=registry`. Inspect updates and logs with:
 
 ```bash
@@ -106,9 +111,9 @@ systemctl --user daemon-reload
 systemctl --user start timba-cloudflared.service
 ```
 
-Attach the Workers VPC HTTP service to this tunnel with internal hostname
-`oracle` and HTTP port `3001`. Bind only that VPC Service to the web Worker;
-do not bind the entire private network.
+Attach the Workers VPC HTTP service to this tunnel with IPv4 address
+`10.89.0.48` and HTTP port `3001`. Bind only that VPC Service to the Web
+Worker; do not bind the entire private network.
 
 ## Service Checks
 
