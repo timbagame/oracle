@@ -938,15 +938,19 @@ export class OracleService {
     try {
       prices = await this.tokenPriceResolver.getTokenUsdPrices(
         enabled.map((policy) => policy.mint),
+        { allowPartial: true },
       );
     } catch (error) {
       throw new Error("Token prices are unavailable", { cause: error });
     }
-    return policies.map((policy) => {
-      if (!policy.enabled) return toApiTokenPolicy(policy, 0n);
+    return policies.flatMap((policy) => {
+      if (!policy.enabled) return [toApiTokenPolicy(policy, 0n)];
       const priceUsd = prices.get(policy.mint);
-      if (priceUsd === undefined) throw new Error(`Token price is unavailable for ${policy.mint}`);
-      return toApiTokenPolicy(policy, computeMinimumAmountRaw(priceUsd, policy.decimals));
+      if (priceUsd === undefined) {
+        logger.warning(`Omitting token policy without a current price: ${policy.mint}`);
+        return [];
+      }
+      return [toApiTokenPolicy(policy, computeMinimumAmountRaw(priceUsd, policy.decimals))];
     });
   }
 

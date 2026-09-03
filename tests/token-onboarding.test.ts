@@ -80,6 +80,26 @@ describe("game token onboarding", () => {
     });
   });
 
+  test("rejects a failed operator ATA confirmation", async () => {
+    const operatorKeypair = Keypair.generate();
+    const mint = Keypair.generate().publicKey;
+    const connection = {
+      getAccountInfo: async (address: PublicKey) => (address.equals(mint) ? mintAccount(6) : null),
+      getLatestBlockhash: async () => ({
+        blockhash: PublicKey.default.toBase58(),
+        lastValidBlockHeight: 42,
+      }),
+      sendRawTransaction: async () => "failed-ata-signature",
+      confirmTransaction: async () => ({
+        value: { err: { InstructionError: [0, { Custom: 1 }] } },
+      }),
+    };
+
+    await expect(
+      prepareGameToken({ connection: connection as any, operatorKeypair, mint }),
+    ).rejects.toThrow("Transaction failed-ata-signature failed");
+  });
+
   test("rejects Token-2022 and uninitialized mint accounts", async () => {
     const operatorKeypair = Keypair.generate();
     const mint = Keypair.generate().publicKey;

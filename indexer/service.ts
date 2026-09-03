@@ -15,6 +15,7 @@ export class PublicIndexer {
     private readonly programId: PublicKey,
     private readonly pollIntervalMs: number,
     private readonly eventDebounceMs = 1_000,
+    private readonly now: () => number = Date.now,
   ) {}
 
   async runOnce(
@@ -41,11 +42,15 @@ export class PublicIndexer {
   async run(signal: AbortSignal): Promise<void> {
     if (this.running) return;
     this.running = true;
-    let shouldReconcile = true;
+    let nextReconciliationAt = 0;
     try {
       while (!signal.aborted) {
+        const shouldReconcile = this.now() >= nextReconciliationAt;
+        let cycleCompleted = false;
         try {
           const result = await this.runOnce({ reconcileActiveGames: shouldReconcile });
+          cycleCompleted = true;
+          if (shouldReconcile) nextReconciliationAt = this.now() + this.pollIntervalMs;
           if (result.transactions > 0) {
             logger.info(
               `Public indexer processed ${result.transactions} transactions and ${result.indexed} game changes.`,
@@ -54,7 +59,10 @@ export class PublicIndexer {
         } catch (error) {
           logger.failure("Public indexer cycle failed; cursor was not advanced:", error);
         }
-        shouldReconcile = (await this.waitForNextCycle(signal)) === "interval";
+        const waitMs = cycleCompleted
+          ? Math.max(0, nextReconciliationAt - this.now())
+          : this.pollIntervalMs;
+        await this.waitForNextCycle(signal, waitMs);
       }
     } finally {
       this.running = false;
@@ -66,7 +74,10 @@ export class PublicIndexer {
     this.scheduleEventWake();
   }
 
-  private async waitForNextCycle(signal: AbortSignal): Promise<"event" | "interval" | "abort"> {
+  private async waitForNextCycle(
+    signal: AbortSignal,
+    intervalMs: number,
+  ): Promise<"event" | "interval" | "abort"> {
     if (signal.aborted) return "abort";
 
     return new Promise((resolve) => {
@@ -83,7 +94,7 @@ export class PublicIndexer {
         resolve(reason);
       };
       const handleAbort = () => finish("abort");
-      const timeout = setTimeout(() => finish("interval"), this.pollIntervalMs);
+      const timeout = setTimeout(() => finish("interval"), intervalMs);
       this.wakeResolver = finish;
       signal.addEventListener("abort", handleAbort, { once: true });
       this.scheduleEventWake();

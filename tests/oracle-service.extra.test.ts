@@ -2344,4 +2344,24 @@ describe("OracleService internals", () => {
       lastValidBlockHeight: 13,
     });
   });
+
+  it("confirmTransaction rejects failed modern and legacy confirmations", async () => {
+    const transactionError = { InstructionError: [0, { Custom: 1 }] };
+    const modernConnection = {
+      confirmTransaction: async () => ({ value: { err: transactionError } }),
+    } as any;
+    await expect(
+      confirmTransaction(modernConnection, "modern-failure", {
+        blockhash: "external",
+        lastValidBlockHeight: 13,
+      }),
+    ).rejects.toThrow("Transaction modern-failure failed");
+
+    const legacyConnection = {
+      confirmTransaction: async () => ({ value: { err: transactionError } }),
+    } as any;
+    await expect(confirmTransaction(legacyConnection, "legacy-failure")).rejects.toThrow(
+      "Transaction legacy-failure failed",
+    );
+  });
 });

@@ -4,7 +4,10 @@ interface CachedPrice {
 }
 
 export interface TokenPriceResolver {
-  getTokenUsdPrices(mints: readonly string[]): Promise<Map<string, number>>;
+  getTokenUsdPrices(
+    mints: readonly string[],
+    options?: { allowPartial?: boolean },
+  ): Promise<Map<string, number>>;
 }
 
 type PriceFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -22,6 +25,7 @@ function readPositivePrice(entry: unknown): number | null {
 
 export class JupiterTokenPriceResolver implements TokenPriceResolver {
   private readonly cache = new Map<string, CachedPrice>();
+  private readonly inFlight = new Map<string, Promise<number | null>>();
 
   public constructor(
     private readonly apiKey: string | null,
@@ -29,7 +33,10 @@ export class JupiterTokenPriceResolver implements TokenPriceResolver {
     private readonly now: () => number = Date.now,
   ) {}
 
-  public async getTokenUsdPrices(mints: readonly string[]): Promise<Map<string, number>> {
+  public async getTokenUsdPrices(
+    mints: readonly string[],
+    options: { allowPartial?: boolean } = {},
+  ): Promise<Map<string, number>> {
     const requested = [...new Set(mints)].sort();
     const prices = new Map<string, number>();
     const missing: string[] = [];
@@ -41,14 +48,51 @@ export class JupiterTokenPriceResolver implements TokenPriceResolver {
       else missing.push(mint);
     }
     if (missing.length === 0) return prices;
-    if (!this.apiKey) throw new Error("Jupiter API key is unavailable");
+    const apiKey = this.apiKey;
+    if (!apiKey) throw new Error("Jupiter API key is unavailable");
 
-    for (let offset = 0; offset < missing.length; offset += JUPITER_MAX_IDS) {
-      const chunk = missing.slice(offset, offset + JUPITER_MAX_IDS);
+    const toFetch = missing.filter((mint) => !this.inFlight.has(mint));
+    if (toFetch.length > 0) this.startPriceFetch(toFetch, apiKey);
+
+    const resolved = await Promise.all(
+      missing.map(async (mint) => [mint, await this.inFlight.get(mint)!] as const),
+    );
+    for (const [mint, priceUsd] of resolved) {
+      if (priceUsd === null) {
+        if (!options.allowPartial)
+          throw new Error(`Jupiter did not return a valid price for ${mint}`);
+        continue;
+      }
+      prices.set(mint, priceUsd);
+    }
+
+    return prices;
+  }
+
+  private startPriceFetch(mints: readonly string[], apiKey: string): void {
+    const request = this.fetchTokenUsdPrices(mints, apiKey);
+    for (const mint of mints) {
+      const pending = request.then((prices) => prices.get(mint) ?? null);
+      this.inFlight.set(mint, pending);
+      void pending
+        .finally(() => {
+          if (this.inFlight.get(mint) === pending) this.inFlight.delete(mint);
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  private async fetchTokenUsdPrices(
+    mints: readonly string[],
+    apiKey: string,
+  ): Promise<Map<string, number>> {
+    const prices = new Map<string, number>();
+    for (let offset = 0; offset < mints.length; offset += JUPITER_MAX_IDS) {
+      const chunk = mints.slice(offset, offset + JUPITER_MAX_IDS);
       const url = new URL(JUPITER_PRICE_URL);
       url.searchParams.set("ids", chunk.join(","));
       const response = await this.fetcher(url, {
-        headers: { Accept: "application/json", "x-api-key": this.apiKey },
+        headers: { Accept: "application/json", "x-api-key": apiKey },
         signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) throw new Error(`Jupiter Price API returned HTTP ${response.status}`);
@@ -64,12 +108,11 @@ export class JupiterTokenPriceResolver implements TokenPriceResolver {
 
       for (const mint of chunk) {
         const priceUsd = readPositivePrice(entries[mint]);
-        if (priceUsd === null) throw new Error(`Jupiter did not return a valid price for ${mint}`);
+        if (priceUsd === null) continue;
         prices.set(mint, priceUsd);
-        this.cache.set(mint, { priceUsd, expiresAt: now + TOKEN_PRICE_CACHE_TTL_MS });
+        this.cache.set(mint, { priceUsd, expiresAt: this.now() + TOKEN_PRICE_CACHE_TTL_MS });
       }
     }
-
     return prices;
   }
 }

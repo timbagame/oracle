@@ -219,6 +219,31 @@ describe("OracleService", () => {
     expect(db.getTokenPolicy(mint)).toBeNull();
   });
 
+  it("lists available token policies when one enabled token has no price", async () => {
+    const db = OracleDatabase.getInstance();
+    const availableMint = Keypair.generate().publicKey.toBase58();
+    const unavailableMint = Keypair.generate().publicKey.toBase58();
+    const disabledMint = Keypair.generate().publicKey.toBase58();
+    db.setTokenPolicy(availableMint, true, "3");
+    db.setTokenPolicy(unavailableMint, true, "3");
+    db.setTokenPolicy(disabledMint, false, "3");
+    const service = OracleService.createWith(db, {
+      tokenPriceResolver: {
+        getTokenUsdPrices: async () => new Map([[availableMint, 1]]),
+      },
+    });
+
+    const policies = await service.getTokenPolicies();
+
+    expect(policies).toContainEqual(
+      expect.objectContaining({ mint: availableMint, enabled: true, minimumAmountRaw: "100" }),
+    );
+    expect(policies.some((policy) => policy.mint === unavailableMint)).toBe(false);
+    expect(policies).toContainEqual(
+      expect.objectContaining({ mint: disabledMint, enabled: false, minimumAmountRaw: "0" }),
+    );
+  });
+
   it("rejects durable-nonce initialization transactions", async () => {
     const service = testService;
     service.cleanupOldRecords(-1);
