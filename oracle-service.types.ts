@@ -4,7 +4,7 @@ import type { TimbaEventMap, TimbaGameAccount } from "./types/timba.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 import type { OracleDatabase } from "./database.ts";
 import type { OracleMetrics } from "./metrics.ts";
-import type { Timba } from "./idl/idlType.ts";
+import type { Timba } from "./types/contract.ts";
 
 /**
  * Core dependencies shared between OracleService and GameCompletionManager

@@ -1,7 +1,7 @@
 import * as anchor from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./token-program.ts";
-import type { Timba } from "./idl/idlType.ts";
+import type { Timba } from "./types/contract.ts";
 import type { TimbaGameAccount } from "./types/timba.ts";
 import { ensurePublicKey } from "./solana-utils.ts";
 import { deriveGameAccounts } from "./oracle-accounts.ts";

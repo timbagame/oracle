@@ -1,12 +1,20 @@
-import currentIdl from "./idl/idl.json";
-import legacyIdl from "./idl/v0.2.0.json";
+import { SUPPORTED_CONTRACT_VERSIONS, type ContractVersion } from "@timbagame/protocol/contracts";
+import { timbaIdlV020 } from "@timbagame/protocol/contracts/v0.2.0";
+import { timbaIdlV030 } from "@timbagame/protocol/contracts/v0.3.0";
 
-export const SUPPORTED_CONTRACT_VERSIONS = ["0.2.0", "0.3.0"] as const;
-export type ContractVersion = (typeof SUPPORTED_CONTRACT_VERSIONS)[number];
+export {
+  CONTRACT_CAPABILITIES,
+  DEFAULT_CONTRACT_VERSION,
+  SUPPORTED_CONTRACT_VERSIONS,
+  getContractCapabilities,
+  parseContractVersion,
+  type ContractCapabilities,
+  type ContractVersion,
+} from "@timbagame/protocol/contracts";
 
 const idls = {
-  "0.2.0": legacyIdl,
-  "0.3.0": currentIdl,
+  "0.2.0": timbaIdlV020,
+  "0.3.0": timbaIdlV030,
 } as const;
 
 for (const version of SUPPORTED_CONTRACT_VERSIONS) {
@@ -16,19 +24,6 @@ for (const version of SUPPORTED_CONTRACT_VERSIONS) {
   }
 }
 
-export function parseContractVersion(value: string | undefined): ContractVersion {
-  const version = value?.trim() || "0.2.0";
-  if ((SUPPORTED_CONTRACT_VERSIONS as readonly string[]).includes(version)) {
-    return version as ContractVersion;
-  }
-  throw new Error(
-    `CONTRACT_VERSION must be one of ${SUPPORTED_CONTRACT_VERSIONS.join(", ")}; received ${version}`,
-  );
-}
-
 export function getContractIdl(version: ContractVersion) {
   return idls[version];
 }
-
-export const contractIdl = currentIdl;
-export const contractVersion = "0.3.0" as const;

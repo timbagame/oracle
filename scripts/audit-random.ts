@@ -4,7 +4,7 @@ import type * as anchor from "@anchor-lang/core";
 import type { Connection, PublicKey } from "@solana/web3.js";
 import { OracleDatabase } from "../database.ts";
 import { OracleService } from "../oracle-service.ts";
-import type { Timba } from "../idl/idlType.ts";
+import type { Timba } from "../types/contract.ts";
 import type { TimbaGameAccount, TimbaPlayerEvent } from "../types/timba.ts";
 import {
   ensurePublicKey,

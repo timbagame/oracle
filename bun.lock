@@ -7,7 +7,7 @@
       "dependencies": {
         "@anchor-lang/core": "1.1.2",
         "@solana/web3.js": "^1.98.4",
-        "@timbagame/protocol": "0.5.1",
+        "@timbagame/protocol": "0.6.0",
         "zod": "4.5.4",
       },
       "devDependencies": {
@@ -76,7 +76,7 @@
 
     "@swc/helpers": ["@swc/helpers@0.5.23", "", { "dependencies": { "tslib": "^2.8.0" } }, "sha512-5lSsMOTXURePglDfvuAQUqkGek9Hg2kksOYay2m0+XR++b2NWYL/4sWyuvVBIs8oKnJaxkdi9whaL/sqN13afw=="],
 
-    "@timbagame/protocol": ["@timbagame/protocol@0.5.1", "https://npm.pkg.github.com/download/@timbagame/protocol/0.5.1/cc9c336e8318dc9a4114624712a51fd51f06e3cc", { "dependencies": { "zod": "4.5.4" } }, "sha512-15aKxM7FM2Umma8rGmTdx6a1A3gFQ0c0IzpnYn21CD+DUYFK2CREBdZJfVWsB5uLf9C+EniNZZRK2PJL/2uDJw=="],
+    "@timbagame/protocol": ["@timbagame/protocol@0.6.0", "https://npm.pkg.github.com/download/@timbagame/protocol/0.6.0/12eb815150ba9341c554b7279bd0428e1801eb19", { "dependencies": { "zod": "4.5.4" } }, "sha512-pX08F/852lxMM2NZur3a3uUrST3xBkRi73iLVUPz/IkDjYHTDv2lOTkCQv+tIJSso2H/MPGjkKCupSvdP1Iljw=="],
 
     "@types/bun": ["@types/bun@1.4.0", "", { "dependencies": { "bun-types": "1.4.0" } }, "sha512-K+lZULY23vRgK/CfTjFIV+tyifaNdSMlPh9j+6mQ/cLfpOznLyAuzgV/JQysyECpkBQLVMSyvjlr2fBUSA9wFQ=="],
 

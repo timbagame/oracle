@@ -1,5 +1,5 @@
 import type * as anchor from "@anchor-lang/core";
-import type { Timba } from "./idl/idlType.ts";
+import type { Timba } from "./types/contract.ts";
 import type { OracleDatabase } from "./database.ts";
 import type {
   TimbaEventMap,
