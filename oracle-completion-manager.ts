@@ -21,8 +21,10 @@ import { logger } from "./logger.ts";
 import { GameCompletionTransactionBuilder } from "./game-completion-transaction-builder.ts";
 import { RegistrySyncManager } from "./registry-sync-manager.ts";
 import { TransactionSubmitter } from "./transaction-submitter.ts";
+import type { ContractVersion } from "./contract-idl.ts";
 
 export interface GameCompletionManagerOptions extends CoreOracleDependencies {
+  contractVersion: ContractVersion;
   readinessCache: Map<string, GameReadinessSnapshot>;
   secretKeyLength: number;
   noSecretKeyMessage: string;
@@ -59,6 +61,7 @@ export class GameCompletionManager {
     this.transactionBuilder = new GameCompletionTransactionBuilder({
       getProgram: () => options.getProgram(),
       operatorKeypair: options.operatorKeypair,
+      contractVersion: options.contractVersion,
     });
 
     this.registrySyncManager = new RegistrySyncManager({

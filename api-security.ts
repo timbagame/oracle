@@ -8,6 +8,7 @@ const ROUTE_LIMITS: Readonly<Record<string, number>> = {
   "/generate-hash": 20,
   "/sign-game-transaction": 20,
   "/games/complete-now": 50,
+  "/token-policies": 10,
   "/stats": 10,
 };
 

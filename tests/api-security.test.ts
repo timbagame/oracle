@@ -30,4 +30,17 @@ describe("oracle API security", () => {
     }
     expect(limit("/indexer/api/player-profile").allowed).toBe(false);
   });
+
+  test("limits token policy requests that can reach Jupiter", () => {
+    let now = 1_000;
+    const limit = createRouteRateLimiter(() => now);
+
+    for (let index = 0; index < 10; index += 1) {
+      expect(limit("/token-policies").allowed).toBe(true);
+    }
+    expect(limit("/token-policies").allowed).toBe(false);
+
+    now += 1_000;
+    expect(limit("/token-policies").allowed).toBe(true);
+  });
 });

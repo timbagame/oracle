@@ -89,15 +89,41 @@ describe("OracleService event handling", () => {
     );
 
     await service.startEventListening();
-    expect(programStub.addCalls.length).toBe(5);
+    expect(programStub.addCalls.length).toBe(EVENT_HANDLER_CONFIG.length);
 
     await service.stopEventListening();
-    expect(programStub.removeCalls).toEqual([1, 2, 3, 4, 5]);
+    expect(programStub.removeCalls).toEqual([1, 2, 3, 4, 5, 6]);
 
     const statsAfterStop = service.getStats();
     expect(statsAfterStop.eventListening).toBe(false);
     expect(service.events.isListening()).toBe(false);
     expect(service.events.getActiveListenerCount()).toBe(0);
+  });
+
+  it("notifies public index observers from the shared live subscription", async () => {
+    const { db } = createDbStub();
+    const programStub = createProgramStub();
+    const service = createService(db, programStub);
+    let notifications = 0;
+    const unsubscribe = service.events.addProgramEventObserver(() => {
+      notifications += 1;
+    });
+
+    await service.startEventListening();
+    const initialized = programStub.addCalls.find(({ event }) => event === "gameInitialized")!;
+    initialized.handler({
+      gameKey: Keypair.generate().publicKey,
+      gameType: { coinflip: {} },
+    });
+    expect(notifications).toBe(1);
+
+    unsubscribe();
+    initialized.handler({
+      gameKey: Keypair.generate().publicKey,
+      gameType: { coinflip: {} },
+    });
+    expect(notifications).toBe(1);
+    await service.stopEventListening();
   });
 
   it("awaits asynchronous event listener registration", async () => {
@@ -109,7 +135,7 @@ describe("OracleService event handling", () => {
     expect(service.events.getActiveListenerCount()).toBe(EVENT_HANDLER_CONFIG.length);
 
     await service.stopEventListening();
-    expect(programStub.removeCalls).toEqual([1, 2, 3, 4, 5]);
+    expect(programStub.removeCalls).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
   it("deduplicates concurrent listener startups", async () => {
@@ -982,6 +1008,7 @@ function createService(
   };
 
   const completionManager = new GameCompletionManager({
+    contractVersion: "0.3.0",
     db: db as any,
     getProgram: () => programStub as any,
     getConnection: () => connectionStub as any,

@@ -5,7 +5,10 @@ import { createTestEnv } from "./create-test-env.ts";
 export type OracleServiceClass = typeof OracleService;
 export type OracleDatabaseClass = typeof OracleDatabase;
 
-export async function setupOracleServiceEnv(prefix: string): Promise<{
+export async function setupOracleServiceEnv(
+  prefix: string,
+  additionalEnv: Record<string, string | undefined> = {},
+): Promise<{
   OracleService: OracleServiceClass;
   OracleDatabase: OracleDatabaseClass;
   cleanup: () => void;
@@ -19,6 +22,7 @@ export async function setupOracleServiceEnv(prefix: string): Promise<{
     // Explicitly set SOLANA_NETWORK to prevent CI environment overrides
     env: {
       SOLANA_NETWORK: "http://localhost",
+      ...additionalEnv,
     },
   });
 

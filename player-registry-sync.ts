@@ -1,6 +1,6 @@
 import * as anchor from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
-import type { Timba } from "./idl/idlType.ts";
+import type { Timba } from "./types/contract.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 import { ensurePublicKey, resolveNumericLike, toBase58 } from "./solana-utils.ts";
 import { logger } from "./logger.ts";

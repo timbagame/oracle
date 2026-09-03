@@ -1,9 +1,16 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Keypair, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import type { OracleService, RequeueGameFailureReason } from "../oracle-service.ts";
-import { GameTransactionValidationError } from "../oracle-service.ts";
+import {
+  CreationPolicyValidationError,
+  GameTransactionValidationError,
+} from "../oracle-service.ts";
 import { ApiErrorSchema } from "@timbagame/protocol/common";
-import { oracleContract } from "@timbagame/protocol/oracle";
+import {
+  CreationPolicyRejectionSchema,
+  TokenPoliciesResponseSchema,
+  oracleContract,
+} from "@timbagame/protocol/oracle";
 import { buildProductionOracleApi, summarizeGameTransaction } from "../index.ts";
 import { createBasicStats } from "./helpers/fake-oracle.ts";
 import {
@@ -73,6 +80,9 @@ describe("index router", () => {
 
     const unauthorized = await securedRouter(buildRequest("/generate-hash", { method: "POST" }));
     expect(unauthorized.status).toBe(401);
+    expect((await securedRouter(buildRequest("/token-policies", { method: "GET" }))).status).toBe(
+      401,
+    );
 
     const authorized = await securedRouter(
       buildRequest("/generate-hash", {
@@ -81,6 +91,37 @@ describe("index router", () => {
       }),
     );
     expect(authorized.status).toBe(200);
+  });
+
+  test("GET /token-policies returns the authenticated creation policy", async () => {
+    const mint = Keypair.generate().publicKey.toBase58();
+    const policyContext = await createIndexRouterTestContext("index-router-token-policy", {
+      getTokenPolicies: async () => [
+        {
+          mint,
+          enabled: true,
+          minimumAmountRaw: "1000",
+          acceptedMinimumAmountRaw: "950",
+          revision: 3,
+          effectiveAt: "2026-09-02T00:00:00.000Z",
+        },
+      ],
+    });
+    const securedRouter = policyContext.module.buildFetchRouter(policyContext.handlers, {
+      apiToken: "service-secret",
+    });
+
+    try {
+      const { response, json } = await executeJsonRequest(securedRouter, "/token-policies", {
+        method: "GET",
+        headers: { authorization: "Bearer service-secret" },
+      });
+      expect(response.status).toBe(200);
+      expect(TokenPoliciesResponseSchema.safeParse(json).success).toBe(true);
+      expect((json as any).policies[0]).toMatchObject({ mint, revision: 3 });
+    } finally {
+      policyContext.testEnv.cleanup();
+    }
   });
 
   test("keeps the complete indexer namespace behind Oracle authentication", async () => {
@@ -124,7 +165,7 @@ describe("index router", () => {
 
   test("POST /sign-game-transaction returns the oracle-signed transaction", async () => {
     const signingContext = await createIndexRouterTestContext("index-router-sign", {
-      signGameTransaction: () => "BAUGBw==",
+      signGameTransaction: async () => "BAUGBw==",
     });
     try {
       const { response, json } = await executeJsonRequest(
@@ -171,12 +212,12 @@ describe("index router", () => {
     );
   });
 
-  test("production API exposes game transaction signing", () => {
+  test("production API exposes game transaction signing", async () => {
     const api = buildProductionOracleApi({
-      signGameTransaction: (txBase64: string) => `signed:${txBase64}`,
-    } as OracleService);
+      signGameTransaction: async (txBase64: string) => `signed:${txBase64}`,
+    } as unknown as OracleService);
 
-    expect(api.signGameTransaction?.("unsigned")).toBe("signed:unsigned");
+    await expect(api.signGameTransaction?.("unsigned")).resolves.toBe("signed:unsigned");
   });
 
   test("POST /sign-game-transaction requires a transaction", async () => {
@@ -213,6 +254,47 @@ describe("index router", () => {
       expect((json as any).error).toBe("Invalid game transaction");
       expect(JSON.stringify(json)).not.toContain(rawError);
       expect(JSON.stringify(json)).not.toContain("invalid_type");
+    } finally {
+      rejectingContext.testEnv.cleanup();
+    }
+  });
+
+  test("POST /sign-game-transaction returns typed creation policy rejections", async () => {
+    const mint = Keypair.generate().publicKey.toBase58();
+    const rejectingContext = await createIndexRouterTestContext("index-router-sign-policy", {
+      signGameTransaction: () => {
+        throw new CreationPolicyValidationError(
+          "amount_below_minimum",
+          "Game amount is below the token minimum",
+          {
+            mint,
+            minimumAmountRaw: "1000",
+            acceptedMinimumAmountRaw: "950",
+            revision: 4,
+          },
+        );
+      },
+    });
+
+    try {
+      const { response, json } = await executeJsonRequest(
+        rejectingContext.router,
+        "/sign-game-transaction",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ txBase64: "AQIDBA==" }),
+        },
+      );
+      expect(response.status).toBe(422);
+      expect(CreationPolicyRejectionSchema.safeParse(json).success).toBe(true);
+      expect(json).toMatchObject({
+        code: "amount_below_minimum",
+        mint,
+        minimumAmountRaw: "1000",
+        acceptedMinimumAmountRaw: "950",
+        revision: 4,
+      });
     } finally {
       rejectingContext.testEnv.cleanup();
     }
@@ -828,6 +910,7 @@ describe("index router", () => {
         },
         handleGenerateHash: async (_request: Request) => new Response("ok"),
         handleSignGameTransaction: async (_request: Request) => new Response("ok"),
+        handleTokenPolicies: async (_request: Request) => new Response("ok"),
         handleStats: async (_request: Request) => new Response("ok"),
         handleRequeueGame: async (_request: Request) => new Response("ok"),
         handleCompleteGameNow: async (_request: Request) => new Response("ok"),

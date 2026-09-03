@@ -1,5 +1,6 @@
 import { delay, DEFAULT_DELAY_MS } from "./delay.ts";
 import {
+  CreationPolicyValidationError,
   GameTransactionValidationError,
   OracleService,
   type RequeueGameFailureReason,
@@ -26,6 +27,8 @@ import {
   OracleStatsResponseSchema,
   SignGameTransactionRequestSchema,
   SignGameTransactionResponseSchema,
+  CreationPolicyRejectionSchema,
+  TokenPoliciesResponseSchema,
 } from "@timbagame/protocol/oracle";
 import { IndexerDatabase } from "./indexer/database.ts";
 import { PublicIndexer } from "./indexer/service.ts";
@@ -53,6 +56,7 @@ const PUBLIC_ERROR_MESSAGES = {
   invalidJson: "Invalid JSON payload",
   requestBodyRequired: "Request body required",
   requestBodyTooLarge: "Request body too large",
+  tokenPoliciesUnavailable: "Token policies are unavailable",
   tooManyRequests: "Too many requests",
   unauthorized: "Unauthorized",
 } as const;
@@ -64,6 +68,7 @@ const JSON_HEADERS = {
 const PROTECTED_ROUTES = new Set([
   "/generate-hash",
   "/sign-game-transaction",
+  "/token-policies",
   "/stats",
   "/games/complete-now",
 ]);
@@ -106,6 +111,7 @@ let server: ReturnType<typeof Bun.serve> | undefined;
 let backgroundLoop: Promise<void> | undefined;
 let backgroundAbortController: AbortController | undefined;
 let indexerDatabase: IndexerDatabase | undefined;
+let stopIndexerWake: (() => void) | undefined;
 
 async function abortBackgroundLoop(): Promise<void> {
   backgroundAbortController?.abort();
@@ -168,6 +174,8 @@ async function closeOracle(oracle: OracleApi): Promise<void> {
 async function stopServer(oracle: OracleApi, exitCode?: number): Promise<void> {
   await server?.stop();
   await abortBackgroundLoop();
+  stopIndexerWake?.();
+  stopIndexerWake = undefined;
   await closeOracle(oracle);
   indexerDatabase?.close();
   indexerDatabase = undefined;
@@ -260,6 +268,7 @@ export interface OracleApi {
   requeueGame: (gameAddress: string) => RequeueGameResult;
   completeGameNow: (gameAddress: string) => Promise<GameCompletionResult | null>;
   setAutoCompleteDisabled: (gameAddress: string, disabled: boolean) => ToggleAutoCompleteResult;
+  getTokenPolicies: OracleService["getTokenPolicies"];
 }
 
 interface JsonBodyResult {
@@ -345,7 +354,7 @@ export function buildHandlers(oracle: OracleApi) {
         const { txBase64 } = parsed.data;
         txForDiagnostics = txBase64;
         return createContractResponse(SignGameTransactionResponseSchema, {
-          txBase64: oracle.signGameTransaction(txBase64),
+          txBase64: await oracle.signGameTransaction(txBase64),
         });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : "Invalid transaction";
@@ -358,9 +367,33 @@ export function buildHandlers(oracle: OracleApi) {
               : { parseError: "Missing transaction payload" },
           }),
         );
+        if (error instanceof CreationPolicyValidationError) {
+          return createResponse(
+            CreationPolicyRejectionSchema.parse(
+              buildServicePayload({
+                success: false,
+                error: error.message,
+                code: error.code,
+                ...error.details,
+              }),
+            ),
+            422,
+          );
+        }
         return error instanceof GameTransactionValidationError
           ? createErrorResponse("invalidGameTransaction", 400)
           : createInternalServerErrorResponse();
+      }
+    },
+
+    async handleTokenPolicies(_request?: Request): Promise<Response> {
+      try {
+        return createContractResponse(TokenPoliciesResponseSchema, {
+          policies: await oracle.getTokenPolicies(),
+        });
+      } catch (error: unknown) {
+        logger.failure("Error loading token policies:", error);
+        return createErrorResponse("tokenPoliciesUnavailable", 503);
       }
     },
 
@@ -578,6 +611,12 @@ export const ROUTE_METADATA: ReadonlyArray<RouteDocumentation> = [
     requestExample: '{ "txBase64": "..." }',
   },
   {
+    path: "/token-policies",
+    method: "GET",
+    handler: "handleTokenPolicies",
+    summary: "List the current token creation policies",
+  },
+  {
     path: "/stats",
     method: "GET",
     handler: "handleStats",
@@ -788,6 +827,7 @@ export function buildProductionOracleApi(realOracle: OracleService): OracleApi {
     completeGameNow: (gameAddress) => realOracle.completeGameNow(gameAddress),
     setAutoCompleteDisabled: (gameAddress, disabled) =>
       realOracle.setAutoCompleteDisabled(gameAddress, disabled),
+    getTokenPolicies: () => realOracle.getTokenPolicies(),
   };
 }
 
@@ -807,6 +847,7 @@ if (!IS_TEST_ENV) {
     realOracle.getProgramId(),
     config.indexerPollIntervalMs,
   );
+  stopIndexerWake = realOracle.addProgramEventObserver(() => publicIndexer.requestCatchUp());
   const handleIndexerRequest = createIndexerApi(indexerDatabase, config.jupiterApiKey);
   const oracleApi = buildProductionOracleApi(realOracle);
   const handlers = buildHandlers(oracleApi);

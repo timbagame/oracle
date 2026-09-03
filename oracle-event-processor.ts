@@ -1,5 +1,5 @@
 import type * as anchor from "@anchor-lang/core";
-import type { Timba } from "./idl/idlType.ts";
+import type { Timba } from "./types/contract.ts";
 import type { OracleDatabase } from "./database.ts";
 import type {
   TimbaEventMap,
@@ -81,6 +81,7 @@ export class OracleEventProcessor {
   private readonly autoCompleteDebounceMs: number;
   private readonly playerMutationBuffers = new Map<string, PendingPlayerMutationBuffer>();
   private readonly pendingAutoCompletes = new Map<string, PendingAutoCompleteState>();
+  private readonly programEventObservers = new Set<() => void>();
   public scheduleRetryTimeout: (
     callback: () => void,
     delay: number,
@@ -121,6 +122,21 @@ export class OracleEventProcessor {
 
   public clearRegistrySyncs(): void {
     this.registrySyncScheduler?.clearAll();
+  }
+
+  public addProgramEventObserver(observer: () => void): () => void {
+    this.programEventObservers.add(observer);
+    return () => this.programEventObservers.delete(observer);
+  }
+
+  private notifyProgramEventObservers(): void {
+    for (const observer of this.programEventObservers) {
+      try {
+        observer();
+      } catch (error) {
+        logger.warning("Program event observer failed:", error);
+      }
+    }
   }
 
   private processingQueues = new Map<string, Promise<void>>();
@@ -217,14 +233,17 @@ export class OracleEventProcessor {
 
     try {
       for (const handlerConfig of this.options.config) {
-        const listenerId = await this.options.getProgram().addEventListener(
-          handlerConfig.event,
-          handlerConfig.createHandler({
-            handlePlayerEvent: (action, evt) => this.handlePlayerEvent(action, evt),
-            handleGameInitialized: (evt) => this.handleGameInitialized(evt),
-            handleGameStatusChange: (status, evt) => this.handleGameStatusChange(status, evt),
-          }),
-        );
+        const eventHandler = handlerConfig.createHandler({
+          handlePlayerEvent: (action, evt) => this.handlePlayerEvent(action, evt),
+          handleGameInitialized: (evt) => this.handleGameInitialized(evt),
+          handleGameStatusChange: (status, evt) => this.handleGameStatusChange(status, evt),
+        });
+        const listenerId = await this.options
+          .getProgram()
+          .addEventListener(handlerConfig.event, (event) => {
+            this.notifyProgramEventObservers();
+            return eventHandler(event);
+          });
         listenerIds.push(listenerId);
       }
       return listenerIds;
@@ -1012,6 +1031,10 @@ export const EVENT_HANDLER_CONFIG: ReadonlyArray<EventHandlerConfig<keyof TimbaE
   },
   {
     event: "gameClosed",
+    createHandler: (ctx) => (event) => ctx.handleGameStatusChange("closed", event),
+  },
+  {
+    event: "operatorGameClosed",
     createHandler: (ctx) => (event) => ctx.handleGameStatusChange("closed", event),
   },
 ];

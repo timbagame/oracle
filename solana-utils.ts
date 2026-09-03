@@ -15,6 +15,24 @@ type PublicKeyInput =
 
 export type PublicKeyLike = PublicKeyInput;
 
+function describeTransactionError(error: unknown): string {
+  try {
+    return JSON.stringify(error) ?? String(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function assertTransactionSucceeded(signature: string, result: unknown): void {
+  if (!result || typeof result !== "object" || !("value" in result)) return;
+  const value = (result as { value?: unknown }).value;
+  if (!value || typeof value !== "object" || !("err" in value)) return;
+  const error = (value as { err?: unknown }).err;
+  if (error !== null && error !== undefined) {
+    throw new Error(`Transaction ${signature} failed: ${describeTransactionError(error)}`);
+  }
+}
+
 function isAnchorPublicKey(value: unknown): value is anchor.web3.PublicKey {
   return value instanceof anchor.web3.PublicKey;
 }
@@ -179,24 +197,20 @@ export async function confirmTransaction(
 
     if (resolvedBlockhash) {
       const { blockhash, lastValidBlockHeight } = resolvedBlockhash;
-      const result = conn.confirmTransaction({
+      const result = await conn.confirmTransaction({
         signature,
         blockhash,
         lastValidBlockHeight,
       });
-      if (result && typeof (result as PromiseLike<unknown>).then === "function") {
-        await result;
-      }
+      assertTransactionSucceeded(signature, result);
       return;
     }
   }
 
   // Legacy confirmation fallback
   if (typeof conn.confirmTransaction === "function") {
-    const legacyResult = conn.confirmTransaction(signature);
-    if (legacyResult && typeof (legacyResult as PromiseLike<unknown>).then === "function") {
-      await legacyResult;
-    }
+    const result = await conn.confirmTransaction(signature);
+    assertTransactionSucceeded(signature, result);
     return;
   }
 

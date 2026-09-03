@@ -2,6 +2,7 @@ import * as path from "path";
 import { getEnvironmentMode, readEnv, shouldUseEphemeralKeypair } from "./env.ts";
 import { parseRpcEndpointList } from "./rpc-endpoints.ts";
 import * as fs from "node:fs";
+import { parseContractVersion, type ContractVersion } from "./contract-idl.ts";
 
 export const DEFAULT_ORACLE_PORT = 3001;
 const DEFAULT_DATABASE_FILE = "oracle.sqlite";
@@ -97,6 +98,7 @@ function readProtectedSecret(filePath: string, label: string): string {
 }
 
 export interface OracleRuntimeConfig {
+  readonly contractVersion: ContractVersion;
   readonly solanaNetwork: string;
   readonly solanaNetworks: readonly string[];
   readonly oraclePort: number;
@@ -181,12 +183,13 @@ function loadConfig(): OracleRuntimeConfig {
     ? readProtectedSecret(jupiterApiKeyFile, "Jupiter API key file")
     : readEnv("JUPITER_API_KEY")?.trim() || null;
   const indexerPollIntervalMs = parseInteger(readEnv("INDEXER_POLL_INTERVAL_MS"), {
-    defaultValue: 60_000,
+    defaultValue: 300_000,
     min: 5_000,
     key: "INDEXER_POLL_INTERVAL_MS",
   });
 
   return {
+    contractVersion: parseContractVersion(readEnv("CONTRACT_VERSION")),
     solanaNetwork,
     solanaNetworks,
     oraclePort,

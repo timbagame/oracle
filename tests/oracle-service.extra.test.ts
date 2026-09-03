@@ -301,6 +301,7 @@ async function runExecuteGameCompletionScenario({
     randomHash: randomHashBuffer,
     tokenMint,
     winner,
+    oracleOperator: operatorKeypair.publicKey,
     tokenProgramId,
   });
 
@@ -309,10 +310,10 @@ async function runExecuteGameCompletionScenario({
     calls,
     expectedGamePda: derived.gamePda,
     expectedOraclePda: derived.oraclePda,
-    expectedGameTokenPda: derived.gameTokenPda,
     expectedGameVaultPda: derived.gameVaultPda,
     expectedWinnerAta: derived.winnerTokenAccount,
-    expectedGameAta: derived.gameTokenAccount,
+    expectedGameAta: derived.gameVaultTokenAccount,
+    expectedOracleOperatorAta: derived.oracleOperatorTokenAccount,
     expectedTokenProgram: tokenProgramId,
     oracleOperator: operatorKeypair.publicKey,
     winner,
@@ -2171,7 +2172,7 @@ describe("OracleService internals", () => {
 
     expect(result.tx).toBe("tx-abc");
     const accounts = result.calls.accounts;
-    const tokenCtx = accounts?.gameTokenCtx;
+    const tokenCtx = accounts?.gameVaultCtx;
 
     expect(accounts?.winner.toBase58()).toBe(result.winner.toBase58());
     expect(accounts?.creator.toBase58()).toBe(result.creator.toBase58());
@@ -2179,14 +2180,16 @@ describe("OracleService internals", () => {
     expect(accounts?.game.toBase58()).toBe(result.expectedGamePda.toBase58());
     expect(accounts?.oracle.toBase58()).toBe(result.expectedOraclePda.toBase58());
     expect(tokenCtx?.tokenMint?.toBase58()).toBe(result.tokenMint.toBase58());
-    expect(tokenCtx?.gameToken?.toBase58()).toBe(result.expectedGameTokenPda.toBase58());
     expect(tokenCtx?.gameVault?.toBase58()).toBe(result.expectedGameVaultPda.toBase58());
     expect(tokenCtx?.tokenProgram?.toBase58()).toBe(result.expectedTokenProgram.toBase58());
     expect(tokenCtx?.associatedTokenProgram?.toBase58()).toBe(
       ASSOCIATED_TOKEN_PROGRAM_ID.toBase58(),
     );
     expect(accounts?.winnerTokenAccount.toBase58()).toBe(result.expectedWinnerAta.toBase58());
-    expect(tokenCtx?.gameTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
+    expect(tokenCtx?.gameVaultTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
+    expect(accounts?.oracleOperatorTokenAccount.toBase58()).toBe(
+      result.expectedOracleOperatorAta.toBase58(),
+    );
     expect(result.calls.signers).toEqual([result.operatorKeypair]);
     expect(result.calls.confirmed).toMatchObject({
       signature: "tx-abc",
@@ -2286,12 +2289,15 @@ describe("OracleService internals", () => {
     const result = await runExecuteGameCompletionScenario();
 
     expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
-    const tokenCtx = result.calls.accounts?.gameTokenCtx;
+    const tokenCtx = result.calls.accounts?.gameVaultCtx;
     expect(tokenCtx?.tokenProgram?.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
     expect(result.calls.accounts?.winnerTokenAccount.toBase58()).toBe(
       result.expectedWinnerAta.toBase58(),
     );
-    expect(tokenCtx?.gameTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
+    expect(tokenCtx?.gameVaultTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
+    expect(result.calls.accounts?.oracleOperatorTokenAccount.toBase58()).toBe(
+      result.expectedOracleOperatorAta.toBase58(),
+    );
   });
 
   it("confirmTransaction forwards latest blockhash params", async () => {
@@ -2337,5 +2343,25 @@ describe("OracleService internals", () => {
       blockhash: "external",
       lastValidBlockHeight: 13,
     });
+  });
+
+  it("confirmTransaction rejects failed modern and legacy confirmations", async () => {
+    const transactionError = { InstructionError: [0, { Custom: 1 }] };
+    const modernConnection = {
+      confirmTransaction: async () => ({ value: { err: transactionError } }),
+    } as any;
+    await expect(
+      confirmTransaction(modernConnection, "modern-failure", {
+        blockhash: "external",
+        lastValidBlockHeight: 13,
+      }),
+    ).rejects.toThrow("Transaction modern-failure failed");
+
+    const legacyConnection = {
+      confirmTransaction: async () => ({ value: { err: transactionError } }),
+    } as any;
+    await expect(confirmTransaction(legacyConnection, "legacy-failure")).rejects.toThrow(
+      "Transaction legacy-failure failed",
+    );
   });
 });

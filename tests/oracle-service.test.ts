@@ -3,7 +3,11 @@ import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
 import * as anchor from "@anchor-lang/core";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "../token-program.ts";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  deriveAssociatedTokenAddress,
+} from "../token-program.ts";
 import {
   ComputeBudgetProgram,
   Keypair,
@@ -14,9 +18,11 @@ import {
 } from "@solana/web3.js";
 import * as delayModule from "../delay.ts";
 import type { TimbaGameAccount } from "../types/timba.ts";
+import { GAME_VAULT_SEED } from "../oracle-accounts.ts";
 
 type OracleServiceClass = typeof import("../oracle-service.ts").OracleService;
 type OracleDatabaseClass = typeof import("../database.ts").OracleDatabase;
+type OracleServiceInstance = ReturnType<OracleServiceClass["getInstance"]>;
 
 function createGameAccountStub(overrides: Partial<TimbaGameAccount> = {}): TimbaGameAccount {
   return {
@@ -49,13 +55,93 @@ const makeReadyResolution = () => {
   };
 };
 
+function buildInitializeTransaction(
+  service: OracleServiceInstance,
+  options: { amount?: number; tokenMint?: PublicKey } = {},
+) {
+  const { randomHash, gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
+  const program = (service as any).program as anchor.Program;
+  const creator = Keypair.generate();
+  const tokenMint = options.tokenMint ?? Keypair.generate().publicKey;
+  const oracle = PublicKey.findProgramAddressSync([Buffer.from("oracle")], program.programId)[0];
+  const gameVault = PublicKey.findProgramAddressSync(
+    [GAME_VAULT_SEED, tokenMint.toBuffer()],
+    program.programId,
+  )[0];
+  const gameVaultTokenAccount = deriveAssociatedTokenAddress(
+    tokenMint,
+    gameVault,
+    true,
+    TOKEN_PROGRAM_ID,
+  );
+  const creatorTokenAccount = deriveAssociatedTokenAddress(tokenMint, creator.publicKey);
+  const instruction = new TransactionInstruction({
+    programId: program.programId,
+    data: new anchor.BorshInstructionCoder(program.idl).encode("initializeGame", {
+      config: {
+        gameType: { coinflip: {} },
+        amount: new anchor.BN(options.amount ?? 1),
+        maxTickets: 2,
+        minTickets: 2,
+        timeout: new anchor.BN(60),
+        isPrivate: false,
+      },
+      randomHash: Array.from(Buffer.from(randomHash, "hex")),
+    }),
+    keys: [
+      { pubkey: new PublicKey(gameAddress), isSigner: false, isWritable: true },
+      { pubkey: creator.publicKey, isSigner: true, isWritable: true },
+      { pubkey: oracle, isSigner: false, isWritable: false },
+      { pubkey: Keypair.generate().publicKey, isSigner: true, isWritable: false },
+      { pubkey: tokenMint, isSigner: false, isWritable: false },
+      { pubkey: gameVault, isSigner: false, isWritable: false },
+      { pubkey: gameVaultTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: creatorTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+  });
+
+  return {
+    tokenMint,
+    transaction: new Transaction({
+      feePayer: creator.publicKey,
+      recentBlockhash: PublicKey.default.toBase58(),
+    }).add(instruction),
+  };
+}
+
+function serializeUnsigned(transaction: Transaction): string {
+  return transaction
+    .serialize({ requireAllSignatures: false, verifySignatures: false })
+    .toString("base64");
+}
+
+async function captureError(
+  operation: () => unknown | Promise<unknown>,
+): Promise<Error & { code?: string }> {
+  try {
+    await operation();
+  } catch (error) {
+    return error as Error & { code?: string };
+  }
+  throw new Error("Expected operation to throw");
+}
+
 let OracleService: OracleServiceClass;
 let OracleDatabase: OracleDatabaseClass;
+let testService: OracleServiceInstance;
 let cleanup: () => void;
 
 beforeAll(async () => {
   const env = await setupOracleServiceEnv("oracle-service-test");
   ({ OracleService, OracleDatabase } = env);
+  testService = OracleService.createWith(OracleDatabase.getInstance(), {
+    tokenPriceResolver: {
+      getTokenUsdPrices: async (mints) => new Map(mints.map((mint) => [mint, 1])),
+    },
+  });
   cleanup = env.cleanup;
 });
 
@@ -64,8 +150,153 @@ afterAll(() => {
 });
 
 describe("OracleService", () => {
-  it("replaces and signs a distinct initialize-game operator placeholder", () => {
-    const service = OracleService.getInstance();
+  it("enforces the current dynamic token policy with a five-percent grace band", async () => {
+    const service = testService;
+    service.cleanupOldRecords(-1);
+    const db = OracleDatabase.getInstance();
+    const { tokenMint, transaction } = buildInitializeTransaction(service);
+
+    expect(
+      await captureError(() => service.signGameTransaction(serializeUnsigned(transaction))),
+    ).toMatchObject({ code: "unsupported_mint", message: "Token mint is not supported" });
+
+    db.setTokenPolicy(tokenMint.toBase58(), false, "0");
+    expect(
+      await captureError(() => service.signGameTransaction(serializeUnsigned(transaction))),
+    ).toMatchObject({ code: "token_disabled", message: "Token mint is disabled" });
+
+    db.setTokenPolicy(tokenMint.toBase58(), true, "3");
+    await expect(service.getTokenPolicies()).resolves.toContainEqual(
+      expect.objectContaining({
+        mint: tokenMint.toBase58(),
+        minimumAmountRaw: "100",
+        acceptedMinimumAmountRaw: "95",
+      }),
+    );
+    expect(
+      await captureError(() => service.signGameTransaction(serializeUnsigned(transaction))),
+    ).toMatchObject({
+      code: "amount_below_minimum",
+      message: "Game amount is below the token minimum",
+      details: { minimumAmountRaw: "100", acceptedMinimumAmountRaw: "95" },
+    });
+
+    const graceAmount = buildInitializeTransaction(service, { tokenMint, amount: 95 });
+    await expect(
+      service.signGameTransaction(serializeUnsigned(graceAmount.transaction)),
+    ).resolves.toEqual(expect.any(String));
+
+    const unavailable = buildInitializeTransaction(service, { tokenMint });
+    const policyLookup = spyOn(db, "getTokenPolicy").mockImplementation(() => {
+      throw new Error("database unavailable");
+    });
+    try {
+      expect(
+        await captureError(() =>
+          service.signGameTransaction(serializeUnsigned(unavailable.transaction)),
+        ),
+      ).toMatchObject({
+        code: "policy_unavailable",
+        message: "Token creation policy is unavailable",
+      });
+    } finally {
+      policyLookup.mockRestore();
+    }
+  });
+
+  it("does not persist an enabled policy when its live price is unavailable", async () => {
+    const db = OracleDatabase.getInstance();
+    const mint = Keypair.generate().publicKey.toBase58();
+    const service = OracleService.createWith(db, {
+      tokenPriceResolver: {
+        getTokenUsdPrices: async () => {
+          throw new Error("price unavailable");
+        },
+      },
+    });
+
+    await expect(service.setTokenPolicy(mint, true)).rejects.toThrow("price unavailable");
+    expect(db.getTokenPolicy(mint)).toBeNull();
+  });
+
+  it("lists available token policies when one enabled token has no price", async () => {
+    const db = OracleDatabase.getInstance();
+    const availableMint = Keypair.generate().publicKey.toBase58();
+    const unavailableMint = Keypair.generate().publicKey.toBase58();
+    const disabledMint = Keypair.generate().publicKey.toBase58();
+    db.setTokenPolicy(availableMint, true, "3");
+    db.setTokenPolicy(unavailableMint, true, "3");
+    db.setTokenPolicy(disabledMint, false, "3");
+    const service = OracleService.createWith(db, {
+      tokenPriceResolver: {
+        getTokenUsdPrices: async () => new Map([[availableMint, 1]]),
+      },
+    });
+
+    const policies = await service.getTokenPolicies();
+
+    expect(policies).toContainEqual(
+      expect.objectContaining({ mint: availableMint, enabled: true, minimumAmountRaw: "100" }),
+    );
+    expect(policies.some((policy) => policy.mint === unavailableMint)).toBe(false);
+    expect(policies).toContainEqual(
+      expect.objectContaining({ mint: disabledMint, enabled: false, minimumAmountRaw: "0" }),
+    );
+  });
+
+  it("rejects durable-nonce initialization transactions", async () => {
+    const service = testService;
+    service.cleanupOldRecords(-1);
+    const db = OracleDatabase.getInstance();
+    const { tokenMint, transaction } = buildInitializeTransaction(service);
+    const creator = transaction.feePayer!;
+    db.setTokenPolicy(tokenMint.toBase58(), true, "0");
+    transaction.instructions.unshift(
+      SystemProgram.nonceAdvance({
+        noncePubkey: Keypair.generate().publicKey,
+        authorizedPubkey: creator,
+      }),
+    );
+
+    await expect(service.signGameTransaction(serializeUnsigned(transaction))).rejects.toThrow(
+      "Durable nonce transactions are not supported",
+    );
+  });
+
+  it("continues to allow ordinary System Program setup instructions", async () => {
+    const service = testService;
+    service.cleanupOldRecords(-1);
+    const db = OracleDatabase.getInstance();
+    const { tokenMint, transaction } = buildInitializeTransaction(service);
+    db.setTokenPolicy(tokenMint.toBase58(), true, "0");
+    transaction.instructions.unshift(
+      SystemProgram.transfer({
+        fromPubkey: transaction.feePayer!,
+        toPubkey: Keypair.generate().publicKey,
+        lamports: 1,
+      }),
+    );
+
+    await expect(service.signGameTransaction(serializeUnsigned(transaction))).resolves.toEqual(
+      expect.any(String),
+    );
+  });
+
+  it("rejects a v0.3 initialization with a substituted vault account", async () => {
+    const service = testService;
+    service.cleanupOldRecords(-1);
+    const db = OracleDatabase.getInstance();
+    const { tokenMint, transaction } = buildInitializeTransaction(service);
+    db.setTokenPolicy(tokenMint.toBase58(), true, "0");
+    transaction.instructions[0]!.keys[5]!.pubkey = Keypair.generate().publicKey;
+
+    await expect(service.signGameTransaction(serializeUnsigned(transaction))).rejects.toThrow(
+      "Invalid game vault account",
+    );
+  });
+
+  it("replaces and signs a distinct initialize-game operator placeholder", async () => {
+    const service = testService;
     service.cleanupOldRecords(-1);
     const { randomHash, gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
     const program = (service as any).program as anchor.Program;
@@ -73,6 +304,19 @@ describe("OracleService", () => {
     const creator = Keypair.generate();
     const placeholder = Keypair.generate().publicKey;
     const oracle = PublicKey.findProgramAddressSync([Buffer.from("oracle")], program.programId)[0];
+    const tokenMint = Keypair.generate().publicKey;
+    const gameVault = PublicKey.findProgramAddressSync(
+      [GAME_VAULT_SEED, tokenMint.toBuffer()],
+      program.programId,
+    )[0];
+    const gameVaultTokenAccount = deriveAssociatedTokenAddress(
+      tokenMint,
+      gameVault,
+      true,
+      TOKEN_PROGRAM_ID,
+    );
+    const creatorTokenAccount = deriveAssociatedTokenAddress(tokenMint, creator.publicKey);
+    OracleDatabase.getInstance().setTokenPolicy(tokenMint.toBase58(), true, "0");
     const data = new anchor.BorshInstructionCoder(program.idl).encode("initializeGame", {
       config: {
         gameType: { coinflip: {} },
@@ -92,13 +336,12 @@ describe("OracleService", () => {
         { pubkey: creator.publicKey, isSigner: true, isWritable: true },
         { pubkey: oracle, isSigner: false, isWritable: false },
         { pubkey: placeholder, isSigner: true, isWritable: false },
-        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false },
-        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
-        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false },
-        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
-        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        { pubkey: tokenMint, isSigner: false, isWritable: false },
+        { pubkey: gameVault, isSigner: false, isWritable: false },
+        { pubkey: gameVaultTokenAccount, isSigner: false, isWritable: true },
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: creatorTokenAccount, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ],
     });
@@ -107,7 +350,7 @@ describe("OracleService", () => {
       recentBlockhash: PublicKey.default.toBase58(),
     }).add(instruction);
 
-    const signedBase64 = service.signGameTransaction(
+    const signedBase64 = await service.signGameTransaction(
       transaction
         .serialize({ requireAllSignatures: false, verifySignatures: false })
         .toString("base64"),
@@ -123,8 +366,8 @@ describe("OracleService", () => {
     ).not.toBeNull();
   });
 
-  it("signs an atomic private-game creator join", () => {
-    const service = OracleService.getInstance();
+  it("signs an atomic private-game creator join", async () => {
+    const service = testService;
     service.cleanupOldRecords(-1);
     const { randomHash, gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
     const program = (service as any).program as anchor.Program;
@@ -132,6 +375,18 @@ describe("OracleService", () => {
     const creator = Keypair.generate();
     const oracle = PublicKey.findProgramAddressSync([Buffer.from("oracle")], program.programId)[0];
     const tokenMint = Keypair.generate().publicKey;
+    const gameVault = PublicKey.findProgramAddressSync(
+      [GAME_VAULT_SEED, tokenMint.toBuffer()],
+      program.programId,
+    )[0];
+    const gameVaultTokenAccount = deriveAssociatedTokenAddress(
+      tokenMint,
+      gameVault,
+      true,
+      TOKEN_PROGRAM_ID,
+    );
+    const creatorTokenAccount = deriveAssociatedTokenAddress(tokenMint, creator.publicKey);
+    OracleDatabase.getInstance().setTokenPolicy(tokenMint.toBase58(), true, "0");
     const initialize = new TransactionInstruction({
       programId: program.programId,
       data: new anchor.BorshInstructionCoder(program.idl).encode("initializeGame", {
@@ -151,12 +406,11 @@ describe("OracleService", () => {
         { pubkey: oracle, isSigner: false, isWritable: false },
         { pubkey: operatorKeypair.publicKey, isSigner: true, isWritable: false },
         { pubkey: tokenMint, isSigner: false, isWritable: false },
-        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
-        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false },
-        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        { pubkey: gameVault, isSigner: false, isWritable: false },
+        { pubkey: gameVaultTokenAccount, isSigner: false, isWritable: true },
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        { pubkey: creatorTokenAccount, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ],
     });
@@ -168,12 +422,11 @@ describe("OracleService", () => {
         { pubkey: creator.publicKey, isSigner: true, isWritable: true },
         { pubkey: operatorKeypair.publicKey, isSigner: true, isWritable: false },
         { pubkey: tokenMint, isSigner: false, isWritable: false },
-        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
-        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false },
-        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        { pubkey: gameVault, isSigner: false, isWritable: false },
+        { pubkey: gameVaultTokenAccount, isSigner: false, isWritable: true },
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        { pubkey: creatorTokenAccount, isSigner: false, isWritable: true },
         { pubkey: oracle, isSigner: false, isWritable: false },
       ],
     });
@@ -202,7 +455,7 @@ describe("OracleService", () => {
 
     const signed = Transaction.from(
       Buffer.from(
-        service.signGameTransaction(
+        await service.signGameTransaction(
           transaction
             .serialize({ requireAllSignatures: false, verifySignatures: false })
             .toString("base64"),

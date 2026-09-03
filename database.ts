@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { getConfig } from "./config.ts";
 import { logger } from "./logger.ts";
+import { normalizeMint, normalizeTokenDecimals, type StoredTokenPolicy } from "./token-policy.ts";
 
 // Constants
 const DEFAULT_STATUS = "pending";
@@ -42,6 +43,14 @@ const SQL_STATEMENTS = Object.freeze({
     "UPDATE game_tracking SET status = ?, completed_at = NULL, last_checked = ? WHERE game_address = ?",
   setAutoCompleteDisabled:
     "UPDATE game_tracking SET auto_complete_disabled = ?, last_checked = ? WHERE game_address = ?",
+  upsertTokenPolicy: `INSERT INTO token_policies (mint, enabled, minimum_amount_raw, decimals, revision, effective_at)
+    VALUES (?, ?, '0', ?, 1, ?)
+    ON CONFLICT(mint) DO UPDATE SET
+      enabled = excluded.enabled,
+      minimum_amount_raw = '0',
+      decimals = excluded.decimals,
+      revision = token_policies.revision + 1,
+      effective_at = excluded.effective_at`,
 } satisfies Record<string, string>);
 
 const COMPLETED_GAME_PREDICATE = "status != ? AND completed_at IS NOT NULL AND completed_at < ?";
@@ -76,6 +85,10 @@ const SQL_QUERIES = Object.freeze({
     "SELECT player_address FROM game_players WHERE game_address = ? ORDER BY ticket_index ASC",
   selectPlayerTicketStats:
     "SELECT COUNT(*) as count, MAX(ticket_index) as max_index, MIN(ticket_index) as min_index FROM game_players WHERE game_address = ?",
+  selectTokenPolicy:
+    "SELECT mint, enabled, decimals, revision, effective_at FROM token_policies WHERE mint = ?",
+  selectTokenPolicies:
+    "SELECT mint, enabled, decimals, revision, effective_at FROM token_policies ORDER BY mint ASC",
 } satisfies Record<string, string>);
 
 const COMPLETED_GAME_SUBQUERY = `
@@ -165,6 +178,20 @@ const TABLE_DEFINITIONS: ReadonlyArray<{
     `,
     log: "Ensuring game_players table exists",
     error: "Failed to ensure game_players table",
+  },
+  {
+    sql: `
+      CREATE TABLE IF NOT EXISTS token_policies (
+        mint TEXT PRIMARY KEY,
+        enabled BOOLEAN NOT NULL,
+        minimum_amount_raw TEXT NOT NULL DEFAULT '0',
+        decimals INTEGER NOT NULL CHECK (decimals >= 0 AND decimals <= 15),
+        revision INTEGER NOT NULL CHECK (revision > 0),
+        effective_at INTEGER NOT NULL
+      )
+    `,
+    log: "Ensuring token_policies table exists",
+    error: "Failed to ensure token_policies table",
   },
 ];
 
@@ -293,6 +320,7 @@ export class OracleDatabase {
     this.ensureSecretSchema();
     this.ensureTicketSchema();
     this.ensureTrackingSchema();
+    this.ensureTokenPolicySchema();
     this.ensureTrackingIndexes();
   }
 
@@ -365,6 +393,25 @@ export class OracleDatabase {
         },
       ]);
     }
+  }
+
+  private ensureTokenPolicySchema(): void {
+    const tableInfo = this.db.query("PRAGMA table_info('token_policies')").all() as Array<{
+      name: string;
+    }>;
+    if (!tableInfo.some((column) => column.name === "decimals")) {
+      this.executeSchemaSteps([
+        {
+          sql: "ALTER TABLE token_policies ADD COLUMN decimals INTEGER",
+          log: "Adding decimals column to token_policies",
+          error: "Failed to add decimals column to token_policies",
+        },
+      ]);
+    }
+    this.runStatement(
+      "UPDATE token_policies SET enabled = FALSE, decimals = 0 WHERE decimals IS NULL",
+      "Failed to disable legacy token policies",
+    );
   }
 
   private executeDbOperation<T>(operation: () => T, errorMessage: string, defaultValue?: T): T {
@@ -448,6 +495,28 @@ export class OracleDatabase {
       errorMessage,
       [],
     );
+  }
+
+  private queryOneStrict<T>(
+    sql: string,
+    errorMessage: string,
+    ...params: Parameters<ReturnType<Database["prepare"]>["get"]>
+  ): T | null {
+    return this.executeDbOperation(() => {
+      const stmt = this.getPreparedStatement(sql);
+      return (stmt.get(...params) as T | null) ?? null;
+    }, errorMessage);
+  }
+
+  private queryAllStrict<T>(
+    sql: string,
+    errorMessage: string,
+    ...params: Parameters<ReturnType<Database["prepare"]>["all"]>
+  ): T[] {
+    return this.executeDbOperation(() => {
+      const stmt = this.getPreparedStatement(sql);
+      return stmt.all(...params) as T[];
+    }, errorMessage);
   }
 
   // Secret key management
@@ -676,6 +745,72 @@ export class OracleDatabase {
       return null;
     }
     return Boolean(record.auto_complete_disabled);
+  }
+
+  public setTokenPolicy(
+    mint: string,
+    enabled: boolean,
+    decimals: string | number,
+  ): StoredTokenPolicy {
+    const normalizedMint = normalizeMint(mint);
+    const normalizedDecimals = normalizeTokenDecimals(decimals);
+    const effectiveAtMs = Date.now();
+
+    this.runStatement(
+      SQL_STATEMENTS.upsertTokenPolicy,
+      `Failed to update token policy for ${normalizedMint}`,
+      normalizedMint,
+      enabled,
+      normalizedDecimals,
+      effectiveAtMs,
+    );
+
+    const policy = this.getTokenPolicy(normalizedMint);
+    if (!policy) {
+      throw new Error(`Failed to load updated token policy for ${normalizedMint}`);
+    }
+    return policy;
+  }
+
+  public getTokenPolicy(mint: string): StoredTokenPolicy | null {
+    const normalizedMint = normalizeMint(mint);
+    const row = this.queryOneStrict<{
+      mint: string;
+      enabled: number | boolean;
+      decimals: number | null;
+      revision: number;
+      effective_at: number;
+    }>(SQL_QUERIES.selectTokenPolicy, "Failed to get token policy", normalizedMint);
+
+    return row ? this.mapTokenPolicy(row) : null;
+  }
+
+  public getTokenPolicies(): StoredTokenPolicy[] {
+    return this.queryAllStrict<{
+      mint: string;
+      enabled: number | boolean;
+      decimals: number | null;
+      revision: number;
+      effective_at: number;
+    }>(SQL_QUERIES.selectTokenPolicies, "Failed to list token policies").map((row) =>
+      this.mapTokenPolicy(row),
+    );
+  }
+
+  private mapTokenPolicy(row: {
+    mint: string;
+    enabled: number | boolean;
+    decimals: number | null;
+    revision: number;
+    effective_at: number;
+  }): StoredTokenPolicy {
+    return {
+      mint: row.mint,
+      enabled: Boolean(row.enabled),
+      decimals: normalizeTokenDecimals(row.decimals ?? ""),
+      revision: row.revision,
+      effectiveAtMs: row.effective_at,
+    };
   }
 
   public getGameType(gameAddress: string): string | null {
