@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 
 export const DEFAULT_ORACLE_PORT = 3001;
 const DEFAULT_DATABASE_FILE = "oracle.sqlite";
+const DEFAULT_INDEXER_DATABASE_FILE = "indexer.sqlite";
 const DEFAULT_KEYPAIR_FILE = "operator-keypair.json";
 const LEGACY_KEYPAIR_FILE = "admin-keypair.json";
 
@@ -100,6 +101,8 @@ export interface OracleRuntimeConfig {
   readonly solanaNetworks: readonly string[];
   readonly oraclePort: number;
   readonly databaseFile: string;
+  readonly indexerDatabaseFile: string;
+  readonly indexerPollIntervalMs: number;
   readonly operatorKeypairPath: string;
   readonly operatorKeypairSource: string;
   readonly scanThrottleMs: number;
@@ -122,6 +125,7 @@ function loadConfig(): OracleRuntimeConfig {
   const solanaNetwork = solanaNetworks[0]!;
 
   const databaseFile = readEnv("DATABASE_FILE") ?? DEFAULT_DATABASE_FILE;
+  const indexerDatabaseFile = readEnv("INDEXER_DATABASE_FILE") ?? DEFAULT_INDEXER_DATABASE_FILE;
   const configuredOperatorKeypair =
     readEnv("OPERATOR_KEYPAIR_PATH") ?? readEnv("ORACLE_KEYPAIR_PATH");
   const operatorKeypairSource = configuredOperatorKeypair
@@ -176,12 +180,19 @@ function loadConfig(): OracleRuntimeConfig {
   const jupiterApiKey = jupiterApiKeyFile
     ? readProtectedSecret(jupiterApiKeyFile, "Jupiter API key file")
     : readEnv("JUPITER_API_KEY")?.trim() || null;
+  const indexerPollIntervalMs = parseInteger(readEnv("INDEXER_POLL_INTERVAL_MS"), {
+    defaultValue: 60_000,
+    min: 5_000,
+    key: "INDEXER_POLL_INTERVAL_MS",
+  });
 
   return {
     solanaNetwork,
     solanaNetworks,
     oraclePort,
     databaseFile,
+    indexerDatabaseFile,
+    indexerPollIntervalMs,
     operatorKeypairPath,
     operatorKeypairSource,
     scanThrottleMs,

@@ -124,6 +124,21 @@ describe("index router", () => {
     }
   });
 
+  test("keeps the complete indexer namespace behind Oracle authentication", async () => {
+    const securedRouter = context.module.buildFetchRouter(context.handlers, {
+      apiToken: "service-secret",
+      handleIndexerRequest: async () => Response.json({ status: "ok" }),
+    });
+
+    expect((await securedRouter(buildRequest("/indexer/api/stats"))).status).toBe(401);
+    const authorized = await securedRouter(
+      buildRequest("/indexer/api/stats", {
+        headers: { authorization: "Bearer service-secret" },
+      }),
+    );
+    expect(authorized.status).toBe(200);
+  });
+
   test("does not expose administrative HTTP routes", async () => {
     const productionRouter = context.module.buildFetchRouter(context.handlers, {
       apiToken: "service-secret",

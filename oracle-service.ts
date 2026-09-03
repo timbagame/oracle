@@ -151,6 +151,14 @@ export class OracleService {
     return new OracleService(db, options.metrics, options.tokenPriceResolver);
   }
 
+  public getConnection(): anchor.web3.Connection {
+    return this.connection;
+  }
+
+  public getProgramId(): anchor.web3.PublicKey {
+    return this.program.programId;
+  }
+
   private initRpcEndpointManager(): RpcEndpointManager {
     return new RpcEndpointManager(this.config.solanaNetworks, {
       commitment: "confirmed",

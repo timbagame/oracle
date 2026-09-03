@@ -13,6 +13,7 @@ A robust Oracle service for Solana-based games that generates cryptographic secr
 - **📊 Real-Time Monitoring**: Health checks and comprehensive statistics
 - **🛡️ Error Resilience**: Robust error handling and retry mechanisms
 - **💾 Persistent Storage**: SQLite database for secret and game tracking
+- **📈 Public Game Index**: VPS-hosted history, profiles, leaderboards, and cached statistics in a separate SQLite database
 - **⚡ Optimized Performance**: Cached game metadata to minimize blockchain calls
 - **🎲 Secure Secret Handling**: Secrets retained until game completion
 
@@ -24,6 +25,7 @@ The Oracle service uses a hybrid approach with performance optimizations:
 2. **Fallback**: Periodic scanning every 5 minutes for missed events
 3. **Database**: Persistent tracking of secrets and game states
 4. **Caching**: Local game metadata cache to avoid unnecessary blockchain calls
+5. **Public index**: Independent `indexer.sqlite` cursor and materialized statistics caches
 
 ### Performance Optimizations
 
@@ -34,15 +36,17 @@ The Oracle service uses a hybrid approach with performance optimizations:
 
 ## 📡 API Endpoints
 
-| Endpoint                 | Method | Description                                      | Body Parameters       |
-| ------------------------ | ------ | ------------------------------------------------ | --------------------- |
-| `/health`                | GET    | Service health                                   | None                  |
-| `/generate-hash`         | POST   | Generate and retain a secret; return commitment  | `gameType` (optional) |
-| `/sign-game-transaction` | POST   | Validate and partially sign game initialization  | `txBase64`            |
-| `/token-policies`        | GET    | Return the current token creation policies       | None                  |
-| `/stats`                 | GET    | Oracle statistics and metrics                    | None                  |
-| `/games/complete-now`    | POST   | Attempt immediate completion of one tracked game | `gameAddress`         |
-| `/`                      | GET    | Generated API documentation                      | None                  |
+| Endpoint                 | Method | Description                                           | Body Parameters       |
+| ------------------------ | ------ | ----------------------------------------------------- | --------------------- |
+| `/health`                | GET    | Service health                                        | None                  |
+| `/generate-hash`         | POST   | Generate and retain a secret; return commitment       | `gameType` (optional) |
+| `/sign-game-transaction` | POST   | Validate and partially sign game initialization       | `txBase64`            |
+| `/token-policies`        | GET    | Return the current token creation policies            | None                  |
+| `/stats`                 | GET    | Oracle statistics and metrics                         | None                  |
+| `/games/complete-now`    | POST   | Attempt immediate completion of one tracked game      | `gameAddress`         |
+| `/indexer/health`        | GET    | Public indexer health for authenticated callers       | None                  |
+| `/indexer/api/*`         | GET    | Games, profiles, tokens, statistics, and leaderboards | Query-specific        |
+| `/`                      | GET    | Generated API documentation                           | None                  |
 
 All endpoints except `/health` and `/` require bearer authentication. Rootless Podman reads the token from the permission-checked `secrets/oracle-api-token` file; local development may use `ORACLE_API_TOKEN`. Administrative requeue, auto-complete, and token-policy controls are intentionally CLI-only:
 
@@ -115,6 +119,12 @@ SOLANA_NETWORK=["https://api.mainnet-beta.solana.com","https://rpc-backup.exampl
 # Optional: API server port (default: 3001)
 ORACLE_PORT=3001
 ORACLE_API_TOKEN=<shared-random-secret>
+
+# Public history database and polling interval
+INDEXER_DATABASE_FILE=./indexer.sqlite
+INDEXER_POLL_INTERVAL_MS=60000
+
+# Required in production for USD prices and dynamic minimum amounts
 JUPITER_API_KEY=<jupiter-api-key>
 
 # Optional: allow the service to generate an ephemeral operator keypair when the

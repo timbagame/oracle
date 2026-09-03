@@ -14,6 +14,8 @@ Keep these files outside `.env` and set them to mode `600`:
 
 The API token must match the Bot repository copy. The configured keypair must be the Oracle operator stored on chain.
 
+The service uses two independent SQLite files. `oracle.sqlite` contains secrets and completion state. `indexer.sqlite` contains only public chain history and cached statistics. Never replace one with the other.
+
 After starting the v0.3.0 Oracle and before activating Bot or Web game creation, define every supported mint in the durable Oracle database. A missing policy disables game creation for that mint:
 
 ```bash
@@ -26,6 +28,38 @@ recommended minimum. It accepts 5% below that recommendation to tolerate a
 small price move after the user receives a quote. Prices are cached for no more
 than 60 seconds, and Oracle refuses to sign creation transactions if the current
 price is unavailable.
+
+## One-time D1 migration
+
+First confirm that the existing Worker's historical backfill reports `complete: true`:
+
+```bash
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer $INDEXER_CRON_SECRET" \
+  https://<indexer-worker-url>/api/backfill
+```
+
+Do not continue with an incomplete backfill. The importer enforces this so player profiles and history cannot be silently truncated.
+
+Export the remote D1 database before switching Web traffic. From the old Web checkout:
+
+```bash
+bunx wrangler d1 export timba-games --remote \
+  --config workers/indexer/wrangler.toml \
+  --output timba-games.sql
+```
+
+Copy `timba-games.sql` to the VPS, stop the Oracle, and import it from the new Oracle checkout. The importer refuses to overwrite an existing target:
+
+```bash
+systemctl --user stop timba-oracle.service
+bun install --frozen-lockfile
+bun run indexer:import /path/to/timba-games.sql ./indexer.sqlite
+chmod 600 indexer.sqlite secrets/jupiter-api-key
+systemctl --user start timba-oracle.service
+```
+
+The imported Solana cursor lets the Oracle catch up every transaction after the export. Wait until `/indexer/api/stats` is current, then deploy Web. Keep the old D1 Worker until the Web smoke checks pass; it is no longer used after the Web cutover.
 
 ## Rootless Podman Quadlet
 
@@ -86,6 +120,6 @@ podman exec oracle bun run admin token-policy list
 podman exec oracle bun run admin token-policy set <mint> <on|off> <token-decimals>
 ```
 
-Monitor logs for subscription failures, `/stats` for completion activity, and the operator wallet balance for transaction fees.
+Monitor logs for subscription failures, `/stats` for completion activity, `/indexer/api/stats` for the public index, and the operator wallet balance for transaction fees. Back up both SQLite files.
 
 For coordinated deployment order, chain administration, upgrades, and incident procedures, use `operations/DEPLOYMENT.md` and the relevant Operations runbook.
