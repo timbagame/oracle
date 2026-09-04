@@ -1,5 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { Keypair } from "@solana/web3.js";
+import { Keypair } from "./helpers/solana-fixtures.ts";
 import { PublicIndexer } from "../indexer/service.ts";
 
 function createIndexer(pollIntervalMs: number, eventDebounceMs = 0, now: () => number = Date.now) {

@@ -2,7 +2,7 @@ import { beforeAll, afterAll, describe, it, expect, spyOn } from "bun:test";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import { setupOracleServiceEnv } from "./helpers/setup-oracle-service-env.ts";
-import * as anchor from "@anchor-lang/core";
+import * as anchor from "./helpers/solana-fixtures.ts";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
@@ -15,7 +15,7 @@ import {
   SystemProgram,
   Transaction,
   TransactionInstruction,
-} from "@solana/web3.js";
+} from "./helpers/solana-fixtures.ts";
 import * as delayModule from "../delay.ts";
 import type { TimbaGameAccount } from "../types/timba.ts";
 import { GAME_VAULT_SEED } from "../oracle-accounts.ts";
@@ -301,6 +301,7 @@ describe("OracleService", () => {
     const { randomHash, gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
     const program = (service as any).program as anchor.Program;
     const operatorKeypair = (service as any).operatorKeypair as Keypair;
+    const operatorPublicKey = new PublicKey(operatorKeypair.address);
     const creator = Keypair.generate();
     const placeholder = Keypair.generate().publicKey;
     const oracle = PublicKey.findProgramAddressSync([Buffer.from("oracle")], program.programId)[0];
@@ -358,11 +359,10 @@ describe("OracleService", () => {
     const signed = Transaction.from(Buffer.from(signedBase64, "base64"));
     const signedInitialize = signed.instructions[0]!;
 
-    expect(signedInitialize.keys[3]!.pubkey.equals(operatorKeypair.publicKey)).toBe(true);
+    expect(signedInitialize.keys[3]!.pubkey.equals(operatorPublicKey)).toBe(true);
     expect(signed.signatures.some(({ publicKey }) => publicKey.equals(placeholder))).toBe(false);
     expect(
-      signed.signatures.find(({ publicKey }) => publicKey.equals(operatorKeypair.publicKey))
-        ?.signature,
+      signed.signatures.find(({ publicKey }) => publicKey.equals(operatorPublicKey))?.signature,
     ).not.toBeNull();
   });
 
@@ -372,6 +372,7 @@ describe("OracleService", () => {
     const { randomHash, gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
     const program = (service as any).program as anchor.Program;
     const operatorKeypair = (service as any).operatorKeypair as Keypair;
+    const operatorPublicKey = new PublicKey(operatorKeypair.address);
     const creator = Keypair.generate();
     const oracle = PublicKey.findProgramAddressSync([Buffer.from("oracle")], program.programId)[0];
     const tokenMint = Keypair.generate().publicKey;
@@ -404,7 +405,7 @@ describe("OracleService", () => {
         { pubkey: new PublicKey(gameAddress), isSigner: false, isWritable: true },
         { pubkey: creator.publicKey, isSigner: true, isWritable: true },
         { pubkey: oracle, isSigner: false, isWritable: false },
-        { pubkey: operatorKeypair.publicKey, isSigner: true, isWritable: false },
+        { pubkey: operatorPublicKey, isSigner: true, isWritable: false },
         { pubkey: tokenMint, isSigner: false, isWritable: false },
         { pubkey: gameVault, isSigner: false, isWritable: false },
         { pubkey: gameVaultTokenAccount, isSigner: false, isWritable: true },
@@ -420,7 +421,7 @@ describe("OracleService", () => {
       keys: [
         { pubkey: new PublicKey(gameAddress), isSigner: false, isWritable: true },
         { pubkey: creator.publicKey, isSigner: true, isWritable: true },
-        { pubkey: operatorKeypair.publicKey, isSigner: true, isWritable: false },
+        { pubkey: operatorPublicKey, isSigner: true, isWritable: false },
         { pubkey: tokenMint, isSigner: false, isWritable: false },
         { pubkey: gameVault, isSigner: false, isWritable: false },
         { pubkey: gameVaultTokenAccount, isSigner: false, isWritable: true },
@@ -449,17 +450,17 @@ describe("OracleService", () => {
       join,
     );
     transaction.partialSign(creator);
+    const creatorSignedPayload = transaction.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
+    });
     const creatorSignature = transaction.signatures.find(({ publicKey }) =>
       publicKey.equals(creator.publicKey),
     )!.signature;
 
     const signed = Transaction.from(
       Buffer.from(
-        await service.signGameTransaction(
-          transaction
-            .serialize({ requireAllSignatures: false, verifySignatures: false })
-            .toString("base64"),
-        ),
+        await service.signGameTransaction(creatorSignedPayload.toString("base64")),
         "base64",
       ),
     );
@@ -468,8 +469,7 @@ describe("OracleService", () => {
       signed.signatures.find(({ publicKey }) => publicKey.equals(creator.publicKey))?.signature,
     ).toEqual(creatorSignature);
     expect(
-      signed.signatures.find(({ publicKey }) => publicKey.equals(operatorKeypair.publicKey))
-        ?.signature,
+      signed.signatures.find(({ publicKey }) => publicKey.equals(operatorPublicKey))?.signature,
     ).not.toBeNull();
   });
 
@@ -536,7 +536,7 @@ describe("OracleService", () => {
     const { gameAddress } = service.generateGameSecrets();
 
     const resolved: any = service.completionManager.resolveStoredGame(gameAddress);
-    expect(resolved?.gamePda.toBase58()).toBe(gameAddress);
+    expect(String(resolved?.gamePda)).toBe(gameAddress);
     expect(resolved?.randomHashBuffer).toBeInstanceOf(Buffer);
 
     const fakeAddress = Keypair.generate().publicKey.toBase58();
@@ -547,6 +547,7 @@ describe("OracleService", () => {
     const service = OracleService.getInstance();
     const check = service.completionManager.isAccountNotFoundError.bind(service.completionManager);
     expect(check({ message: "Account does not exist" })).toBe(true);
+    expect(check({ message: "Account not found at address: test" })).toBe(true);
     expect(check({ message: "Something else" })).toBe(false);
   });
 

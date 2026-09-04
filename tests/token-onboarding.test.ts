@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Keypair, PublicKey, Transaction, type AccountInfo } from "@solana/web3.js";
+import { Keypair, PublicKey, Transaction, type AccountInfo } from "./helpers/solana-fixtures.ts";
 import { prepareGameToken } from "../token-onboarding.ts";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -7,7 +7,7 @@ import {
   deriveAssociatedTokenAddress,
 } from "../token-program.ts";
 
-function accountInfo(data: Buffer, owner = TOKEN_PROGRAM_ID): AccountInfo<Buffer> {
+function accountInfo(data: Buffer, owner = new PublicKey(TOKEN_PROGRAM_ID)): AccountInfo<Buffer> {
   return { data, executable: false, lamports: 1, owner, rentEpoch: 0 };
 }
 
@@ -32,8 +32,10 @@ describe("game token onboarding", () => {
     const mint = Keypair.generate().publicKey;
     const operatorAta = deriveAssociatedTokenAddress(mint, operatorKeypair.publicKey);
     const connection = {
-      getAccountInfo: async (address: PublicKey) =>
-        address.equals(mint) ? mintAccount(8) : tokenAccount(mint, operatorKeypair.publicKey),
+      getAccountInfo: async (accountAddress: string) =>
+        accountAddress === mint.address
+          ? mintAccount(8)
+          : tokenAccount(mint, operatorKeypair.publicKey),
     };
 
     await expect(
@@ -45,20 +47,23 @@ describe("game token onboarding", () => {
     const operatorKeypair = Keypair.generate();
     const mint = Keypair.generate().publicKey;
     let sentTransaction: Buffer | undefined;
-    let confirmed: unknown;
     const connection = {
-      getAccountInfo: async (address: PublicKey) => (address.equals(mint) ? mintAccount(6) : null),
+      getAccountInfo: async (accountAddress: string) =>
+        accountAddress === mint.address ? mintAccount(6) : null,
       getLatestBlockhash: async () => ({
-        blockhash: PublicKey.default.toBase58(),
-        lastValidBlockHeight: 42,
+        value: {
+          blockhash: PublicKey.default.toBase58(),
+          lastValidBlockHeight: 42n,
+        },
       }),
-      sendRawTransaction: async (raw: Buffer) => {
-        sentTransaction = raw;
+      sendTransaction: async (wire: string) => {
+        sentTransaction = Buffer.from(wire, "base64");
         return "ata-signature";
       },
-      confirmTransaction: async (strategy: unknown) => {
-        confirmed = strategy;
-      },
+      getSignatureStatuses: async () => ({
+        value: [{ confirmationStatus: "confirmed", err: null }],
+      }),
+      getBlockHeight: async () => 1n,
     };
 
     const result = await prepareGameToken({
@@ -73,26 +78,30 @@ describe("game token onboarding", () => {
     const instruction = Transaction.from(sentTransaction!).instructions[0]!;
     expect(instruction.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID)).toBe(true);
     expect(instruction.data).toEqual(Buffer.from([1]));
-    expect(confirmed).toEqual({
-      signature: "ata-signature",
-      blockhash: PublicKey.default.toBase58(),
-      lastValidBlockHeight: 42,
-    });
   });
 
   test("rejects a failed operator ATA confirmation", async () => {
     const operatorKeypair = Keypair.generate();
     const mint = Keypair.generate().publicKey;
     const connection = {
-      getAccountInfo: async (address: PublicKey) => (address.equals(mint) ? mintAccount(6) : null),
+      getAccountInfo: async (accountAddress: string) =>
+        accountAddress === mint.address ? mintAccount(6) : null,
       getLatestBlockhash: async () => ({
-        blockhash: PublicKey.default.toBase58(),
-        lastValidBlockHeight: 42,
+        value: {
+          blockhash: PublicKey.default.toBase58(),
+          lastValidBlockHeight: 42n,
+        },
       }),
-      sendRawTransaction: async () => "failed-ata-signature",
-      confirmTransaction: async () => ({
-        value: { err: { InstructionError: [0, { Custom: 1 }] } },
+      sendTransaction: async () => "failed-ata-signature",
+      getSignatureStatuses: async () => ({
+        value: [
+          {
+            confirmationStatus: "confirmed",
+            err: { InstructionError: [0, { Custom: 1 }] },
+          },
+        ],
       }),
+      getBlockHeight: async () => 1n,
     };
 
     await expect(

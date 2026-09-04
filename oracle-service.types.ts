@@ -1,10 +1,9 @@
-import type * as anchor from "@anchor-lang/core";
-import type { PublicKey } from "@solana/web3.js";
+import type { KeyPairSignerLike, OracleRpc } from "./solana-kit.ts";
 import type { TimbaEventMap, TimbaGameAccount } from "./types/timba.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 import type { OracleDatabase } from "./database.ts";
 import type { OracleMetrics } from "./metrics.ts";
-import type { Timba } from "./types/contract.ts";
+import type { TimbaProgramClient } from "./timba-program-client.ts";
 
 /**
  * Core dependencies shared between OracleService and GameCompletionManager
@@ -12,9 +11,9 @@ import type { Timba } from "./types/contract.ts";
 export interface CoreOracleDependencies {
   db: OracleDatabase;
   metrics: OracleMetrics;
-  getConnection: () => anchor.web3.Connection;
-  getProgram: () => anchor.Program<Timba>;
-  operatorKeypair: anchor.web3.Keypair;
+  getConnection: () => OracleRpc;
+  getProgram: () => TimbaProgramClient;
+  operatorKeypair: KeyPairSignerLike;
 }
 
 export interface GameCompletionResult {
@@ -80,7 +79,7 @@ export type ReadinessResolution =
     };
 
 export interface GameOnChainContext {
-  gamePda: PublicKey;
+  gamePda: PublicKeyLike;
   secretData: { secretKey: string; randomHash: string };
   randomHashBuffer: Buffer;
   readiness?: GameReadinessSnapshot;

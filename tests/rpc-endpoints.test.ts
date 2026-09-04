@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import * as anchor from "@anchor-lang/core";
+import * as anchor from "./helpers/solana-fixtures.ts";
 import type { ActiveEndpointChange } from "../rpc-endpoints.ts";
 import {
   DEFAULT_MAINNET_ENDPOINT,
@@ -60,9 +60,32 @@ describe("RpcEndpointManager", () => {
     });
 
     const connection = manager.getConnection();
-    const blockHeight = await connection.getBlockHeight();
+    const blockHeight = await (connection.getBlockHeight() as unknown as Promise<number>);
 
     expect(blockHeight).toBe(123);
+    expect(manager.getActiveEndpoint()).toBe("https://rpc-b");
+  });
+
+  test("switches endpoints for Kit pending RPC requests", async () => {
+    const endpoints = ["https://rpc-a", "https://rpc-b"];
+    const manager = new RpcEndpointManager(endpoints, {
+      connectionFactory: (endpoint) => ({
+        getBlockHeight: () => ({
+          send: async () => {
+            if (endpoint === endpoints[0]) {
+              const error = new Error("Unable to connect");
+              (error as { code?: string }).code = "ConnectionRefused";
+              throw error;
+            }
+            return 321n;
+          },
+        }),
+      }),
+    });
+
+    const blockHeight = await manager.getConnection().getBlockHeight().send();
+
+    expect(blockHeight).toBe(321n);
     expect(manager.getActiveEndpoint()).toBe("https://rpc-b");
   });
 
@@ -173,7 +196,9 @@ describe("RpcEndpointManager", () => {
 
     Math.random = originalRandom;
 
-    const blockHeight = await manager.getConnection().getBlockHeight();
+    const blockHeight = await (manager
+      .getConnection()
+      .getBlockHeight() as unknown as Promise<number>);
 
     expect(blockHeight).toBe(456);
     expect(delayedMs).toHaveLength(1);
@@ -222,7 +247,9 @@ describe("RpcEndpointManager", () => {
 
     Math.random = originalRandom;
 
-    const blockHeight = await manager.getConnection().getBlockHeight();
+    const blockHeight = await (manager
+      .getConnection()
+      .getBlockHeight() as unknown as Promise<number>);
 
     expect(blockHeight).toBe(789);
     expect(delayedMs).toHaveLength(1);

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey } from "./helpers/solana-fixtures.ts";
 import { coercePublicKey } from "../solana-utils.ts";
 import {
   OracleEventProcessor,
@@ -799,7 +799,7 @@ describe("OracleService event handling", () => {
     if (exists.status === "missing-context") {
       throw new Error("expected context for active game");
     }
-    expect(exists.context.gamePda).toBeInstanceOf(PublicKey);
+    expect(typeof exists.context.gamePda).toBe("string");
     expect(exists.readiness.gameAccount).toBeDefined();
     expect(programStub.fetchCalls).toHaveLength(1);
 

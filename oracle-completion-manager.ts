@@ -1,5 +1,15 @@
-import * as anchor from "@anchor-lang/core";
-import { PublicKey, type BlockhashWithExpiryBlockHeight, Connection } from "@solana/web3.js";
+import {
+  appendTransactionMessageInstruction,
+  createTransactionMessage,
+  getBase64EncodedWireTransaction,
+  pipe,
+  setTransactionMessageFeePayerSigner,
+  setTransactionMessageLifetimeUsingBlockhash,
+  signTransactionMessageWithSigners,
+  isSolanaError,
+  SOLANA_ERROR__ACCOUNTS__ACCOUNT_NOT_FOUND,
+  type Address,
+} from "@solana/kit";
 import {
   type AttemptGameCompletionOptions,
   type CoreOracleDependencies,
@@ -10,13 +20,19 @@ import {
 } from "./oracle-service.types.ts";
 import type { TimbaGameAccount } from "./types/timba.ts";
 import {
-  coercePublicKey,
-  ensurePublicKey,
+  coerceAddress,
+  ensureAddress,
   generateUnbiasedRandom,
   resolveNumericLike,
 } from "./solana-utils.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
 import { GAME_SEED } from "./oracle-accounts.ts";
+import {
+  derivePdaSync,
+  ensureKeyPairSigner,
+  sendRpcRequest,
+  type LatestBlockhash,
+} from "./solana-kit.ts";
 import { logger } from "./logger.ts";
 import { GameCompletionTransactionBuilder } from "./game-completion-transaction-builder.ts";
 import { RegistrySyncManager } from "./registry-sync-manager.ts";
@@ -28,10 +44,7 @@ export interface GameCompletionManagerOptions extends CoreOracleDependencies {
   readinessCache: Map<string, GameReadinessSnapshot>;
   secretKeyLength: number;
   noSecretKeyMessage: string;
-  confirmTransaction: (
-    signature: string,
-    latestBlockhash?: BlockhashWithExpiryBlockHeight,
-  ) => Promise<void>;
+  confirmTransaction: (signature: string, latestBlockhash: LatestBlockhash) => Promise<void>;
   recoverPlayerRegistry?: (options: {
     gameAddress: string;
     context: GameOnChainContext;
@@ -59,8 +72,8 @@ export class GameCompletionManager {
 
   constructor(private readonly options: GameCompletionManagerOptions) {
     this.transactionBuilder = new GameCompletionTransactionBuilder({
-      getProgram: () => options.getProgram(),
-      operatorKeypair: options.operatorKeypair,
+      programId: options.getProgram().programId,
+      operator: ensureKeyPairSigner(options.operatorKeypair),
       contractVersion: options.contractVersion,
     });
 
@@ -72,15 +85,14 @@ export class GameCompletionManager {
     });
 
     this.transactionSubmitter = new TransactionSubmitter({
-      getConnection: () => options.getConnection() as unknown as Connection,
+      getConnection: () => options.getConnection(),
       confirmTransaction: options.confirmTransaction,
-      confirmOpts: (options.getProgram().provider as anchor.AnchorProvider | undefined)?.opts,
     });
   }
 
-  public async isGameReadyForCompletion(gamePda: PublicKey): Promise<boolean> {
-    const normalized = ensurePublicKey(gamePda);
-    const gameAddress = normalized.toBase58();
+  public async isGameReadyForCompletion(gamePda: PublicKeyLike): Promise<boolean> {
+    const normalized = ensureAddress(gamePda);
+    const gameAddress = normalized;
     const readiness = await this.evaluateAndCacheReadiness(normalized, gameAddress);
     return readiness.ready;
   }
@@ -116,7 +128,7 @@ export class GameCompletionManager {
     try {
       const resolvedPda =
         context?.gamePda ??
-        (gameKey ? coercePublicKey(gameKey) : this.safeCoercePublicKey(gameAddress));
+        (gameKey ? coerceAddress(gameKey) : this.safeCoercePublicKey(gameAddress));
 
       if (!resolvedPda) {
         return null;
@@ -193,9 +205,9 @@ export class GameCompletionManager {
     return result;
   }
 
-  private safeCoercePublicKey(value: PublicKeyLike | null | undefined): PublicKey | null {
+  private safeCoercePublicKey(value: PublicKeyLike | null | undefined): Address | null {
     try {
-      return value ? coercePublicKey(value) : null;
+      return value ? coerceAddress(value) : null;
     } catch {
       return null;
     }
@@ -244,7 +256,7 @@ export class GameCompletionManager {
 
       const totalPot = resolveNumericLike(gameAccount["totalAmount"]);
 
-      return { success: true, txHash, winnerAddress: winnerAddress.toBase58(), totalPot };
+      return { success: true, txHash, winnerAddress, totalPot };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       return this.recordCompletionFailure(gameAddress, message);
@@ -298,7 +310,7 @@ export class GameCompletionManager {
   ): Promise<
     | {
         gameAccount: TimbaGameAccount;
-        winnerAddress: PublicKey;
+        winnerAddress: Address;
         winnerIndex: number;
         randomHashBuffer: Buffer;
         secretKeyBuffer: Buffer;
@@ -371,7 +383,12 @@ export class GameCompletionManager {
       };
     }
 
-    const winnerAddress = new PublicKey(winnerPlayerAddress!);
+    const winnerAddress = coerceAddress(winnerPlayerAddress!);
+    if (!winnerAddress) {
+      return {
+        error: this.recordFatalCompletionFailure(gameAddress, "Winner address is invalid"),
+      };
+    }
 
     return {
       gameAccount: resolvedGameAccount,
@@ -516,7 +533,7 @@ export class GameCompletionManager {
     const evaluationBlockTime = blockTime ?? (getBlockTime ? await getBlockTime() : undefined);
 
     const evaluation = await this.evaluateAndCacheReadiness(
-      context.gamePda,
+      ensureAddress(context.gamePda),
       gameAddress,
       evaluationBlockTime,
     );
@@ -568,9 +585,9 @@ export class GameCompletionManager {
   public async getBlockchainTime(): Promise<number> {
     try {
       const connection = this.options.getConnection();
-      const slot = await connection.getSlot();
-      const blockTime = await connection.getBlockTime(slot);
-      return blockTime || Math.floor(Date.now() / 1000);
+      const slot = await sendRpcRequest(connection.getSlot({ commitment: "confirmed" }));
+      const blockTime = await sendRpcRequest(connection.getBlockTime(slot));
+      return blockTime === null ? Math.floor(Date.now() / 1000) : Number(blockTime);
     } catch {
       return Math.floor(Date.now() / 1000);
     }
@@ -595,7 +612,7 @@ export class GameCompletionManager {
   }
 
   private async evaluateAndCacheReadiness(
-    gamePda: PublicKey,
+    gamePda: Address,
     gameAddress: string,
     blockTime?: number,
   ): Promise<GameReadinessSnapshot> {
@@ -611,7 +628,7 @@ export class GameCompletionManager {
   }
 
   public async evaluateGameReadiness(
-    gamePda: PublicKey,
+    gamePda: PublicKeyLike,
     blockTime?: number,
   ): Promise<GameReadinessSnapshot> {
     const gameAccount = await this.fetchGameAccount(gamePda);
@@ -634,10 +651,18 @@ export class GameCompletionManager {
     };
   }
 
-  public async fetchGameAccount(gamePda: PublicKey): Promise<TimbaGameAccount | null> {
+  public async fetchGameAccount(gamePda: PublicKeyLike): Promise<TimbaGameAccount | null> {
     try {
       const program = this.options.getProgram();
-      return (await program.account.game.fetch(gamePda)) as TimbaGameAccount;
+      const normalized = ensureAddress(gamePda);
+      if (typeof program.fetchGame === "function") return await program.fetchGame(normalized);
+      const legacyFetch = (
+        program as unknown as {
+          account?: { game?: { fetch?: (value: Address) => Promise<TimbaGameAccount> } };
+        }
+      ).account?.game?.fetch;
+      if (!legacyFetch) throw new Error("Program client does not expose a game account fetcher");
+      return await legacyFetch(normalized);
     } catch (error: unknown) {
       if (this.isAccountNotFoundError(error)) {
         return null;
@@ -647,6 +672,7 @@ export class GameCompletionManager {
   }
 
   public isAccountNotFoundError(error: unknown): error is { message?: string } {
+    if (isSolanaError(error, SOLANA_ERROR__ACCOUNTS__ACCOUNT_NOT_FOUND)) return true;
     if (!error || typeof error !== "object") {
       return false;
     }
@@ -656,33 +682,32 @@ export class GameCompletionManager {
     }
 
     const { message } = error as { message?: unknown };
-    return typeof message === "string" && message.includes("Account does not exist");
+    return (
+      typeof message === "string" &&
+      /Account (?:does not exist|not found(?: at address)?)/i.test(message)
+    );
   }
 
   public async executeGameCompletion(args: {
     gameAccount: TimbaGameAccount;
-    winnerAddress: PublicKey;
+    winnerAddress: Address;
     randomHashBuffer: Buffer;
     secretKeyBuffer: Buffer;
     winnerIndex: number;
   }): Promise<string> {
     // Use GameCompletionTransactionBuilder
-    const { builder, signers } = await this.transactionBuilder.buildCompletionTransaction(args);
+    const instruction = await this.transactionBuilder.buildCompletionInstruction(args);
 
-    // Use TransactionSubmitter
     return this.transactionSubmitter.submitTransaction(async (latestBlockhash) => {
-      const tx = await builder.transaction();
-      if (tx instanceof anchor.web3.VersionedTransaction) {
-        tx.message.recentBlockhash = latestBlockhash.blockhash;
-        tx.sign(signers);
-        return tx.serialize();
-      }
-
-      tx.feePayer = tx.feePayer ?? signers[0]!.publicKey;
-      tx.recentBlockhash = latestBlockhash.blockhash;
-      // We assume operatorKeypair is the signer
-      tx.partialSign(...signers);
-      return tx.serialize();
+      const operator = ensureKeyPairSigner(this.options.operatorKeypair);
+      const message = pipe(
+        createTransactionMessage({ version: "legacy" }),
+        (value) => setTransactionMessageFeePayerSigner(operator, value),
+        (value) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, value),
+        (value) => appendTransactionMessageInstruction(instruction, value),
+      );
+      const transaction = await signTransactionMessageWithSigners(message);
+      return getBase64EncodedWireTransaction(transaction);
     });
   }
 
@@ -724,10 +749,11 @@ export class GameCompletionManager {
     return { secretData, randomHashBuffer, gamePda };
   }
 
-  public getGamePDA(randomHash: Buffer): PublicKey {
-    const programId = ensurePublicKey(this.options.getProgram().programId);
-    const [pda] = PublicKey.findProgramAddressSync([GAME_SEED, randomHash], programId);
-    return pda;
+  public getGamePDA(randomHash: Buffer): Address {
+    return derivePdaSync(ensureAddress(this.options.getProgram().programId), [
+      GAME_SEED,
+      randomHash,
+    ]);
   }
 
   // Delegate resetRegistryPrefetchSchedule to RegistrySyncManager

@@ -31,6 +31,7 @@ export interface GameCompletedEvent extends IndexerCursor {
 export interface GameClosedEvent extends IndexerCursor {
   gameKey: string;
   timestamp: number;
+  operator?: boolean;
 }
 
 export interface PlayerMembershipEvent extends IndexerCursor {
@@ -39,6 +40,7 @@ export interface PlayerMembershipEvent extends IndexerCursor {
   player: string;
   ticketsCount: number;
   ticketIndex: number;
+  movedParticipant?: string;
   timestamp: number;
 }
 

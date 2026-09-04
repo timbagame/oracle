@@ -17,7 +17,15 @@ import {
   hasValidBearerToken,
   type RateLimitResult,
 } from "./api-security.ts";
-import { Transaction } from "@solana/web3.js";
+import {
+  decompileTransactionMessage,
+  getBase64Encoder,
+  getCompiledTransactionMessageDecoder,
+  getTransactionDecoder,
+  isSignerRole,
+  isWritableRole,
+  type Instruction,
+} from "@solana/kit";
 import {
   CompleteGameNowRequestSchema,
   CompleteGameNowResponseSchema,
@@ -75,22 +83,29 @@ const PROTECTED_ROUTES = new Set([
 
 export function summarizeGameTransaction(txBase64: string) {
   try {
-    const transaction = Transaction.from(Buffer.from(txBase64, "base64"));
+    const transaction = getTransactionDecoder().decode(getBase64Encoder().encode(txBase64));
+    const message = decompileTransactionMessage(
+      getCompiledTransactionMessageDecoder().decode(transaction.messageBytes),
+    );
+    const instructions = message.instructions as readonly Instruction[];
     return {
-      instructionCount: transaction.instructions.length,
-      signatureSlots: transaction.signatures.length,
-      instructions: transaction.instructions.map((instruction, index) => ({
+      instructionCount: instructions.length,
+      signatureSlots: Object.keys(transaction.signatures).length,
+      instructions: instructions.map((instruction, index) => ({
         index,
-        programId: instruction.programId.toBase58(),
-        accountCount: instruction.keys.length,
-        signerCount: instruction.keys.filter((key) => key.isSigner).length,
-        writableCount: instruction.keys.filter((key) => key.isWritable).length,
-        accountFlags: instruction.keys.map((key) => ({
-          signer: key.isSigner,
-          writable: key.isWritable,
-        })),
-        dataLength: instruction.data.length,
-        discriminator: Buffer.from(instruction.data.subarray(0, 8)).toString("hex"),
+        programId: instruction.programAddress,
+        accountCount: instruction.accounts?.length ?? 0,
+        signerCount: instruction.accounts?.filter((key) => isSignerRole(key.role)).length ?? 0,
+        writableCount: instruction.accounts?.filter((key) => isWritableRole(key.role)).length ?? 0,
+        accountFlags:
+          instruction.accounts?.map((key) => ({
+            signer: isSignerRole(key.role),
+            writable: isWritableRole(key.role),
+          })) ?? [],
+        dataLength: instruction.data?.length ?? 0,
+        discriminator: instruction.data
+          ? Buffer.from(instruction.data.subarray(0, 8)).toString("hex")
+          : "",
       })),
     };
   } catch (error) {

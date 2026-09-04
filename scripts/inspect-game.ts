@@ -1,4 +1,4 @@
-import { PublicKey } from "@solana/web3.js";
+import { address as solanaAddress } from "@solana/kit";
 import { OracleService } from "../oracle-service.ts";
 
 async function main(): Promise<void> {
@@ -10,7 +10,7 @@ async function main(): Promise<void> {
 
   const oracle = OracleService.getInstance();
   const completion = oracle.completionManager;
-  const gamePda = new PublicKey(address);
+  const gamePda = solanaAddress(address);
 
   try {
     const gameAccount = await completion.fetchGameAccount(gamePda);

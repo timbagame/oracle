@@ -1,9 +1,9 @@
-import * as anchor from "@anchor-lang/core";
-import type { Commitment } from "@solana/web3.js";
+import type { Commitment } from "@solana/kit";
 
 import { delay } from "./delay.ts";
+import { createRpc, type OracleRpc } from "./solana-kit.ts";
 
-type Connection = anchor.web3.Connection;
+type RpcClient = OracleRpc;
 
 export type RpcEndpointLogger = {
   info?: (...args: unknown[]) => void;
@@ -14,7 +14,7 @@ export type RpcEndpointLogger = {
 export interface RpcEndpointManagerOptions {
   commitment?: Commitment;
   logger?: RpcEndpointLogger;
-  connectionFactory?: (endpoint: string, commitment: Commitment) => Connection;
+  connectionFactory?: (endpoint: string, commitment: Commitment) => unknown;
   delayFn?: (ms: number) => Promise<void>;
 }
 
@@ -50,6 +50,7 @@ const TRANSIENT_ERROR_TOKENS = [
   "timed out",
   "network request failed",
   "failed to fetch",
+  "unable to connect",
   "socket hang up",
   "connection refused",
   "connection reset",
@@ -196,7 +197,12 @@ function isRetryableRpcError(error: unknown): boolean {
   const code = (error as { code?: string | number }).code;
   if (typeof code === "string") {
     const normalized = code.toLowerCase();
-    if (normalized.startsWith("ecconn") || normalized.startsWith("etimedout")) {
+    if (
+      normalized.startsWith("econn") ||
+      normalized.startsWith("etimedout") ||
+      normalized === "connectionrefused" ||
+      normalized === "connectionreset"
+    ) {
       return true;
     }
   }
@@ -226,10 +232,10 @@ export class RpcEndpointManager {
   private readonly endpoints: string[];
   private readonly commitment: Commitment;
   private readonly logger?: RpcEndpointLogger;
-  private readonly connectionFactory: (endpoint: string, commitment: Commitment) => Connection;
+  private readonly connectionFactory: (endpoint: string, commitment: Commitment) => unknown;
   private readonly delayFn: (ms: number) => Promise<void>;
-  private readonly connectionCache = new Map<number, Connection>();
-  private readonly proxyConnection: Connection;
+  private readonly connectionCache = new Map<number, RpcClient>();
+  private readonly proxyConnection: RpcClient;
   private activeIndex = 0;
   private readonly endpointChangeListeners = new Set<ActiveEndpointChangeListener>();
 
@@ -250,14 +256,12 @@ export class RpcEndpointManager {
     this.commitment = options.commitment ?? DEFAULT_COMMITMENT;
     this.logger = options.logger;
     this.connectionFactory =
-      options.connectionFactory ??
-      ((endpoint: string, commitment: Commitment) =>
-        new anchor.web3.Connection(endpoint, commitment));
+      options.connectionFactory ?? ((endpoint: string) => createRpc(endpoint));
     this.delayFn = options.delayFn ?? delay;
     this.proxyConnection = this.createProxyConnection();
   }
 
-  public getConnection(): Connection {
+  public getConnection(): RpcClient {
     return this.proxyConnection;
   }
 
@@ -289,11 +293,11 @@ export class RpcEndpointManager {
     );
   }
 
-  private ensureConnection(index: number): Connection {
+  private ensureConnection(index: number): RpcClient {
     let connection = this.connectionCache.get(index);
     if (!connection) {
       const endpoint = this.endpoints[index] ?? this.endpoints[0]!;
-      connection = this.connectionFactory(endpoint, this.commitment);
+      connection = this.connectionFactory(endpoint, this.commitment) as RpcClient;
       this.connectionCache.set(index, connection);
     }
     return connection;
@@ -320,20 +324,12 @@ export class RpcEndpointManager {
     );
   }
 
-  private createProxyConnection(): Connection {
+  private createProxyConnection(): RpcClient {
     const initialConnection = this.ensureConnection(this.activeIndex);
-    const handler: ProxyHandler<Connection> = {
+    const handler: ProxyHandler<RpcClient> = {
       get: (_target, prop, receiver) => {
         if (prop === Symbol.toStringTag) {
           return "Connection";
-        }
-
-        if (prop === "rpcEndpoint") {
-          return this.getActiveEndpoint();
-        }
-
-        if (prop === "commitment") {
-          return this.commitment;
         }
 
         const connection = this.ensureConnection(this.activeIndex);
@@ -344,11 +340,6 @@ export class RpcEndpointManager {
         }
 
         return (...args: unknown[]) => this.invokeWithFallback(prop, args);
-      },
-      set: (_target, prop, value) => {
-        const connection = this.ensureConnection(this.activeIndex);
-        Reflect.set(connection, prop, value);
-        return true;
       },
     };
 
@@ -418,6 +409,17 @@ export class RpcEndpointManager {
       try {
         const result = method.apply(connection, args);
 
+        if (
+          result &&
+          typeof result === "object" &&
+          typeof (result as { send?: unknown }).send === "function"
+        ) {
+          return {
+            send: (...sendArgs: unknown[]) =>
+              this.invokePendingRequestWithFallback(prop, args, sendArgs),
+          };
+        }
+
         if (!isPromiseLike(result)) {
           void this.promote(index);
           return result;
@@ -435,6 +437,38 @@ export class RpcEndpointManager {
     };
 
     return attemptCall(0);
+  }
+
+  private async invokePendingRequestWithFallback(
+    prop: string | symbol,
+    args: unknown[],
+    sendArgs: unknown[],
+  ): Promise<unknown> {
+    const total = this.endpoints.length;
+    const methodName = typeof prop === "symbol" ? prop.toString() : prop;
+    let lastError: unknown;
+
+    for (let offset = 0; offset < total; offset += 1) {
+      const index = (this.activeIndex + offset) % total;
+      const rpc = this.ensureConnection(index);
+      const endpoint = this.endpoints[index] ?? this.endpoints[0]!;
+      try {
+        const method = Reflect.get(rpc, prop, rpc) as (...methodArgs: unknown[]) => unknown;
+        const pending = method.apply(rpc, args) as {
+          send: (...values: unknown[]) => Promise<unknown>;
+        };
+        const value = await pending.send(...sendArgs);
+        await this.promote(index);
+        return value;
+      } catch (error) {
+        lastError = error;
+        const decision = this.shouldRetryRpcCall(error, methodName, endpoint, offset, total);
+        if (!decision.shouldRetry) throw error;
+        if (decision.delayMs && decision.delayMs > 0) await this.delayFn(decision.delayMs);
+      }
+    }
+
+    throw lastError ?? new Error("RPC invocation failed without specific error");
   }
 }
 

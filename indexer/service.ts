@@ -1,5 +1,7 @@
-import { PublicKey, type Connection } from "@solana/web3.js";
+import type { Address } from "@solana/kit";
 import { logger } from "../logger.ts";
+import type { OracleRpc } from "../solana-kit.ts";
+import { ensureAddress, type PublicKeyLike } from "../solana-utils.ts";
 import { IndexerDatabase } from "./database.ts";
 import { findStaleActiveGames, getEventsSince, getProgramHead } from "./solana.ts";
 
@@ -8,15 +10,18 @@ export class PublicIndexer {
   private wakeRequested = false;
   private wakeResolver: ((reason: "event" | "interval" | "abort") => void) | null = null;
   private wakeTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly programId: Address;
 
   constructor(
     readonly database: IndexerDatabase,
-    private readonly connection: Connection,
-    private readonly programId: PublicKey,
+    private readonly connection: OracleRpc,
+    programId: PublicKeyLike,
     private readonly pollIntervalMs: number,
     private readonly eventDebounceMs = 1_000,
     private readonly now: () => number = Date.now,
-  ) {}
+  ) {
+    this.programId = ensureAddress(programId);
+  }
 
   async runOnce(
     options: { reconcileActiveGames?: boolean } = {},

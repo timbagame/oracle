@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bu
 import { rmSync } from "fs";
 import { OracleDatabase } from "../database.ts";
 import { createTestEnv } from "./helpers/create-test-env.ts";
-import { Keypair } from "@solana/web3.js";
+import { Keypair } from "./helpers/solana-fixtures.ts";
 import { Database as SqliteDatabase } from "bun:sqlite";
 
 let testEnv: Awaited<ReturnType<typeof createTestEnv>>;

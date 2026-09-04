@@ -1,7 +1,11 @@
 import { describe, it, expect } from "bun:test";
-import type * as anchor from "@anchor-lang/core";
-import { Keypair, PublicKey } from "@solana/web3.js";
-import { PlayerRegistrySync, type PlayerRegistrySyncOptions } from "../player-registry-sync.ts";
+import type * as anchor from "./helpers/solana-fixtures.ts";
+import { Keypair, PublicKey } from "./helpers/solana-fixtures.ts";
+import {
+  PlayerRegistrySync,
+  type PlayerRegistrySyncOptions,
+  type RegistryEvent,
+} from "../player-registry-sync.ts";
 
 type EventData = {
   name: string;
@@ -10,20 +14,14 @@ type EventData = {
 
 type SyncOverrides = {
   connection?: anchor.web3.Connection;
-  eventParserFactory?: PlayerRegistrySyncOptions["eventParserFactory"];
-} & Partial<Omit<PlayerRegistrySyncOptions, "connection" | "program" | "eventParserFactory">>;
+  parseEvents?: PlayerRegistrySyncOptions["parseEvents"];
+} & Partial<Omit<PlayerRegistrySyncOptions, "connection" | "programId" | "parseEvents">>;
 
 function createSync(
   eventsPerTransaction: Array<EventData[]>,
   overrides: SyncOverrides = {},
 ): PlayerRegistrySync {
   const programId = Keypair.generate().publicKey;
-  const program = {
-    programId,
-    coder: {},
-    idl: {},
-  } as const;
-
   const signatures = eventsPerTransaction.map(
     (_, index) => ({ signature: `sig-${index + 1}` }) as anchor.web3.ConfirmedSignatureInfo,
   );
@@ -32,7 +30,7 @@ function createSync(
 
   const {
     connection: overrideConnection,
-    eventParserFactory: overrideParser,
+    parseEvents: overrideParser,
     ...restOverrides
   } = overrides;
 
@@ -47,16 +45,33 @@ function createSync(
       },
     } as unknown as anchor.web3.Connection);
 
-  const eventParserFactory =
+  const parseEvents =
     overrideParser ??
-    (() => ({
-      parseLogs: () => eventsPerTransaction[parseIndex++] ?? [],
-    }));
+    (() =>
+      (eventsPerTransaction[parseIndex++] ?? []).flatMap(({ name, data }): RegistryEvent[] => {
+        const ticketIndex = Number(data["ticketIndex"]);
+        if (!Number.isSafeInteger(ticketIndex) || ticketIndex < 0) return [];
+        if (name === "playerUnjoined") {
+          const movedParticipant = data["movedParticipant"];
+          return [
+            {
+              kind: "unjoin",
+              ticketIndex,
+              ...(movedParticipant instanceof PublicKey
+                ? { movedParticipant: movedParticipant.toBase58() }
+                : {}),
+            },
+          ];
+        }
+        const player = data["player"];
+        if (!(player instanceof PublicKey)) return [];
+        return [{ kind: "join", ticketIndex, playerAddress: player.toBase58() }];
+      }));
 
   return new PlayerRegistrySync({
-    connection,
-    program: program as unknown as anchor.Program<any>,
-    eventParserFactory,
+    connection: connection as any,
+    programId,
+    parseEvents,
     ...restOverrides,
   });
 }
@@ -385,7 +400,7 @@ describe("PlayerRegistrySync", () => {
     expect(receivedMaxVersion).toBe(0);
   });
 
-  it("refetches missing transactions when batch responses contain null entries", async () => {
+  it("fetches each registry transaction without provider batch support", async () => {
     const gamePda = Keypair.generate().publicKey;
     const playerOne = Keypair.generate().publicKey;
     const playerTwo = Keypair.generate().publicKey;
@@ -447,7 +462,6 @@ describe("PlayerRegistrySync", () => {
 
     const sync = createSync(events, {
       connection,
-      transactionBatchSize: 2,
     });
 
     const players = await sync.fetchPlayersFromChain({
@@ -456,8 +470,10 @@ describe("PlayerRegistrySync", () => {
     });
 
     expect(players).toEqual([playerOne.toBase58(), playerTwo.toBase58()]);
-    expect(perSignatureFetches).toEqual([missingSignature]);
-    expect(batchedRequests).toHaveLength(1);
+    expect(perSignatureFetches.sort()).toEqual(
+      signatureInfos.map(({ signature }) => signature).sort(),
+    );
+    expect(batchedRequests).toHaveLength(0);
   });
 
   it("applies chunk results sequentially even when completion order differs", async () => {
@@ -521,14 +537,24 @@ describe("PlayerRegistrySync", () => {
         });
       },
       async getTransaction(signature: string) {
-        throw new Error(`unexpected per-signature fetch ${signature}`);
+        const delay = signature === "sig-0" ? 25 : 5;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return { meta: { logMessages: [signature] } };
       },
     } as unknown as anchor.web3.Connection;
 
     const sync = createSync(events, {
       connection,
-      transactionBatchSize: 2,
       transactionConcurrency: 2,
+      parseEvents: (_logs, transactionSignature) => {
+        if (transactionSignature === "sig-2") {
+          return [{ kind: "join", ticketIndex: 0, playerAddress: playerOne.toBase58() }];
+        }
+        if (transactionSignature === "sig-1") {
+          return [{ kind: "unjoin", ticketIndex: 0 }];
+        }
+        return [{ kind: "join", ticketIndex: 0, playerAddress: playerTwo.toBase58() }];
+      },
     });
 
     const players = await sync.fetchPlayersFromChain({
@@ -539,7 +565,7 @@ describe("PlayerRegistrySync", () => {
     expect(players).toEqual([playerTwo.toBase58()]);
   });
 
-  it("disables batch transaction requests after provider rejects them", async () => {
+  it("does not require provider batch transaction support", async () => {
     const gamePda = Keypair.generate().publicKey;
     const players = Array.from({ length: 7 }, () => Keypair.generate().publicKey);
 
@@ -590,59 +616,7 @@ describe("PlayerRegistrySync", () => {
     });
 
     expect(recovered).toEqual(players.map((player) => player.toBase58()));
-    expect(batchedCalls).toHaveLength(1);
+    expect(batchedCalls).toHaveLength(0);
     expect(perSignatureCalls).toHaveLength(players.length);
-  });
-
-  it("skips batch transaction requests when disableBatchTransactions is enabled", async () => {
-    const gamePda = Keypair.generate().publicKey;
-    const player = Keypair.generate().publicKey;
-
-    const eventsPerTransaction: Array<EventData[]> = [
-      [
-        {
-          name: "playerJoined",
-          data: {
-            gameKey: gamePda,
-            player,
-            ticketIndex: 0,
-          },
-        },
-      ],
-    ];
-
-    let signaturePageCalls = 0;
-    let batchedCalls = 0;
-    let perSignatureCalls = 0;
-
-    const connection = {
-      async getSignaturesForAddress() {
-        return signaturePageCalls++ === 0
-          ? ([{ signature: "sig-0" }] as anchor.web3.ConfirmedSignatureInfo[])
-          : [];
-      },
-      async getTransactions() {
-        batchedCalls += 1;
-        return [];
-      },
-      async getTransaction() {
-        perSignatureCalls += 1;
-        return { meta: { logMessages: ["dummy"] } } as const;
-      },
-    } as unknown as anchor.web3.Connection;
-
-    const sync = createSync(eventsPerTransaction, {
-      connection,
-      disableBatchTransactions: true,
-    });
-
-    const recovered = await sync.fetchPlayersFromChain({
-      gamePda,
-      expectedTickets: 1,
-    });
-
-    expect(recovered).toEqual([player.toBase58()]);
-    expect(batchedCalls).toBe(0);
-    expect(perSignatureCalls).toBe(1);
   });
 });

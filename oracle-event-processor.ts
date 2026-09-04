@@ -1,5 +1,3 @@
-import type * as anchor from "@anchor-lang/core";
-import type { Timba } from "./types/contract.ts";
 import type { OracleDatabase } from "./database.ts";
 import type {
   TimbaEventMap,
@@ -21,7 +19,13 @@ const DEFAULT_PLAYER_EVENT_FLUSH_MAX_OPERATIONS = 500;
 const DEFAULT_AUTOCOMPLETE_DEBOUNCE_MS = 500;
 
 export interface OracleEventProcessorOptions {
-  getProgram: () => anchor.Program<Timba>;
+  getProgram: () => {
+    addEventListener<TKey extends keyof TimbaEventMap>(
+      event: TKey,
+      handler: (value: TimbaEventMap[TKey]) => Promise<void> | void,
+    ): Promise<number> | number;
+    removeEventListener(id: number): Promise<void>;
+  };
   db: OracleDatabase;
   tryAutoComplete: (
     gameKey: PublicKeyLike | undefined,

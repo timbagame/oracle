@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, spyOn } from "bun:test";
-import * as anchor from "@anchor-lang/core";
+import * as anchor from "./helpers/solana-fixtures.ts";
 import { GameCompletionManager } from "../oracle-completion-manager.ts";
 import type { GameCompletionManagerOptions } from "../oracle-completion-manager.ts";
-import { Keypair, PublicKey, type BlockhashWithExpiryBlockHeight } from "@solana/web3.js";
+import { Keypair, PublicKey } from "./helpers/solana-fixtures.ts";
 import { TOKEN_PROGRAM_ID } from "../token-program.ts";
 import type { OracleMetrics } from "../metrics.ts";
 import type {
@@ -96,7 +96,7 @@ function createManager(
     readinessCache,
     secretKeyLength: overrides.secretKeyLength ?? 32,
     noSecretKeyMessage: "missing",
-    confirmTransaction: async (_sig?: string, _latest?: BlockhashWithExpiryBlockHeight) => {},
+    confirmTransaction: async () => {},
     recoverPlayerRegistry: overrides.recoverPlayers,
     markGameDesynced: (address: string) => {
       desyncedGames.add(address);
