@@ -1,5 +1,6 @@
-import { PublicKey, type Connection, type ConfirmedSignatureInfo } from "@solana/web3.js";
+import { address, signature, type Address } from "@solana/kit";
 import { createHash } from "node:crypto";
+import { addressFromBytes, base64ToBytes, sendRpcRequest, type OracleRpc } from "../solana-kit.ts";
 import type {
   GameClosedEvent,
   GameCompletedEvent,
@@ -28,7 +29,7 @@ const EMPTY_EVENTS = (): IndexedEvents => ({
 });
 
 function publicKey(data: Buffer, offset: number): string {
-  return new PublicKey(data.subarray(offset, offset + 32)).toBase58();
+  return addressFromBytes(data.subarray(offset, offset + 32));
 }
 
 function safeU64(data: Buffer, offset: number, field: string): number {
@@ -78,6 +79,7 @@ function parseClosed(data: Buffer, operator: boolean): Omit<GameClosedEvent, key
   return {
     gameKey: publicKey(data, 8),
     timestamp: safeU64(data, data.length - 8, "timestamp"),
+    operator,
   };
 }
 
@@ -89,12 +91,17 @@ function parseMembership(
   const validLength =
     kind === "joined" ? data.length === minimumLength : data.length === 105 || data.length === 137;
   if (!validLength) throw new Error(`Invalid Player${kind} event length`);
+  const movedParticipant =
+    kind === "unjoined" && data.length === 137 && data.readUInt8(88) === 1
+      ? publicKey(data, 89)
+      : undefined;
   return {
     kind,
     gameKey: publicKey(data, 8),
     player: publicKey(data, 40),
     ticketsCount: data.readUInt32LE(80),
     ticketIndex: data.readUInt32LE(84),
+    ...(movedParticipant ? { movedParticipant } : {}),
     timestamp: safeU64(data, data.length - 8, "timestamp"),
   };
 }
@@ -175,25 +182,36 @@ async function mapConcurrent<T, R>(
 }
 
 export async function getProgramHead(
-  connection: Connection,
-  programId: PublicKey,
+  connection: OracleRpc,
+  programId: Address,
 ): Promise<IndexerCursor | null> {
-  const head = (await connection.getSignaturesForAddress(programId, { limit: 1 }, "confirmed"))[0];
-  return head ? { signature: head.signature, slot: head.slot } : null;
+  const head = (
+    await sendRpcRequest(
+      connection.getSignaturesForAddress(programId, { commitment: "confirmed", limit: 1 }),
+    )
+  )[0];
+  return head ? { signature: head.signature, slot: Number(head.slot) } : null;
 }
 
+type SignatureInfo = Awaited<
+  ReturnType<ReturnType<OracleRpc["getSignaturesForAddress"]>["send"]>
+>[number];
+
 async function getSignaturesSince(
-  connection: Connection,
-  programId: PublicKey,
+  connection: OracleRpc,
+  programId: Address,
   cursor: IndexerCursor,
-): Promise<ConfirmedSignatureInfo[]> {
-  const signatures: ConfirmedSignatureInfo[] = [];
-  let before: string | undefined;
+): Promise<SignatureInfo[]> {
+  const signatures: SignatureInfo[] = [];
+  let before: ReturnType<typeof signature> | undefined;
   while (true) {
-    const page = await connection.getSignaturesForAddress(
-      programId,
-      { before, until: cursor.signature, limit: 1_000 },
-      "confirmed",
+    const page = await sendRpcRequest(
+      connection.getSignaturesForAddress(programId, {
+        ...(before ? { before } : {}),
+        commitment: "confirmed",
+        limit: 1_000,
+        until: signature(cursor.signature),
+      }),
     );
     signatures.push(...page);
     if (page.length < 1_000) break;
@@ -204,8 +222,8 @@ async function getSignaturesSince(
 }
 
 export async function getEventsSince(
-  connection: Connection,
-  programId: PublicKey,
+  connection: OracleRpc,
+  programId: Address,
   cursor: IndexerCursor,
 ): Promise<{ events: IndexedEvents; cursor: IndexerCursor | null; transactions: number }> {
   const newestFirst = await getSignaturesSince(connection, programId, cursor);
@@ -214,17 +232,20 @@ export async function getEventsSince(
   const oldestFirst = [...newestFirst].reverse();
   const parsed = await mapConcurrent(oldestFirst, 4, async (item) => {
     if (item.err) return EMPTY_EVENTS();
-    const transaction = await connection.getTransaction(item.signature, {
-      commitment: "confirmed",
-      maxSupportedTransactionVersion: 0,
-    });
+    const transaction = await sendRpcRequest(
+      connection.getTransaction(item.signature, {
+        commitment: "confirmed",
+        encoding: "json",
+        maxSupportedTransactionVersion: 0,
+      }),
+    );
     if (!transaction) throw new Error(`Transaction ${item.signature} is unavailable`);
     if (transaction.meta?.err) return EMPTY_EVENTS();
     return parseTransactionEvents(
       item.signature,
-      item.slot,
+      Number(item.slot),
       transaction.meta?.logMessages ?? [],
-      programId.toBase58(),
+      programId,
     );
   });
   return {
@@ -234,38 +255,45 @@ export async function getEventsSince(
       closed: parsed.flatMap((item) => item.closed),
       membership: parsed.flatMap((item) => item.membership),
     },
-    cursor: { signature: newestFirst[0]!.signature, slot: newestFirst[0]!.slot },
+    cursor: { signature: newestFirst[0]!.signature, slot: Number(newestFirst[0]!.slot) },
     transactions: newestFirst.length,
   };
 }
 
 export async function findStaleActiveGames(
-  connection: Connection,
-  programId: PublicKey,
+  connection: OracleRpc,
+  programId: Address,
   gameKeys: string[],
 ): Promise<string[]> {
   const stale: string[] = [];
   for (let offset = 0; offset < gameKeys.length; offset += 100) {
     const batch = gameKeys.slice(offset, offset + 100);
-    const valid: Array<{ key: string; publicKey: PublicKey }> = [];
+    const valid: Array<{ key: string; publicKey: Address }> = [];
     for (const key of batch) {
       try {
-        valid.push({ key, publicKey: new PublicKey(key) });
+        valid.push({ key, publicKey: address(key) });
       } catch {
         stale.push(key);
       }
     }
-    const accounts = await connection.getMultipleAccountsInfo(
-      valid.map((item) => item.publicKey),
-      "confirmed",
+    const { value: accounts } = await sendRpcRequest(
+      connection.getMultipleAccounts(
+        valid.map((item) => item.publicKey),
+        {
+          commitment: "confirmed",
+          encoding: "base64",
+        },
+      ),
     );
     valid.forEach((item, index) => {
       const account = accounts[index];
       if (
         !account ||
-        !account.owner.equals(programId) ||
-        account.data.length < 8 ||
-        !account.data.subarray(0, 8).equals(GAME_ACCOUNT_DISCRIMINATOR)
+        account.owner !== programId ||
+        base64ToBytes(account.data[0]).length < 8 ||
+        !Buffer.from(base64ToBytes(account.data[0]).subarray(0, 8)).equals(
+          GAME_ACCOUNT_DISCRIMINATOR,
+        )
       ) {
         stale.push(item.key);
       }

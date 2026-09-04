@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import * as anchor from "@anchor-lang/core";
+import * as anchor from "./helpers/solana-fixtures.ts";
 import {
   Keypair,
   PublicKey,
   SystemProgram,
   Transaction,
   TransactionInstruction,
-} from "@solana/web3.js";
+} from "./helpers/solana-fixtures.ts";
 import { GameCompletionTransactionBuilder } from "../game-completion-transaction-builder.ts";
 import { GAME_TOKEN_SEED, GAME_VAULT_SEED } from "../oracle-accounts.ts";
 import {
@@ -37,6 +37,8 @@ describe("v0.2.0 compatibility", () => {
     const service = OracleService.getInstance();
     const program = (service as any).program as anchor.Program;
     const operatorKeypair = (service as any).operatorKeypair as Keypair;
+    const programId = new PublicKey(String(program.programId));
+    const operatorPublicKey = new PublicKey(operatorKeypair.address);
     expect((program.idl as any).metadata.version).toBe("0.2.0");
     expect(
       (service.events as any).options.config.map(({ event }: { event: string }) => event),
@@ -45,14 +47,14 @@ describe("v0.2.0 compatibility", () => {
     const { randomHash, gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
     const creator = Keypair.generate();
     const tokenMint = Keypair.generate().publicKey;
-    const oracle = PublicKey.findProgramAddressSync([Buffer.from("oracle")], program.programId)[0];
+    const oracle = PublicKey.findProgramAddressSync([Buffer.from("oracle")], programId)[0];
     const gameToken = PublicKey.findProgramAddressSync(
       [GAME_TOKEN_SEED, tokenMint.toBuffer()],
-      program.programId,
+      programId,
     )[0];
     const gameVault = PublicKey.findProgramAddressSync(
       [GAME_VAULT_SEED, tokenMint.toBuffer()],
-      program.programId,
+      programId,
     )[0];
     const gameVaultTokenAccount = deriveAssociatedTokenAddress(
       tokenMint,
@@ -62,7 +64,7 @@ describe("v0.2.0 compatibility", () => {
     );
     const creatorTokenAccount = deriveAssociatedTokenAddress(tokenMint, creator.publicKey);
     const instruction = new TransactionInstruction({
-      programId: program.programId,
+      programId,
       data: new anchor.BorshInstructionCoder(program.idl).encode("initializeGame", {
         config: {
           gameType: { coinflip: {} },
@@ -78,7 +80,7 @@ describe("v0.2.0 compatibility", () => {
         { pubkey: new PublicKey(gameAddress), isSigner: false, isWritable: true },
         { pubkey: creator.publicKey, isSigner: true, isWritable: true },
         { pubkey: oracle, isSigner: false, isWritable: false },
-        { pubkey: operatorKeypair.publicKey, isSigner: true, isWritable: false },
+        { pubkey: operatorPublicKey, isSigner: true, isWritable: false },
         { pubkey: tokenMint, isSigner: false, isWritable: false },
         { pubkey: gameToken, isSigner: false, isWritable: true },
         { pubkey: gameVault, isSigner: false, isWritable: false },
@@ -90,12 +92,12 @@ describe("v0.2.0 compatibility", () => {
       ],
     });
     const joinInstruction = new TransactionInstruction({
-      programId: program.programId,
+      programId,
       data: new anchor.BorshInstructionCoder(program.idl).encode("joinGame", {}),
       keys: [
         { pubkey: new PublicKey(gameAddress), isSigner: false, isWritable: true },
         { pubkey: creator.publicKey, isSigner: true, isWritable: true },
-        { pubkey: program.programId, isSigner: false, isWritable: false },
+        { pubkey: programId, isSigner: false, isWritable: false },
         { pubkey: tokenMint, isSigner: false, isWritable: false },
         { pubkey: gameToken, isSigner: false, isWritable: true },
         { pubkey: gameVault, isSigner: false, isWritable: false },
@@ -125,34 +127,34 @@ describe("v0.2.0 compatibility", () => {
     const service = OracleService.getInstance();
     const program = (service as any).program as anchor.Program;
     const operatorKeypair = (service as any).operatorKeypair as Keypair;
+    const programId = new PublicKey(String(program.programId));
+    const operatorPublicKey = new PublicKey(operatorKeypair.address);
     const builder = new GameCompletionTransactionBuilder({
-      getProgram: () => program as any,
-      operatorKeypair,
+      programId: programId.address,
+      operator: operatorKeypair,
       contractVersion: "0.2.0",
     });
     const tokenMint = Keypair.generate().publicKey;
 
-    const completion = await builder.buildCompletionTransaction({
+    const instruction = await builder.buildCompletionInstruction({
       gameAccount: {
         creator: Keypair.generate().publicKey,
         tokenMint,
       } as TimbaGameAccount,
-      winnerAddress: Keypair.generate().publicKey,
+      winnerAddress: Keypair.generate().publicKey.address,
       randomHashBuffer: Buffer.alloc(32, 1),
       secretKeyBuffer: Buffer.alloc(32, 2),
       winnerIndex: 0,
     });
-    const instruction = await completion.builder.instruction();
-
     const expectedGameToken = PublicKey.findProgramAddressSync(
       [GAME_TOKEN_SEED, tokenMint.toBuffer()],
-      program.programId,
+      programId,
     )[0];
-    expect(instruction.keys).toHaveLength(12);
-    expect(instruction.keys[2]!.pubkey.equals(expectedGameToken)).toBe(true);
+    expect(instruction.accounts).toHaveLength(12);
+    expect(instruction.accounts![2]!.address).toBe(expectedGameToken.address);
     expect(
-      instruction.keys.some(({ pubkey }) =>
-        pubkey.equals(deriveAssociatedTokenAddress(tokenMint, operatorKeypair.publicKey)),
+      instruction.accounts!.some(
+        ({ address }) => address === deriveAssociatedTokenAddress(tokenMint, operatorPublicKey),
       ),
     ).toBe(false);
   });

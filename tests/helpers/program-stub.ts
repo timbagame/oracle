@@ -1,4 +1,4 @@
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey } from "./solana-fixtures.ts";
 
 export type ProgramStub = {
   addCalls: Array<{ event: string; handler: (event: any) => void }>;

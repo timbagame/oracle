@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { Keypair, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { Keypair, PublicKey, SystemProgram, Transaction } from "./helpers/solana-fixtures.ts";
 import type { OracleService, RequeueGameFailureReason } from "../oracle-service.ts";
 import {
   CreationPolicyValidationError,

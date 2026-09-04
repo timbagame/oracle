@@ -1,19 +1,29 @@
-import { PublicKey } from "@solana/web3.js";
+import { fetchOracle as fetchOracleV020 } from "@timbagame/protocol/contracts/v0.2.0/kit";
+import { fetchOracle as fetchOracleV030 } from "@timbagame/protocol/contracts/v0.3.0/kit";
 import { OracleService } from "../oracle-service.ts";
 import { ORACLE_SEED } from "../oracle-accounts.ts";
+import { derivePda } from "../solana-kit.ts";
+import { getConfig } from "../config.ts";
 
 async function main(): Promise<void> {
   const oracleService = OracleService.getInstance();
   try {
-    const program = (oracleService as unknown as { program: any }).program;
-    const [oraclePda] = PublicKey.findProgramAddressSync([ORACLE_SEED], program.programId);
-    const account = await program.account.oracle.fetch(oraclePda);
+    const programId = oracleService.getProgramId();
+    const oraclePda = await derivePda(programId, [ORACLE_SEED]);
+    const account =
+      getConfig().contractVersion === "0.2.0"
+        ? await fetchOracleV020(oracleService.getConnection(), oraclePda, {
+            commitment: "confirmed",
+          })
+        : await fetchOracleV030(oracleService.getConnection(), oraclePda, {
+            commitment: "confirmed",
+          });
 
     console.log(
       JSON.stringify(
         {
-          oracleAddress: oraclePda.toBase58(),
-          account,
+          oracleAddress: oraclePda,
+          account: account.data,
         },
         null,
         2,

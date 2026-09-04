@@ -1,18 +1,25 @@
+import { getCreateAssociatedTokenIdempotentInstruction } from "@solana-program/token";
 import {
-  PublicKey,
-  SystemProgram,
-  Transaction,
-  TransactionInstruction,
-  type AccountInfo,
-  type Connection,
-  type Keypair,
-} from "@solana/web3.js";
-import { confirmTransaction } from "./solana-utils.ts";
+  appendTransactionMessageInstruction,
+  createTransactionMessage,
+  getBase64EncodedWireTransaction,
+  pipe,
+  setTransactionMessageFeePayerSigner,
+  setTransactionMessageLifetimeUsingBlockhash,
+  signTransactionMessageWithSigners,
+  type Address,
+  type EncodedAccount,
+} from "@solana/kit";
 import {
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  TOKEN_PROGRAM_ID,
-  deriveAssociatedTokenAddress,
-} from "./token-program.ts";
+  addressBytes,
+  ensureKeyPairSigner,
+  fetchAccount,
+  sendRpcRequest,
+  type KeyPairSignerLike,
+  type OracleRpc,
+} from "./solana-kit.ts";
+import { confirmTransaction, ensureAddress, type PublicKeyLike } from "./solana-utils.ts";
+import { TOKEN_PROGRAM_ID, deriveAssociatedTokenAddress } from "./token-program.ts";
 import { normalizeTokenDecimals } from "./token-policy.ts";
 
 const LEGACY_MINT_ACCOUNT_SIZE = 82;
@@ -24,105 +31,94 @@ const TOKEN_ACCOUNT_OWNER_OFFSET = 32;
 const TOKEN_ACCOUNT_STATE_OFFSET = 108;
 const TOKEN_ACCOUNT_INITIALIZED = 1;
 
-function decodeMintDecimals(mint: PublicKey, account: AccountInfo<Buffer>): number {
+function decodeMintDecimals(mint: Address, account: EncodedAccount): number {
+  const data = Buffer.from(account.data);
   if (
-    !account.owner.equals(TOKEN_PROGRAM_ID) ||
-    account.data.length !== LEGACY_MINT_ACCOUNT_SIZE ||
-    account.data[MINT_INITIALIZED_OFFSET] !== 1
+    account.programAddress !== TOKEN_PROGRAM_ID ||
+    data.length !== LEGACY_MINT_ACCOUNT_SIZE ||
+    data[MINT_INITIALIZED_OFFSET] !== 1
   ) {
-    throw new Error(`Token mint must be an initialized legacy SPL Token mint: ${mint.toBase58()}`);
+    throw new Error(`Token mint must be an initialized legacy SPL Token mint: ${mint}`);
   }
-  return normalizeTokenDecimals(account.data[MINT_DECIMALS_OFFSET]!);
+  return normalizeTokenDecimals(data[MINT_DECIMALS_OFFSET]!);
 }
 
 function assertOperatorTokenAccount(
-  address: PublicKey,
-  account: AccountInfo<Buffer>,
-  mint: PublicKey,
-  owner: PublicKey,
+  accountAddress: Address,
+  account: EncodedAccount,
+  mint: Address,
+  owner: Address,
 ): void {
-  const data = account.data;
+  const data = Buffer.from(account.data);
+  const mintBytes = Buffer.from(addressBytes(mint));
+  const ownerBytes = Buffer.from(addressBytes(owner));
   if (
-    !account.owner.equals(TOKEN_PROGRAM_ID) ||
+    account.programAddress !== TOKEN_PROGRAM_ID ||
     data.length !== LEGACY_TOKEN_ACCOUNT_SIZE ||
     data[TOKEN_ACCOUNT_STATE_OFFSET] !== TOKEN_ACCOUNT_INITIALIZED ||
-    !new PublicKey(data.subarray(TOKEN_ACCOUNT_MINT_OFFSET, TOKEN_ACCOUNT_OWNER_OFFSET)).equals(
-      mint,
-    ) ||
-    !new PublicKey(
-      data.subarray(TOKEN_ACCOUNT_OWNER_OFFSET, TOKEN_ACCOUNT_OWNER_OFFSET + 32),
-    ).equals(owner)
+    !data.subarray(TOKEN_ACCOUNT_MINT_OFFSET, TOKEN_ACCOUNT_OWNER_OFFSET).equals(mintBytes) ||
+    !data.subarray(TOKEN_ACCOUNT_OWNER_OFFSET, TOKEN_ACCOUNT_OWNER_OFFSET + 32).equals(ownerBytes)
   ) {
-    throw new Error(`Operator token account is invalid: ${address.toBase58()}`);
+    throw new Error(`Operator token account is invalid: ${accountAddress}`);
   }
-}
-
-function createAssociatedTokenAccountIdempotentInstruction(options: {
-  payer: PublicKey;
-  associatedTokenAccount: PublicKey;
-  owner: PublicKey;
-  mint: PublicKey;
-}): TransactionInstruction {
-  return new TransactionInstruction({
-    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-    keys: [
-      { pubkey: options.payer, isSigner: true, isWritable: true },
-      { pubkey: options.associatedTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: options.owner, isSigner: false, isWritable: false },
-      { pubkey: options.mint, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-    ],
-    data: Buffer.from([1]),
-  });
 }
 
 export interface PreparedGameToken {
   decimals: number;
-  operatorTokenAccount: PublicKey;
+  operatorTokenAccount: Address;
   creationSignature?: string;
 }
 
 export async function prepareGameToken(options: {
-  connection: Connection;
-  operatorKeypair: Keypair;
-  mint: PublicKey;
+  connection: OracleRpc;
+  operatorKeypair: KeyPairSignerLike;
+  mint: PublicKeyLike;
 }): Promise<PreparedGameToken> {
-  const { connection, operatorKeypair, mint } = options;
-  const mintAccount = await connection.getAccountInfo(mint, "confirmed");
-  if (!mintAccount) throw new Error(`Token mint does not exist: ${mint.toBase58()}`);
-
+  const connection = options.connection;
+  const operatorKeypair = ensureKeyPairSigner(options.operatorKeypair);
+  const mint = ensureAddress(options.mint);
+  const mintAccount = await fetchAccount(connection, mint);
+  if (!mintAccount) throw new Error(`Token mint does not exist: ${mint}`);
   const decimals = decodeMintDecimals(mint, mintAccount);
 
-  const operatorTokenAccount = deriveAssociatedTokenAddress(mint, operatorKeypair.publicKey);
-  const existingAccount = await connection.getAccountInfo(operatorTokenAccount, "confirmed");
+  const operatorTokenAccount = await deriveAssociatedTokenAddress(mint, operatorKeypair.address);
+  const existingAccount = await fetchAccount(connection, operatorTokenAccount);
   if (existingAccount) {
     assertOperatorTokenAccount(
       operatorTokenAccount,
       existingAccount,
       mint,
-      operatorKeypair.publicKey,
+      operatorKeypair.address,
     );
     return { decimals, operatorTokenAccount };
   }
 
-  const latestBlockhash = await connection.getLatestBlockhash("confirmed");
-  const transaction = new Transaction({
-    feePayer: operatorKeypair.publicKey,
-    ...latestBlockhash,
-  }).add(
-    createAssociatedTokenAccountIdempotentInstruction({
-      payer: operatorKeypair.publicKey,
-      associatedTokenAccount: operatorTokenAccount,
-      owner: operatorKeypair.publicKey,
-      mint,
+  const { value: lifetime } = await sendRpcRequest(
+    connection.getLatestBlockhash({ commitment: "confirmed" }),
+  );
+  const instruction = getCreateAssociatedTokenIdempotentInstruction({
+    payer: operatorKeypair,
+    ata: operatorTokenAccount,
+    owner: operatorKeypair.address,
+    mint,
+    tokenProgram: TOKEN_PROGRAM_ID,
+  });
+  const message = pipe(
+    createTransactionMessage({ version: "legacy" }),
+    (value) => setTransactionMessageFeePayerSigner(operatorKeypair, value),
+    (value) => setTransactionMessageLifetimeUsingBlockhash(lifetime, value),
+    (value) => appendTransactionMessageInstruction(instruction, value),
+  );
+  const transaction = await signTransactionMessageWithSigners(message);
+  const wireTransaction = getBase64EncodedWireTransaction(transaction);
+  const creationSignature = await sendRpcRequest(
+    connection.sendTransaction(wireTransaction, {
+      encoding: "base64",
+      maxRetries: 3n,
+      preflightCommitment: "confirmed",
+      skipPreflight: false,
     }),
   );
-  transaction.sign(operatorKeypair);
-  const creationSignature = await connection.sendRawTransaction(transaction.serialize(), {
-    maxRetries: 3,
-    skipPreflight: false,
-  });
-  await confirmTransaction(connection, creationSignature, latestBlockhash);
+  await confirmTransaction(connection, creationSignature, lifetime);
   return { decimals, operatorTokenAccount, creationSignature };
 }

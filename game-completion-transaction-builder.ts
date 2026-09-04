@@ -1,100 +1,71 @@
-import * as anchor from "@anchor-lang/core";
-import { PublicKey } from "@solana/web3.js";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./token-program.ts";
-import type { Timba } from "./types/contract.ts";
-import type { TimbaGameAccount } from "./types/timba.ts";
-import { ensurePublicKey } from "./solana-utils.ts";
-import { deriveGameAccounts } from "./oracle-accounts.ts";
+import type { Address, Instruction, KeyPairSigner, ReadonlyUint8Array } from "@solana/kit";
+import { getCompleteGameInstruction as getCompleteGameInstructionV020 } from "@timbagame/protocol/contracts/v0.2.0/kit";
+import { getCompleteGameInstruction as getCompleteGameInstructionV030 } from "@timbagame/protocol/contracts/v0.3.0/kit";
 import type { ContractVersion } from "./contract-idl.ts";
+import { deriveGameAccounts } from "./oracle-accounts.ts";
+import { ensureAddress } from "./solana-utils.ts";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./token-program.ts";
+import type { TimbaGameAccount } from "./types/timba.ts";
 
 export interface GameCompletionTransactionBuilderOptions {
-  getProgram: () => anchor.Program<Timba>;
-  operatorKeypair: anchor.web3.Keypair;
+  programId: Address;
+  operator: KeyPairSigner;
   contractVersion: ContractVersion;
 }
 
 export class GameCompletionTransactionBuilder {
   constructor(private readonly options: GameCompletionTransactionBuilderOptions) {}
 
-  public async buildCompletionTransaction(args: {
+  public async buildCompletionInstruction(args: {
     gameAccount: TimbaGameAccount;
-    winnerAddress: PublicKey;
-    randomHashBuffer: Buffer;
-    secretKeyBuffer: Buffer;
+    winnerAddress: Address;
+    randomHashBuffer: ReadonlyUint8Array;
+    secretKeyBuffer: ReadonlyUint8Array;
     winnerIndex: number;
-  }) {
-    const program = this.options.getProgram();
+  }): Promise<Instruction> {
     const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
-
-    const creatorPublicKey = ensurePublicKey(gameAccount.creator);
-    const tokenMint = ensurePublicKey(gameAccount.tokenMint);
-
-    const programId = ensurePublicKey(program.programId);
-
-    const {
-      gamePda,
-      oraclePda,
-      gameVaultPda,
-      gameTokenPda,
-      winnerTokenAccount,
-      gameVaultTokenAccount,
-      oracleOperatorTokenAccount,
-    } = deriveGameAccounts({
-      programId,
+    const creator = ensureAddress(gameAccount.creator);
+    const tokenMint = ensureAddress(gameAccount.tokenMint);
+    const accounts = await deriveGameAccounts({
+      programId: this.options.programId,
       randomHash: randomHashBuffer,
       tokenMint,
       winner: winnerAddress,
-      oracleOperator: this.options.operatorKeypair.publicKey,
+      oracleOperator: this.options.operator.address,
       tokenProgramId: TOKEN_PROGRAM_ID,
     });
-
-    const completeGame = program.methods.completeGame(
-      [...randomHashBuffer],
-      [...secretKeyBuffer],
+    const common = {
+      game: accounts.gamePda,
+      tokenMint,
+      gameVault: accounts.gameVaultPda,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      oracle: accounts.oraclePda,
+      oracleOperator: this.options.operator,
+      winner: winnerAddress,
+      creator,
+      winnerTokenAccount: accounts.winnerTokenAccount,
+      randomHash: randomHashBuffer,
+      secretKey: secretKeyBuffer,
       winnerIndex,
-    );
-    const builder =
-      this.options.contractVersion === "0.2.0"
-        ? completeGame
-            .accountsPartial({
-              game: gamePda,
-              gameTokenCtx: {
-                tokenMint,
-                gameToken: gameTokenPda,
-                gameVault: gameVaultPda,
-                gameTokenAccount: gameVaultTokenAccount,
-                tokenProgram: TOKEN_PROGRAM_ID,
-                associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-              },
-              oracle: oraclePda,
-              oracleOperator: this.options.operatorKeypair.publicKey,
-              winner: winnerAddress,
-              creator: creatorPublicKey,
-              winnerTokenAccount,
-            } as never)
-            .signers([this.options.operatorKeypair])
-        : completeGame
-            .accountsPartial({
-              game: gamePda,
-              oracle: oraclePda,
-              oracleOperator: this.options.operatorKeypair.publicKey,
-              winner: winnerAddress,
-              creator: creatorPublicKey,
-              gameVaultCtx: {
-                tokenMint,
-                gameVault: gameVaultPda,
-                gameVaultTokenAccount,
-                tokenProgram: TOKEN_PROGRAM_ID,
-                associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-              },
-              winnerTokenAccount,
-              oracleOperatorTokenAccount,
-            })
-            .signers([this.options.operatorKeypair]);
-
-    return {
-      builder,
-      signers: [this.options.operatorKeypair],
     };
+
+    return this.options.contractVersion === "0.2.0"
+      ? getCompleteGameInstructionV020(
+          {
+            ...common,
+            gameToken: accounts.gameTokenPda,
+            gameTokenAccount: accounts.gameVaultTokenAccount,
+          },
+          { programAddress: this.options.programId },
+        )
+      : getCompleteGameInstructionV030(
+          {
+            ...common,
+            gameVaultTokenAccount: accounts.gameVaultTokenAccount,
+            oracleOperatorTokenAccount: accounts.oracleOperatorTokenAccount,
+          },
+          { programAddress: this.options.programId },
+        );
   }
 }

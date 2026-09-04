@@ -1,4 +1,4 @@
-import { PublicKey } from "@solana/web3.js";
+import { address } from "@solana/kit";
 
 export const U64_MAX = 18_446_744_073_709_551_615n;
 export const MINIMUM_GAME_USD = "0.10";
@@ -30,7 +30,7 @@ export interface StoredTokenPolicy {
 export function normalizeMint(value: string): string {
   const normalized = value.trim();
   try {
-    return new PublicKey(normalized).toBase58();
+    return address(normalized);
   } catch (error) {
     throw new Error("mint must be a valid Solana address", { cause: error });
   }

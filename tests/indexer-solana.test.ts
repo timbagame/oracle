@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Keypair } from "@solana/web3.js";
+import { Keypair } from "./helpers/solana-fixtures.ts";
 import { getTrustedProgramData, parseTransactionEvents } from "../indexer/solana.ts";
 
 function initializedEvent(): Buffer {
@@ -56,7 +56,13 @@ describe("Solana indexer log parsing", () => {
       program,
     );
     expect(events.closed).toEqual([
-      { signature: "1".repeat(64), slot: 10, gameKey: game.toBase58(), timestamp: 1_000 },
+      {
+        signature: "1".repeat(64),
+        slot: 10,
+        gameKey: game.toBase58(),
+        timestamp: 1_000,
+        operator: true,
+      },
     ]);
   });
 });

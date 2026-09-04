@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Keypair } from "@solana/web3.js";
+import { Keypair } from "./helpers/solana-fixtures.ts";
 import { IndexerDatabase } from "../indexer/database.ts";
 import { createIndexerApi } from "../indexer/api.ts";
 import type { IndexedEvents } from "../indexer/types.ts";

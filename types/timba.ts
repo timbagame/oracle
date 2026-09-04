@@ -1,8 +1,6 @@
-import type * as anchor from "@anchor-lang/core";
 import type { PublicKeyLike } from "../solana-utils.ts";
 
-export type NumericLike =
-  number | bigint | anchor.BN | { toNumber(): number } | { valueOf(): number | bigint };
+export type NumericLike = number | bigint | { toNumber(): number } | { valueOf(): number | bigint };
 
 export interface TimbaEventPayload {
   gameKey?: PublicKeyLike;

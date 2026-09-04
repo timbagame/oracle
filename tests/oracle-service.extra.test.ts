@@ -2,13 +2,14 @@ import { beforeAll, afterAll, describe, it, expect, spyOn } from "bun:test";
 import { resetPendingGames } from "./helpers/reset-pending-games.ts";
 import { seedTrackedGame } from "./helpers/seed-tracked-game.ts";
 import { createTestEnv } from "./helpers/create-test-env.ts";
-import * as anchor from "@anchor-lang/core";
+import * as anchor from "./helpers/solana-fixtures.ts";
 import {
   Keypair,
   PublicKey,
+  Transaction,
   SendTransactionError,
   TransactionExpiredBlockheightExceededError,
-} from "@solana/web3.js";
+} from "./helpers/solana-fixtures.ts";
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
@@ -159,7 +160,7 @@ async function runExecuteGameCompletionScenario({
   const operatorKeypair = (service as any).operatorKeypair;
   const winner = Keypair.generate().publicKey;
   const creator = Keypair.generate().publicKey;
-  const programId = Keypair.generate().publicKey;
+  const programId = new PublicKey(service.getProgramId());
   const tokenMint = Keypair.generate().publicKey;
   const randomHashBuffer = Buffer.alloc(32, 1);
   const secretKeyBuffer = Buffer.alloc(32, 2);
@@ -173,10 +174,12 @@ async function runExecuteGameCompletionScenario({
     blockhashFetches: string[];
     confirmations: Array<{ signature: string; blockhash?: string; lastValidBlockHeight?: number }>;
     sentSignatures: string[];
+    wireTransactions: string[];
   } = {
     blockhashFetches: [],
     confirmations: [],
     sentSignatures: [],
+    wireTransactions: [],
   };
   let directProgram: PublicKey | null = null;
 
@@ -209,27 +212,38 @@ async function runExecuteGameCompletionScenario({
         ? await overrides.getLatestBlockhash(commitment)
         : { blockhash: TEST_LATEST_BLOCKHASH, lastValidBlockHeight: 999 };
       calls.blockhashFetches.push(resolved.blockhash);
-      return resolved;
+      return {
+        value: {
+          blockhash: resolved.blockhash,
+          lastValidBlockHeight: BigInt(resolved.lastValidBlockHeight),
+        },
+      };
     },
-    sendRawTransaction: async (_raw: Buffer, options?: anchor.web3.SendOptions) => {
+    sendTransaction: async (wire: string, options?: anchor.web3.SendOptions) => {
       calls.sendOptions = options;
+      calls.wireTransactions.push(wire);
       const signature = overrides.sendRawTransaction
-        ? await overrides.sendRawTransaction(_raw, options)
+        ? await overrides.sendRawTransaction(Buffer.from(wire, "base64"), options)
         : "tx-abc";
       calls.sentSignatures.push(signature);
       return signature;
     },
-    confirmTransaction: async (params: any) => {
-      const record = typeof params === "string" ? { signature: params } : params;
-      calls.confirmations.push(record);
-      calls.confirmed = record;
-      if (overrides.confirmTransaction) {
-        await overrides.confirmTransaction(params);
-      }
-    },
+    getSignatureStatuses: async () => ({ value: [null] }),
   };
 
   (service as any).connection = mockConnection;
+  const submitterOptions = (service.completionManager.transactionSubmitter as any).options;
+  const originalConfirmTransaction = submitterOptions.confirmTransaction;
+  submitterOptions.confirmTransaction = async (signature: string, latestBlockhash: any) => {
+    const record = {
+      signature,
+      blockhash: latestBlockhash.blockhash,
+      lastValidBlockHeight: Number(latestBlockhash.lastValidBlockHeight),
+    };
+    calls.confirmations.push(record);
+    calls.confirmed = record;
+    if (overrides.confirmTransaction) await overrides.confirmTransaction(record);
+  };
 
   const defaultTransactionFactory = async ({
     operatorKeypair,
@@ -286,12 +300,13 @@ async function runExecuteGameCompletionScenario({
 
     tx = await service.completionManager.executeGameCompletion({
       gameAccount,
-      winnerAddress: winner,
+      winnerAddress: winner.address,
       randomHashBuffer,
       secretKeyBuffer,
       winnerIndex: 5,
     });
   } finally {
+    submitterOptions.confirmTransaction = originalConfirmTransaction;
     (service as any).program = originalProgram;
     (service as any).connection = originalConnection;
   }
@@ -301,9 +316,29 @@ async function runExecuteGameCompletionScenario({
     randomHash: randomHashBuffer,
     tokenMint,
     winner,
-    oracleOperator: operatorKeypair.publicKey,
+    oracleOperator: operatorKeypair.address,
     tokenProgramId,
   });
+
+  const sentTransaction = Transaction.from(Buffer.from(calls.wireTransactions.at(-1)!, "base64"));
+  const keys = sentTransaction.instructions[0]!.keys;
+  calls.accounts = {
+    game: keys[0]!.pubkey,
+    oracle: keys[6]!.pubkey,
+    winner: keys[8]!.pubkey,
+    creator: keys[9]!.pubkey,
+    oracleOperator: keys[7]!.pubkey,
+    winnerTokenAccount: keys[10]!.pubkey,
+    oracleOperatorTokenAccount: keys[11]!.pubkey,
+    gameVaultCtx: {
+      tokenMint: keys[1]!.pubkey,
+      gameVault: keys[2]!.pubkey,
+      gameVaultTokenAccount: keys[3]!.pubkey,
+      tokenProgram: keys[4]!.pubkey,
+      associatedTokenProgram: keys[5]!.pubkey,
+    },
+  };
+  calls.signers = [operatorKeypair];
 
   return {
     tx,
@@ -315,7 +350,7 @@ async function runExecuteGameCompletionScenario({
     expectedGameAta: derived.gameVaultTokenAccount,
     expectedOracleOperatorAta: derived.oracleOperatorTokenAccount,
     expectedTokenProgram: tokenProgramId,
-    oracleOperator: operatorKeypair.publicKey,
+    oracleOperator: new PublicKey(operatorKeypair.address),
     winner,
     creator,
     tokenMint,
@@ -372,7 +407,7 @@ describe("OracleService internals", () => {
       const fileKeypair = Keypair.fromSecretKey(
         new Uint8Array(JSON.parse(fs.readFileSync(keypairPath, "utf-8"))),
       );
-      expect((service as any).operatorKeypair.publicKey.toBase58()).not.toBe(
+      expect(String((service as any).operatorKeypair.address)).not.toBe(
         fileKeypair.publicKey.toBase58(),
       );
     } finally {
@@ -1781,13 +1816,16 @@ describe("OracleService internals", () => {
     const mockConnection = {
       getAccountInfo: async () => ({ owner: TOKEN_PROGRAM_ID }),
       getLatestBlockhash: async () => ({
-        blockhash: TEST_LATEST_BLOCKHASH,
-        lastValidBlockHeight: 99,
+        value: {
+          blockhash: TEST_LATEST_BLOCKHASH,
+          lastValidBlockHeight: 99n,
+        },
       }),
-      sendRawTransaction: async () => "tx-confirm-fail",
-      confirmTransaction: async () => {
+      sendTransaction: async () => "tx-confirm-fail",
+      getSignatureStatuses: async () => {
         throw new Error("confirm-fail");
       },
+      getBlockHeight: async () => 1n,
     } as unknown as anchor.web3.Connection;
 
     (service as any).connection = mockConnection;
@@ -2177,18 +2215,16 @@ describe("OracleService internals", () => {
     expect(accounts?.winner.toBase58()).toBe(result.winner.toBase58());
     expect(accounts?.creator.toBase58()).toBe(result.creator.toBase58());
     expect(accounts?.oracleOperator.toBase58()).toBe(result.oracleOperator.toBase58());
-    expect(accounts?.game.toBase58()).toBe(result.expectedGamePda.toBase58());
-    expect(accounts?.oracle.toBase58()).toBe(result.expectedOraclePda.toBase58());
+    expect(accounts?.game.toBase58()).toBe(String(result.expectedGamePda));
+    expect(accounts?.oracle.toBase58()).toBe(String(result.expectedOraclePda));
     expect(tokenCtx?.tokenMint?.toBase58()).toBe(result.tokenMint.toBase58());
-    expect(tokenCtx?.gameVault?.toBase58()).toBe(result.expectedGameVaultPda.toBase58());
-    expect(tokenCtx?.tokenProgram?.toBase58()).toBe(result.expectedTokenProgram.toBase58());
-    expect(tokenCtx?.associatedTokenProgram?.toBase58()).toBe(
-      ASSOCIATED_TOKEN_PROGRAM_ID.toBase58(),
-    );
-    expect(accounts?.winnerTokenAccount.toBase58()).toBe(result.expectedWinnerAta.toBase58());
-    expect(tokenCtx?.gameVaultTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
+    expect(tokenCtx?.gameVault?.toBase58()).toBe(String(result.expectedGameVaultPda));
+    expect(tokenCtx?.tokenProgram?.toBase58()).toBe(String(result.expectedTokenProgram));
+    expect(tokenCtx?.associatedTokenProgram?.toBase58()).toBe(String(ASSOCIATED_TOKEN_PROGRAM_ID));
+    expect(accounts?.winnerTokenAccount.toBase58()).toBe(String(result.expectedWinnerAta));
+    expect(tokenCtx?.gameVaultTokenAccount?.toBase58()).toBe(String(result.expectedGameAta));
     expect(accounts?.oracleOperatorTokenAccount.toBase58()).toBe(
-      result.expectedOracleOperatorAta.toBase58(),
+      String(result.expectedOracleOperatorAta),
     );
     expect(result.calls.signers).toEqual([result.operatorKeypair]);
     expect(result.calls.confirmed).toMatchObject({
@@ -2196,25 +2232,6 @@ describe("OracleService internals", () => {
       blockhash: TEST_LATEST_BLOCKHASH,
       lastValidBlockHeight: 999,
     });
-  });
-
-  it("executeGameCompletion sends versioned transactions via sendRawTransaction", async () => {
-    const result = await runExecuteGameCompletionScenario({
-      transactionFactory: async ({ operatorKeypair }) => {
-        const message = new anchor.web3.TransactionMessage({
-          payerKey: operatorKeypair.publicKey,
-          recentBlockhash: TEST_INITIAL_BLOCKHASH,
-          instructions: [createNoopInstruction()],
-        }).compileToV0Message();
-        return new anchor.web3.VersionedTransaction(message);
-      },
-    });
-
-    expect(result.tx).toBe("tx-abc");
-    expect(result.calls.transactionUsed).toBeInstanceOf(anchor.web3.VersionedTransaction);
-    if (result.calls.transactionUsed instanceof anchor.web3.VersionedTransaction) {
-      expect(result.calls.transactionUsed.message.recentBlockhash).toBe(TEST_LATEST_BLOCKHASH);
-    }
   });
 
   it("executeGameCompletion retries with a refreshed blockhash when confirmation expires", async () => {
@@ -2288,80 +2305,48 @@ describe("OracleService internals", () => {
   it("executeGameCompletion uses the legacy SPL Token program", async () => {
     const result = await runExecuteGameCompletionScenario();
 
-    expect(result.expectedTokenProgram.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
+    expect(String(result.expectedTokenProgram)).toBe(String(TOKEN_PROGRAM_ID));
     const tokenCtx = result.calls.accounts?.gameVaultCtx;
-    expect(tokenCtx?.tokenProgram?.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
+    expect(tokenCtx?.tokenProgram?.toBase58()).toBe(String(TOKEN_PROGRAM_ID));
     expect(result.calls.accounts?.winnerTokenAccount.toBase58()).toBe(
-      result.expectedWinnerAta.toBase58(),
+      String(result.expectedWinnerAta),
     );
-    expect(tokenCtx?.gameVaultTokenAccount?.toBase58()).toBe(result.expectedGameAta.toBase58());
+    expect(tokenCtx?.gameVaultTokenAccount?.toBase58()).toBe(String(result.expectedGameAta));
     expect(result.calls.accounts?.oracleOperatorTokenAccount.toBase58()).toBe(
-      result.expectedOracleOperatorAta.toBase58(),
+      String(result.expectedOracleOperatorAta),
     );
   });
 
-  it("confirmTransaction forwards latest blockhash params", async () => {
-    const calls: any[] = [];
-
+  it("confirmTransaction polls signature status until confirmation", async () => {
+    const calls: string[][] = [];
     const mockConnection = {
-      getLatestBlockhash: async () => ({ blockhash: "bh", lastValidBlockHeight: 42 }),
-      confirmTransaction: async (params: any) => {
-        calls.push(params);
+      getSignatureStatuses: async (signatures: string[]) => {
+        calls.push(signatures);
+        return { value: [{ confirmationStatus: "confirmed", err: null }] };
       },
+      getBlockHeight: async () => 10n,
     } as any;
 
-    await confirmTransaction(mockConnection, "sig-1");
-    expect(calls[0]).toEqual({ signature: "sig-1", blockhash: "bh", lastValidBlockHeight: 42 });
-
-    await confirmTransaction(mockConnection, "sig-2", {
-      blockhash: "provided",
-      lastValidBlockHeight: 99,
+    await confirmTransaction(mockConnection, "sig-1", {
+      blockhash: "11111111111111111111111111111111" as never,
+      lastValidBlockHeight: 99n,
     });
-    expect(calls[1]).toEqual({
-      signature: "sig-2",
-      blockhash: "provided",
-      lastValidBlockHeight: 99,
-    });
+    expect(calls).toEqual([["sig-1"]]);
   });
 
-  it("confirmTransaction uses provided blockhash when getLatestBlockhash is unavailable", async () => {
-    const calls: any[] = [];
-
-    const mockConnection = {
-      confirmTransaction: async (params: any) => {
-        calls.push(params);
-      },
-    } as any;
-
-    await confirmTransaction(mockConnection, "sig-3", {
-      blockhash: "external",
-      lastValidBlockHeight: 13,
-    });
-
-    expect(calls[0]).toEqual({
-      signature: "sig-3",
-      blockhash: "external",
-      lastValidBlockHeight: 13,
-    });
-  });
-
-  it("confirmTransaction rejects failed modern and legacy confirmations", async () => {
+  it("confirmTransaction rejects a failed signature status", async () => {
     const transactionError = { InstructionError: [0, { Custom: 1 }] };
-    const modernConnection = {
-      confirmTransaction: async () => ({ value: { err: transactionError } }),
+    const connection = {
+      getSignatureStatuses: async () => ({
+        value: [{ confirmationStatus: "confirmed", err: transactionError }],
+      }),
+      getBlockHeight: async () => 10n,
     } as any;
     await expect(
-      confirmTransaction(modernConnection, "modern-failure", {
-        blockhash: "external",
-        lastValidBlockHeight: 13,
+      confirmTransaction(connection, "failed-signature", {
+        blockhash: "11111111111111111111111111111111" as never,
+        lastValidBlockHeight: 13n,
       }),
-    ).rejects.toThrow("Transaction modern-failure failed");
-
-    const legacyConnection = {
-      confirmTransaction: async () => ({ value: { err: transactionError } }),
-    } as any;
-    await expect(confirmTransaction(legacyConnection, "legacy-failure")).rejects.toThrow(
-      "Transaction legacy-failure failed",
-    );
+    ).rejects.toThrow("Transaction failed-signature failed");
   });
 });

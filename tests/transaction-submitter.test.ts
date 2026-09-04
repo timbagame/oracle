@@ -2,23 +2,23 @@ import { describe, expect, it, mock } from "bun:test";
 import {
   TransactionExpiredTimeoutError,
   TransactionExpiredBlockheightExceededError,
-} from "@solana/web3.js";
+} from "./helpers/solana-fixtures.ts";
 import { TransactionSubmitter } from "../transaction-submitter.ts";
 
 const latestBlockhash = {
-  blockhash: "BH1",
-  lastValidBlockHeight: 123,
+  blockhash: "11111111111111111111111111111111" as never,
+  lastValidBlockHeight: 123n,
 };
 
 const makeConnection = () => {
   return {
-    getLatestBlockhash: mock(async () => latestBlockhash),
-    sendRawTransaction: mock(async () => "sig-1"),
-    getSignatureStatus: mock(async () => null),
+    getLatestBlockhash: mock(async () => ({ value: latestBlockhash })),
+    sendTransaction: mock(async () => "1".repeat(64)),
+    getSignatureStatuses: mock(async () => ({ value: [null] })),
   } as any;
 };
 
-const noopSign = async () => Buffer.from("00", "hex");
+const noopSign = async () => "AA==";
 
 describe("TransactionSubmitter", () => {
   it("retries with a fresh blockhash after expiry errors", async () => {
@@ -38,15 +38,15 @@ describe("TransactionSubmitter", () => {
     });
 
     // Second send should return a different signature
-    connection.sendRawTransaction.mockImplementationOnce(async () => "sig-1");
-    connection.sendRawTransaction.mockImplementationOnce(async () => "sig-2");
+    connection.sendTransaction.mockImplementationOnce(async () => "1".repeat(64));
+    connection.sendTransaction.mockImplementationOnce(async () => "2".repeat(64));
 
     const result = await submitter.submitTransaction(noopSign);
 
     expect(connection.getLatestBlockhash).toHaveBeenCalledTimes(2);
-    expect(connection.sendRawTransaction).toHaveBeenCalledTimes(2);
+    expect(connection.sendTransaction).toHaveBeenCalledTimes(2);
     expect(confirmTransaction).toHaveBeenCalledTimes(2);
-    expect(result).toBe("sig-2");
+    expect(result).toBe("2".repeat(64));
   });
 
   it("returns first signature when status shows the expired tx landed", async () => {
@@ -56,8 +56,8 @@ describe("TransactionSubmitter", () => {
       throw new TransactionExpiredTimeoutError("timeout", 0);
     });
 
-    connection.getSignatureStatus.mockImplementation(async () => ({
-      value: { confirmationStatus: "confirmed", err: null },
+    connection.getSignatureStatuses.mockImplementation(async () => ({
+      value: [{ confirmationStatus: "confirmed", err: null }],
     }));
 
     const submitter = new TransactionSubmitter({
@@ -67,9 +67,9 @@ describe("TransactionSubmitter", () => {
 
     const result = await submitter.submitTransaction(noopSign);
 
-    expect(connection.sendRawTransaction).toHaveBeenCalledTimes(1);
-    expect(connection.getSignatureStatus).toHaveBeenCalledTimes(1);
-    expect(result).toBe("sig-1");
+    expect(connection.sendTransaction).toHaveBeenCalledTimes(1);
+    expect(connection.getSignatureStatuses).toHaveBeenCalledTimes(1);
+    expect(result).toBe("1".repeat(64));
   });
 
   it("propagates non-retryable errors", async () => {
@@ -84,6 +84,6 @@ describe("TransactionSubmitter", () => {
     });
 
     await expect(submitter.submitTransaction(noopSign)).rejects.toThrow("boom");
-    expect(connection.sendRawTransaction).toHaveBeenCalledTimes(1);
+    expect(connection.sendTransaction).toHaveBeenCalledTimes(1);
   });
 });

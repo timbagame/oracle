@@ -10,23 +10,6 @@ const DEFAULT_INDEXER_DATABASE_FILE = "indexer.sqlite";
 const DEFAULT_KEYPAIR_FILE = "operator-keypair.json";
 const LEGACY_KEYPAIR_FILE = "admin-keypair.json";
 
-function parseBoolean(
-  value: string | undefined,
-  { defaultValue }: { defaultValue: boolean },
-): boolean {
-  if (value === undefined) {
-    return defaultValue;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
-    return true;
-  }
-  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
-    return false;
-  }
-  return defaultValue;
-}
-
 function parseInteger(
   value: string | undefined,
   {
@@ -111,7 +94,6 @@ export interface OracleRuntimeConfig {
   readonly playerEventFlushDebounceMs: number;
   readonly playerEventFlushMaxOperations: number;
   readonly autoCompleteDebounceMs: number;
-  readonly disableBatchTransactions: boolean;
   readonly useEphemeralKeypair: boolean;
   readonly environment: string;
   readonly botInternalUrl: string | null;
@@ -168,10 +150,6 @@ function loadConfig(): OracleRuntimeConfig {
     key: "ORACLE_AUTOCOMPLETE_DEBOUNCE_MS",
   });
 
-  const disableBatchTransactions = parseBoolean(readEnv("ORACLE_DISABLE_RPC_BATCH_TRANSACTIONS"), {
-    defaultValue: false,
-  });
-
   const useEphemeralKeypair = shouldUseEphemeralKeypair();
   const botInternalUrl = readEnv("BOT_INTERNAL_URL") ?? "http://bot:3002";
   const apiTokenFile = readEnv("ORACLE_API_TOKEN_FILE")?.trim();
@@ -202,7 +180,6 @@ function loadConfig(): OracleRuntimeConfig {
     playerEventFlushDebounceMs,
     playerEventFlushMaxOperations,
     autoCompleteDebounceMs,
-    disableBatchTransactions,
     useEphemeralKeypair,
     environment,
     botInternalUrl,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import type * as anchor from "@anchor-lang/core";
+import type * as anchor from "./helpers/solana-fixtures.ts";
 import type { OracleDatabase } from "../database.ts";
 import type { Timba } from "../types/contract.ts";
 import {

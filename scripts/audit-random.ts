@@ -1,17 +1,17 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import type * as anchor from "@anchor-lang/core";
-import type { Connection, PublicKey } from "@solana/web3.js";
+import type { Address } from "@solana/kit";
 import { OracleDatabase } from "../database.ts";
 import { OracleService } from "../oracle-service.ts";
-import type { Timba } from "../types/contract.ts";
 import type { TimbaGameAccount, TimbaPlayerEvent } from "../types/timba.ts";
 import {
-  ensurePublicKey,
+  ensureAddress,
   resolveNumericLike,
   toBase58,
   type PublicKeyLike,
 } from "../solana-utils.ts";
+import type { OracleRpc } from "../solana-kit.ts";
+import type { TimbaProgramClient } from "../timba-program-client.ts";
 
 export type CliOptions = {
   gameAddress?: string;
@@ -274,14 +274,14 @@ export function formatPlayerLabel(label: string, maxLength: number = 12): string
 }
 
 async function fetchGameAccount(
-  program: anchor.Program<Timba>,
-  gamePda: PublicKey,
+  program: TimbaProgramClient,
+  gamePda: Address,
 ): Promise<TimbaGameAccount | null> {
   try {
-    return (await program.account.game.fetch(gamePda)) as TimbaGameAccount;
+    return await program.fetchGame(gamePda);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("Account does not exist")) {
+    if (/Account (?:does not exist|not found(?: at address)?)/i.test(message)) {
       return null;
     }
     throw error;
@@ -357,10 +357,10 @@ async function main(): Promise<void> {
 
   const secretKeyBuffer = Buffer.from(secretData.secretKey, "hex");
 
-  const gamePda = ensurePublicKey(gameAddress);
+  const gamePda = ensureAddress(gameAddress);
 
-  const connection = (oracle as unknown as { connection: Connection }).connection;
-  const program = (oracle as unknown as { program: anchor.Program<Timba> }).program;
+  const connection = oracle.getConnection() as OracleRpc;
+  const program = (oracle as unknown as { program: TimbaProgramClient }).program;
 
   // Keep a local in-memory registry snapshot to avoid writing to SQLite from this script by default.
   let playersCache: (string | undefined)[] = [];
@@ -548,9 +548,10 @@ async function main(): Promise<void> {
     let sawRateLimit = false;
 
     try {
-      currentSlot = await connection.getSlot();
+      currentSlot = Number(await connection.getSlot({ commitment: "confirmed" }).send());
       if (options.withBlockTime) {
-        blockTime = await connection.getBlockTime(currentSlot);
+        const resolved = await connection.getBlockTime(BigInt(currentSlot) as never).send();
+        blockTime = resolved === null ? null : Number(resolved);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

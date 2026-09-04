@@ -1,17 +1,22 @@
-import * as anchor from "@anchor-lang/core";
 import { createHash } from "crypto";
-import { PublicKey, type BlockhashWithExpiryBlockHeight } from "@solana/web3.js";
+import {
+  address,
+  getAddressEncoder,
+  getBase58Decoder,
+  type Address,
+  type ReadonlyUint8Array,
+} from "@solana/kit";
+import { sendRpcRequest, type LatestBlockhash, type OracleRpc } from "./solana-kit.ts";
 
 type PublicKeyRecord = {
   toBase58?: () => string;
   value?: unknown;
   some?: unknown;
   toString?: () => unknown;
-  [key: string]: unknown;
 };
 
 type PublicKeyInput =
-  PublicKey | anchor.web3.PublicKey | string | PublicKeyRecord | null | undefined;
+  PublicKey | Address | string | ReadonlyUint8Array | number[] | PublicKeyRecord | null | undefined;
 
 export type PublicKeyLike = PublicKeyInput;
 
@@ -33,8 +38,35 @@ function assertTransactionSucceeded(signature: string, result: unknown): void {
   }
 }
 
-function isAnchorPublicKey(value: unknown): value is anchor.web3.PublicKey {
-  return value instanceof anchor.web3.PublicKey;
+export class PublicKey {
+  public readonly address: Address;
+
+  constructor(value: string | ReadonlyUint8Array | number[]) {
+    this.address =
+      typeof value === "string"
+        ? address(value)
+        : address(getBase58Decoder().decode(Uint8Array.from(value)));
+  }
+
+  public toBase58(): string {
+    return this.address;
+  }
+
+  public toString(): string {
+    return this.address;
+  }
+
+  public toBytes(): Uint8Array {
+    return new Uint8Array(getAddressEncoder().encode(this.address));
+  }
+
+  public toBuffer(): Buffer {
+    return Buffer.from(this.toBytes());
+  }
+
+  public equals(other: PublicKeyLike): boolean {
+    return coercePublicKey(other)?.address === this.address;
+  }
 }
 
 function isArrayBufferView(value: unknown): value is ArrayBufferView {
@@ -52,10 +84,6 @@ export function coercePublicKey(value: PublicKeyLike): PublicKey | null {
 
   if (value instanceof PublicKey) {
     return value;
-  }
-
-  if (isAnchorPublicKey(value)) {
-    return new PublicKey(value.toBytes());
   }
 
   if (typeof value === "string") {
@@ -110,6 +138,16 @@ export function ensurePublicKey(value: PublicKeyLike | PublicKey): PublicKey {
   if (!normalized) {
     throw new Error("Invalid public key provided");
   }
+  return normalized;
+}
+
+export function coerceAddress(value: PublicKeyLike): Address | null {
+  return coercePublicKey(value)?.address ?? null;
+}
+
+export function ensureAddress(value: PublicKeyLike): Address {
+  const normalized = coerceAddress(value);
+  if (!normalized) throw new Error("Invalid Solana address provided");
   return normalized;
 }
 
@@ -175,46 +213,35 @@ export function resolveNumericLike(value: unknown): number | undefined {
   return undefined;
 }
 
-/**
- * Confirms a transaction using modern or legacy Solana connection methods.
- * Prefers the modern pattern (getLatestBlockhash + confirmTransaction) for newer Solana SDK versions.
- * Falls back to the legacy confirmTransaction(signature) pattern for compatibility with older SDK versions.
- */
+/** Polls signature status until the transaction is confirmed, fails, expires, or times out. */
 export async function confirmTransaction(
-  connection: anchor.web3.Connection,
-  signature: string,
-  latestBlockhash?: BlockhashWithExpiryBlockHeight,
+  rpc: OracleRpc,
+  transactionSignature: string,
+  latestBlockhash: LatestBlockhash,
 ): Promise<void> {
-  const conn = connection as anchor.web3.Connection & {
-    getLatestBlockhash?: () => Promise<{ blockhash: string; lastValidBlockHeight: number }>;
-  };
-
-  // Modern confirmation (preferred)
-  if (typeof conn.confirmTransaction === "function") {
-    const resolvedBlockhash =
-      latestBlockhash ??
-      (typeof conn.getLatestBlockhash === "function" ? await conn.getLatestBlockhash() : null);
-
-    if (resolvedBlockhash) {
-      const { blockhash, lastValidBlockHeight } = resolvedBlockhash;
-      const result = await conn.confirmTransaction({
-        signature,
-        blockhash,
-        lastValidBlockHeight,
-      });
-      assertTransactionSucceeded(signature, result);
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const [{ value: statuses }, blockHeight] = await Promise.all([
+      sendRpcRequest(
+        rpc.getSignatureStatuses([transactionSignature as never], {
+          searchTransactionHistory: true,
+        }),
+      ),
+      sendRpcRequest(rpc.getBlockHeight({ commitment: "confirmed" })),
+    ]);
+    const status = statuses[0];
+    if (status?.err) {
+      assertTransactionSucceeded(transactionSignature, { value: status });
+    }
+    if (status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") {
       return;
     }
+    if (blockHeight > latestBlockhash.lastValidBlockHeight) {
+      throw new Error(`Transaction ${transactionSignature} expired before confirmation`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
-
-  // Legacy confirmation fallback
-  if (typeof conn.confirmTransaction === "function") {
-    const result = await conn.confirmTransaction(signature);
-    assertTransactionSucceeded(signature, result);
-    return;
-  }
-
-  throw new Error("Connection does not support transaction confirmation");
+  throw new Error(`Transaction ${transactionSignature} confirmation timed out`);
 }
 
 export function generateUnbiasedRandom(seed: Buffer, max: bigint): bigint {
