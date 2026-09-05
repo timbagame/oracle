@@ -51,7 +51,6 @@ jobs:
       - name: Tests
         run: bun test --no-summarize
 
-
   publish:
     name: Publish OCI image
     if: github.event_name != 'pull_request'
