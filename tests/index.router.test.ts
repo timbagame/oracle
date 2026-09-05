@@ -30,7 +30,7 @@ let context: IndexRouterTestContext;
 describe("index router", () => {
   beforeAll(async () => {
     context = await createIndexRouterTestContext("index-router", {
-      generateGameSecrets: (_options) => ({
+      generateGameSecrets: async (_options) => ({
         randomHash: "ab".repeat(32),
         gameAddress: CONTRACT_GAME_ADDRESS,
         oracleOperator: CONTRACT_WINNER_ADDRESS,
@@ -331,7 +331,7 @@ describe("index router", () => {
   test("POST /generate-hash rejects overly large game type payloads", async () => {
     const calls: string[] = [];
     const rejectingContext = await createIndexRouterTestContext("index-router-large", {
-      generateGameSecrets: (options) => {
+      generateGameSecrets: async (options) => {
         if (options?.gameType) {
           calls.push(options.gameType);
         }
@@ -367,7 +367,7 @@ describe("index router", () => {
   test("POST /generate-hash rejects invalid JSON payloads", async () => {
     const calls: string[] = [];
     const rejectingContext = await createIndexRouterTestContext("index-router-invalid-json", {
-      generateGameSecrets: (options) => {
+      generateGameSecrets: async (options) => {
         if (options?.gameType) {
           calls.push(options.gameType);
         }
@@ -401,7 +401,7 @@ describe("index router", () => {
 
   test("POST /generate-hash rejects non-string game types", async () => {
     const rejectingContext = await createIndexRouterTestContext("index-router-type-check", {
-      generateGameSecrets: () => ({
+      generateGameSecrets: async () => ({
         randomHash: "abc",
         gameAddress: "game123",
       }),
@@ -429,7 +429,7 @@ describe("index router", () => {
   test("POST /generate-hash accepts max-length game type", async () => {
     const calls: string[] = [];
     const acceptingContext = await createIndexRouterTestContext("index-router-max-length", {
-      generateGameSecrets: (options) => {
+      generateGameSecrets: async (options) => {
         if (options?.gameType) {
           calls.push(options.gameType);
         }
@@ -877,7 +877,7 @@ describe("index router", () => {
 
   test("router catches handler errors and returns 500", async () => {
     const failingContext = await createIndexRouterTestContext("index-router-error", {
-      generateGameSecrets: () => {
+      generateGameSecrets: async () => {
         throw new Error("boom");
       },
     });

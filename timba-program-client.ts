@@ -1,6 +1,5 @@
 import { address, type Address } from "@solana/kit";
-import { fetchGame as fetchGameV020 } from "@timbagame/protocol/contracts/v0.2.0/kit";
-import { fetchGame as fetchGameV030 } from "@timbagame/protocol/contracts/v0.3.0/kit";
+import { getContractClient } from "@timbagame/protocol/contracts/client";
 import type { ContractVersion } from "./contract-idl.ts";
 import { getContractIdl } from "./contract-idl.ts";
 import { parseTransactionEvents } from "./indexer/solana.ts";
@@ -30,10 +29,9 @@ export class TimbaProgramClient {
   }
 
   async fetchGame(gameAddress: Address): Promise<TimbaGameAccount> {
-    const account =
-      this.contractVersion === "0.2.0"
-        ? await fetchGameV020(this.rpc, gameAddress, { commitment: "confirmed" })
-        : await fetchGameV030(this.rpc, gameAddress, { commitment: "confirmed" });
+    const account = await getContractClient(this.contractVersion).fetchGame(this.rpc, gameAddress, {
+      commitment: "confirmed",
+    });
     return account.data;
   }
 

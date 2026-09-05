@@ -27,6 +27,7 @@ export class GameCompletionTransactionBuilder {
     const creator = ensureAddress(gameAccount.creator);
     const tokenMint = ensureAddress(gameAccount.tokenMint);
     const accounts = await deriveGameAccounts({
+      contractVersion: this.options.contractVersion,
       programId: this.options.programId,
       randomHash: randomHashBuffer,
       tokenMint,

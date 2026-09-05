@@ -344,7 +344,7 @@ export function buildHandlers(oracle: OracleApi) {
           gameType = parsed.data.gameType;
         }
 
-        const secrets = oracle.generateGameSecrets({ gameType });
+        const secrets = await oracle.generateGameSecrets({ gameType });
         return createContractResponse(GenerateHashResponseSchema, {
           randomHash: secrets.randomHash,
           gameAddress: secrets.gameAddress,

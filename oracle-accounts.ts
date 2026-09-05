@@ -1,12 +1,9 @@
 import type { Address, ReadonlyUint8Array } from "@solana/kit";
-import { addressBytes, derivePdaSync } from "./solana-kit.ts";
+import { getContractClient } from "@timbagame/protocol/contracts/client";
+import { findGameTokenPda } from "@timbagame/protocol/contracts/v0.2.0/kit";
+import type { ContractVersion } from "@timbagame/protocol/contracts";
 import { ensureAddress, type PublicKeyLike } from "./solana-utils.ts";
 import { deriveAssociatedTokenAddress } from "./token-program.ts";
-
-export const GAME_SEED = Buffer.from("game", "utf8");
-export const ORACLE_SEED = Buffer.from("oracle", "utf8");
-export const GAME_VAULT_SEED = Buffer.from("game_vault", "utf8");
-export const GAME_TOKEN_SEED = Buffer.from("game_token", "utf8");
 
 export interface DerivedGameAccounts {
   gamePda: Address;
@@ -18,7 +15,8 @@ export interface DerivedGameAccounts {
   oracleOperatorTokenAccount: Address;
 }
 
-export function deriveGameAccounts(params: {
+export async function deriveGameAccounts(params: {
+  contractVersion: ContractVersion;
   programId: PublicKeyLike;
   randomHash: ReadonlyUint8Array;
   tokenMint: PublicKeyLike;
@@ -26,19 +24,24 @@ export function deriveGameAccounts(params: {
   oracleOperator: PublicKeyLike;
   tokenProgramId: PublicKeyLike;
   gamePda?: PublicKeyLike;
-}): DerivedGameAccounts {
+}): Promise<DerivedGameAccounts> {
   const programId = ensureAddress(params.programId);
   const tokenMint = ensureAddress(params.tokenMint);
   const winner = ensureAddress(params.winner);
   const oracleOperator = ensureAddress(params.oracleOperator);
   const tokenProgramId = ensureAddress(params.tokenProgramId);
 
+  if (params.randomHash.length !== 32) throw new Error("Game random hash must be 32 bytes");
+  const client = getContractClient(params.contractVersion);
+  const config = { programAddress: programId };
   const resolvedGamePda = params.gamePda
     ? ensureAddress(params.gamePda)
-    : derivePdaSync(programId, [GAME_SEED, params.randomHash]);
-  const oraclePda = derivePdaSync(programId, [ORACLE_SEED]);
-  const gameVaultPda = derivePdaSync(programId, [GAME_VAULT_SEED, addressBytes(tokenMint)]);
-  const gameTokenPda = derivePdaSync(programId, [GAME_TOKEN_SEED, addressBytes(tokenMint)]);
+    : (await client.findGamePda({ randomHash: params.randomHash }, config))[0];
+  const [[oraclePda], [gameVaultPda], [gameTokenPda]] = await Promise.all([
+    client.findOraclePda(config),
+    client.findGameVaultPda({ tokenMint }, config),
+    findGameTokenPda({ tokenMint }, config),
+  ]);
   const winnerTokenAccount = deriveAssociatedTokenAddress(tokenMint, winner, false, tokenProgramId);
   const gameVaultTokenAccount = deriveAssociatedTokenAddress(
     tokenMint,

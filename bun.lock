@@ -8,7 +8,7 @@
         "@solana-program/system": "0.14.1",
         "@solana-program/token": "0.16.1",
         "@solana/kit": "8.2.0",
-        "@timbagame/protocol": "0.7.0",
+        "@timbagame/protocol": "file:vendor/timbagame-protocol-0.8.0.tgz",
         "zod": "4.5.4",
       },
       "devDependencies": {
@@ -140,7 +140,7 @@
 
     "@solana/transactions": ["@solana/transactions@8.2.0", "", { "dependencies": { "@solana/addresses": "8.2.0", "@solana/codecs-core": "8.2.0", "@solana/codecs-data-structures": "8.2.0", "@solana/codecs-numbers": "8.2.0", "@solana/codecs-strings": "8.2.0", "@solana/errors": "8.2.0", "@solana/functional": "8.2.0", "@solana/instructions": "8.2.0", "@solana/keys": "8.2.0", "@solana/nominal-types": "8.2.0", "@solana/rpc-types": "8.2.0", "@solana/transaction-messages": "8.2.0" }, "peerDependencies": { "typescript": ">=5.4.0" }, "optionalPeers": ["typescript"] }, "sha512-WfbzFTf2BvpW14OIOin/9Mj29XE5GJVORAnziDK+GEiTPnruNzNkHBrd2kt/ACg12dh12kmutDj5WI3pzrN3Bw=="],
 
-    "@timbagame/protocol": ["@timbagame/protocol@0.7.0", "https://npm.pkg.github.com/download/@timbagame/protocol/0.7.0/3c5f9511037b4205ce681c3533fa1282241dd86e", { "dependencies": { "@solana/kit": "8.2.0", "zod": "4.5.4" } }, "sha512-DwYBgzbD44NN6v5z2Iv+8c6Kr0uEA6Rn0qv52LK3zUSWhvIMu/CvjnXSKzWzG14gMPjsI6yxyB1baSnX8c8cTQ=="],
+    "@timbagame/protocol": ["@timbagame/protocol@vendor/timbagame-protocol-0.8.0.tgz", { "dependencies": { "@solana/kit": "8.2.0", "zod": "4.5.4" } }, "sha512-IZIiHsSH0T+o01v4z6Emu2tm23UkEb7tW4yptysGPugwtvbxRMNNdGNYauXhNHs60tha4M/GlPLn3d2g2hKv8g=="],
 
     "@types/bun": ["@types/bun@1.4.0", "", { "dependencies": { "bun-types": "1.4.0" } }, "sha512-K+lZULY23vRgK/CfTjFIV+tyifaNdSMlPh9j+6mQ/cLfpOznLyAuzgV/JQysyECpkBQLVMSyvjlr2fBUSA9wFQ=="],
 

@@ -19,6 +19,7 @@ import {
   type Transaction,
 } from "@solana/kit";
 import {
+  findGameTokenPda,
   INITIALIZE_GAME_DISCRIMINATOR as INITIALIZE_GAME_DISCRIMINATOR_V020,
   JOIN_GAME_DISCRIMINATOR as JOIN_GAME_DISCRIMINATOR_V020,
   getInitializeGameInstructionDataDecoder as getInitializeDecoderV020,
@@ -31,8 +32,7 @@ import {
   getJoinGameInstructionDataDecoder as getJoinDecoderV030,
 } from "@timbagame/protocol/contracts/v0.3.0/kit";
 import type { ContractVersion } from "./contract-idl.ts";
-import { GAME_TOKEN_SEED, GAME_VAULT_SEED, ORACLE_SEED } from "./oracle-accounts.ts";
-import { addressBytes, derivePda } from "./solana-kit.ts";
+import { getContractClient } from "@timbagame/protocol/contracts/client";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
@@ -168,10 +168,12 @@ export async function signGameTransactionWithPolicy(
   const operatorAlreadySet = operator.address === options.operator.address;
   const operatorPlaceholder = operatorAlreadySet ? null : operator.address;
 
-  const [expectedOracle, expectedGameToken, expectedGameVault] = await Promise.all([
-    derivePda(options.programId, [ORACLE_SEED]),
-    derivePda(options.programId, [GAME_TOKEN_SEED, addressBytes(tokenMint.address)]),
-    derivePda(options.programId, [GAME_VAULT_SEED, addressBytes(tokenMint.address)]),
+  const client = getContractClient(options.contractVersion);
+  const pdaConfig = { programAddress: options.programId };
+  const [[expectedOracle], [expectedGameToken], [expectedGameVault]] = await Promise.all([
+    client.findOraclePda(pdaConfig),
+    findGameTokenPda({ tokenMint: tokenMint.address }, pdaConfig),
+    client.findGameVaultPda({ tokenMint: tokenMint.address }, pdaConfig),
   ]);
   assertMeta(oracle, {
     address: expectedOracle,

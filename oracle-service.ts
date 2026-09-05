@@ -422,7 +422,7 @@ export class OracleService {
     let gamePda = options.gameKey ? coerceAddress(options.gameKey) : null;
 
     if (!gamePda) {
-      const stored = this.completion.resolveStoredGame(options.gameAddress);
+      const stored = await this.completion.resolveStoredGame(options.gameAddress);
       gamePda = stored ? coerceAddress(stored.gamePda) : null;
     }
 
@@ -481,10 +481,10 @@ export class OracleService {
     this.db.close();
   }
 
-  public generateGameSecrets(options: GenerateGameSecretsOptions = {}): GameSecrets {
+  public async generateGameSecrets(options: GenerateGameSecretsOptions = {}): Promise<GameSecrets> {
     const secretKey = randomBytes(SECRET_KEY_LENGTH);
     const randomHash = createHash("sha256").update(secretKey).digest();
-    const gameAddress = this.completion.getGamePDA(randomHash);
+    const gameAddress = await this.completion.getGamePDA(randomHash);
 
     this.db.saveSecretKey(gameAddress, secretKey.toString("hex"), randomHash.toString("hex"));
     try {

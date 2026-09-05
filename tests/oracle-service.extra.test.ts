@@ -311,7 +311,8 @@ async function runExecuteGameCompletionScenario({
     (service as any).connection = originalConnection;
   }
 
-  const derived = deriveGameAccounts({
+  const derived = await deriveGameAccounts({
+    contractVersion: "0.2.0",
     programId,
     randomHash: randomHashBuffer,
     tokenMint,
@@ -1169,7 +1170,7 @@ describe("OracleService internals", () => {
     expect(res.success).toBe(false);
 
     // not ready
-    db.saveSecretKey("not-ready", "deadbeef", "bead");
+    db.saveSecretKey("not-ready", "deadbeef", "bead".repeat(16));
     // ensure programId exists for PDA derivation inside completeGame
     (service as any).program = createProgramStub({
       programId: Keypair.generate().publicKey,
@@ -1193,7 +1194,7 @@ describe("OracleService internals", () => {
     completion.evaluateGameReadiness = originalEvaluateReadiness;
 
     // no players
-    db.saveSecretKey("no-players", "deadbeef", "bead");
+    db.saveSecretKey("no-players", "deadbeef", "bead".repeat(16));
     // stub fetch to provide meta for winner calc
     (service as any).program = createProgramStub({
       programId: Keypair.generate().publicKey,

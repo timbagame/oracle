@@ -26,13 +26,8 @@ import {
   resolveNumericLike,
 } from "./solana-utils.ts";
 import type { PublicKeyLike } from "./solana-utils.ts";
-import { GAME_SEED } from "./oracle-accounts.ts";
-import {
-  derivePdaSync,
-  ensureKeyPairSigner,
-  sendRpcRequest,
-  type LatestBlockhash,
-} from "./solana-kit.ts";
+import { getContractClient } from "@timbagame/protocol/contracts/client";
+import { ensureKeyPairSigner, sendRpcRequest, type LatestBlockhash } from "./solana-kit.ts";
 import { logger } from "./logger.ts";
 import { GameCompletionTransactionBuilder } from "./game-completion-transaction-builder.ts";
 import { RegistrySyncManager } from "./registry-sync-manager.ts";
@@ -602,7 +597,7 @@ export class GameCompletionManager {
       return context;
     }
 
-    const resolved = this.resolveStoredGame(gameAddress);
+    const resolved = await this.resolveStoredGame(gameAddress);
 
     if (!resolved && requireOnChain) {
       this.logMissingSecret(gameAddress, requireOnChain);
@@ -737,23 +732,28 @@ export class GameCompletionManager {
     logger.warning(`${this.options.noSecretKeyMessage} for game ${gameAddress}`);
   }
 
-  public resolveStoredGame(gameAddress: string): GameOnChainContext | null {
+  public async resolveStoredGame(gameAddress: string): Promise<GameOnChainContext | null> {
     const secretData = this.options.db.getSecretKey(gameAddress);
     if (!secretData) {
       return null;
     }
 
     const randomHashBuffer = Buffer.from(secretData.randomHash, "hex");
-    const gamePda = this.getGamePDA(randomHashBuffer);
+    const gamePda = await this.getGamePDA(randomHashBuffer);
 
     return { secretData, randomHashBuffer, gamePda };
   }
 
-  public getGamePDA(randomHash: Buffer): Address {
-    return derivePdaSync(ensureAddress(this.options.getProgram().programId), [
-      GAME_SEED,
-      randomHash,
-    ]);
+  public async getGamePDA(randomHash: Buffer): Promise<Address> {
+    if (randomHash.length !== 32) throw new Error("Game random hash must be 32 bytes");
+    return (
+      await getContractClient(this.options.contractVersion).findGamePda(
+        { randomHash },
+        {
+          programAddress: ensureAddress(this.options.getProgram().programId),
+        },
+      )
+    )[0];
   }
 
   // Delegate resetRegistryPrefetchSchedule to RegistrySyncManager
