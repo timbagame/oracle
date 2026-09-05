@@ -86,7 +86,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: timbagame/operations
-          ref: test/validator-integration-and-toolchains
+          ref: 8e355a25d27081eb45a4d04444f413913e0b32e1
           path: workspace/operations
           token: ${{ secrets.INTEGRATION_READ_TOKEN }}
           persist-credentials: false
