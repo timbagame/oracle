@@ -7,7 +7,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const service = OracleService.getInstance();
+  const service = await OracleService.getInstance();
   try {
     const result = await service.completionManager.attemptGameCompletion({
       gameAddress,

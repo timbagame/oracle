@@ -22,7 +22,7 @@ const GAME_VAULT_SEED = Buffer.from("game_vault");
 
 type OracleServiceClass = typeof import("../oracle-service.ts").OracleService;
 type OracleDatabaseClass = typeof import("../database.ts").OracleDatabase;
-type OracleServiceInstance = ReturnType<OracleServiceClass["getInstance"]>;
+type OracleServiceInstance = Awaited<ReturnType<OracleServiceClass["getInstance"]>>;
 
 function createGameAccountStub(overrides: Partial<TimbaGameAccount> = {}): TimbaGameAccount {
   return {
@@ -68,13 +68,13 @@ async function buildInitializeTransaction(
     [GAME_VAULT_SEED, tokenMint.toBuffer()],
     program.programId,
   )[0];
-  const gameVaultTokenAccount = deriveAssociatedTokenAddress(
+  const gameVaultTokenAccount = await deriveAssociatedTokenAddress(
     tokenMint,
     gameVault,
     true,
     TOKEN_PROGRAM_ID,
   );
-  const creatorTokenAccount = deriveAssociatedTokenAddress(tokenMint, creator.publicKey);
+  const creatorTokenAccount = await deriveAssociatedTokenAddress(tokenMint, creator.publicKey);
   const instruction = new TransactionInstruction({
     programId: program.programId,
     data: new anchor.BorshInstructionCoder(program.idl).encode("initializeGame", {
@@ -137,7 +137,7 @@ let cleanup: () => void;
 beforeAll(async () => {
   const env = await setupOracleServiceEnv("oracle-service-test");
   ({ OracleService, OracleDatabase } = env);
-  testService = OracleService.createWith(OracleDatabase.getInstance(), {
+  testService = await OracleService.createWith(OracleDatabase.getInstance(), {
     tokenPriceResolver: {
       getTokenUsdPrices: async (mints) => new Map(mints.map((mint) => [mint, 1])),
     },
@@ -207,7 +207,7 @@ describe("OracleService", () => {
   it("does not persist an enabled policy when its live price is unavailable", async () => {
     const db = OracleDatabase.getInstance();
     const mint = Keypair.generate().publicKey.toBase58();
-    const service = OracleService.createWith(db, {
+    const service = await OracleService.createWith(db, {
       tokenPriceResolver: {
         getTokenUsdPrices: async () => {
           throw new Error("price unavailable");
@@ -227,7 +227,7 @@ describe("OracleService", () => {
     db.setTokenPolicy(availableMint, true, "3");
     db.setTokenPolicy(unavailableMint, true, "3");
     db.setTokenPolicy(disabledMint, false, "3");
-    const service = OracleService.createWith(db, {
+    const service = await OracleService.createWith(db, {
       tokenPriceResolver: {
         getTokenUsdPrices: async () => new Map([[availableMint, 1]]),
       },
@@ -310,13 +310,13 @@ describe("OracleService", () => {
       [GAME_VAULT_SEED, tokenMint.toBuffer()],
       program.programId,
     )[0];
-    const gameVaultTokenAccount = deriveAssociatedTokenAddress(
+    const gameVaultTokenAccount = await deriveAssociatedTokenAddress(
       tokenMint,
       gameVault,
       true,
       TOKEN_PROGRAM_ID,
     );
-    const creatorTokenAccount = deriveAssociatedTokenAddress(tokenMint, creator.publicKey);
+    const creatorTokenAccount = await deriveAssociatedTokenAddress(tokenMint, creator.publicKey);
     OracleDatabase.getInstance().setTokenPolicy(tokenMint.toBase58(), true, "0");
     const data = new anchor.BorshInstructionCoder(program.idl).encode("initializeGame", {
       config: {
@@ -380,13 +380,13 @@ describe("OracleService", () => {
       [GAME_VAULT_SEED, tokenMint.toBuffer()],
       program.programId,
     )[0];
-    const gameVaultTokenAccount = deriveAssociatedTokenAddress(
+    const gameVaultTokenAccount = await deriveAssociatedTokenAddress(
       tokenMint,
       gameVault,
       true,
       TOKEN_PROGRAM_ID,
     );
-    const creatorTokenAccount = deriveAssociatedTokenAddress(tokenMint, creator.publicKey);
+    const creatorTokenAccount = await deriveAssociatedTokenAddress(tokenMint, creator.publicKey);
     OracleDatabase.getInstance().setTokenPolicy(tokenMint.toBase58(), true, "0");
     const initialize = new TransactionInstruction({
       programId: program.programId,
@@ -474,7 +474,7 @@ describe("OracleService", () => {
   });
 
   it("generates secrets and stores them", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     service.cleanupOldRecords(-1);
     const { randomHash, gameAddress } = await service.generateGameSecrets();
     expect(typeof randomHash).toBe("string");
@@ -486,7 +486,7 @@ describe("OracleService", () => {
   });
 
   it("persists provided game type when tracking new games", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     service.cleanupOldRecords(-1);
     const { gameAddress } = await service.generateGameSecrets({ gameType: "coinflip" });
 
@@ -495,7 +495,7 @@ describe("OracleService", () => {
   });
 
   it("removes stored secrets when game tracking fails", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     service.cleanupOldRecords(-1);
 
@@ -515,7 +515,7 @@ describe("OracleService", () => {
   });
 
   it("cleans up records and reports stats", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     service.cleanupOldRecords(-1);
     const { gameAddress } = await service.generateGameSecrets();
     const db = OracleDatabase.getInstance();
@@ -531,7 +531,7 @@ describe("OracleService", () => {
   });
 
   it("resolves stored games from secrets", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     service.cleanupOldRecords(-1);
     const { gameAddress } = await service.generateGameSecrets();
 
@@ -544,7 +544,7 @@ describe("OracleService", () => {
   });
 
   it("identifies account not found errors", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const check = service.completionManager.isAccountNotFoundError.bind(service.completionManager);
     expect(check({ message: "Account does not exist" })).toBe(true);
     expect(check({ message: "Account not found at address: test" })).toBe(true);
@@ -552,7 +552,7 @@ describe("OracleService", () => {
   });
 
   it("computes deterministic winner index", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const secret = Buffer.alloc(32, 1);
     const winner = service.completionManager.calculateWinnerIndex(secret, 123456, 100);
     expect(winner).toBe(2);
@@ -564,7 +564,7 @@ describe("OracleService", () => {
   });
 
   it("updates scan statistics correctly", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const stats = { completed: 0, errors: 0, notReady: 0 };
     service.scanRunner.updateScanStats(stats, { success: true });
     service.scanRunner.updateScanStats(stats, { success: false, notReady: true });
@@ -573,7 +573,7 @@ describe("OracleService", () => {
   });
 
   it("returns zero stats when no games are pending", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     resetPendingGames(db, { service });
 
@@ -582,7 +582,7 @@ describe("OracleService", () => {
   });
 
   it("scans pending games and records outcomes", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     resetPendingGames(db, { service });
 
@@ -650,7 +650,7 @@ describe("OracleService", () => {
   });
 
   it("refreshes last_checked when a game remains not ready", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     resetPendingGames(db, { service });
 
@@ -708,7 +708,7 @@ describe("OracleService", () => {
   });
 
   it("backs off when completion attempt returns null", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     resetPendingGames(db, { service });
 
@@ -763,7 +763,7 @@ describe("OracleService", () => {
   });
 
   it("skips games that exceed max completion attempts", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     resetPendingGames(db, { service });
 
@@ -815,7 +815,6 @@ describe("OracleService", () => {
 
   // loadOperatorKeypair rejects world-readable file
   it("rejects operator keypair file with insecure permissions", async () => {
-    const service = OracleService.getInstance();
     // Create a temporary keypair file
     const tempFile = `/tmp/insecure-keypair-${Date.now()}.json`;
     const fs = require("fs");
@@ -829,7 +828,7 @@ describe("OracleService", () => {
       // Note: readOperatorKeypairFromFile returns { keypair, error }.
       // It catches errors. So we check if it returns an error about permissions.
 
-      const result = (service as any).readOperatorKeypairFromFile(tempFile);
+      const result = await (OracleService as any).readOperatorKeypairFromFile(tempFile);
 
       // We expect an error because of insecure permissions
       expect(result.error).toBeDefined();
@@ -845,7 +844,7 @@ describe("OracleService", () => {
 describe("OracleService shutdown", () => {
   it("close() stops event listeners, scanner, and closes database", async () => {
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
 
     // Track initial state
     const dbCloseSpy = spyOn(db, "close");
@@ -861,7 +860,7 @@ describe("OracleService shutdown", () => {
 
   it("close() closes database even after stopping event listeners", async () => {
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
 
     const closeOrder: string[] = [];
     const dbCloseSpy = spyOn(db, "close").mockImplementation(() => {
@@ -886,7 +885,7 @@ describe("OracleService shutdown", () => {
 
   it("close() ensures database flush after game secrets generation", async () => {
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
     service.cleanupOldRecords(-1);
 
     // Generate a game (writes to database)

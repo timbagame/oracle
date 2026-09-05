@@ -9,7 +9,7 @@ import type { TimbaGameAccount } from "./types/timba.ts";
 
 export interface GameCompletionTransactionBuilderOptions {
   programId: Address;
-  operator: KeyPairSigner;
+  operator: KeyPairSigner | Promise<KeyPairSigner>;
   contractVersion: ContractVersion;
 }
 
@@ -23,6 +23,7 @@ export class GameCompletionTransactionBuilder {
     secretKeyBuffer: ReadonlyUint8Array;
     winnerIndex: number;
   }): Promise<Instruction> {
+    const operator = await this.options.operator;
     const { gameAccount, winnerAddress, randomHashBuffer, secretKeyBuffer, winnerIndex } = args;
     const creator = ensureAddress(gameAccount.creator);
     const tokenMint = ensureAddress(gameAccount.tokenMint);
@@ -32,7 +33,7 @@ export class GameCompletionTransactionBuilder {
       randomHash: randomHashBuffer,
       tokenMint,
       winner: winnerAddress,
-      oracleOperator: this.options.operator.address,
+      oracleOperator: operator.address,
       tokenProgramId: TOKEN_PROGRAM_ID,
     });
     const common = {
@@ -42,7 +43,7 @@ export class GameCompletionTransactionBuilder {
       tokenProgram: TOKEN_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       oracle: accounts.oraclePda,
-      oracleOperator: this.options.operator,
+      oracleOperator: operator,
       winner: winnerAddress,
       creator,
       winnerTokenAccount: accounts.winnerTokenAccount,

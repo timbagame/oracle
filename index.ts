@@ -854,7 +854,7 @@ if (!IS_TEST_ENV) {
     throw new Error("ORACLE_API_TOKEN is required to start the oracle API");
   }
 
-  const realOracle = OracleService.getInstance();
+  const realOracle = await OracleService.getInstance();
   indexerDatabase = new IndexerDatabase(config.indexerDatabaseFile);
   const publicIndexer = new PublicIndexer(
     indexerDatabase,

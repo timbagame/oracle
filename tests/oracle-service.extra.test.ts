@@ -154,7 +154,7 @@ async function runExecuteGameCompletionScenario({
   }) => Promise<anchor.web3.Transaction | anchor.web3.VersionedTransaction>;
   connectionOverrides?: ConnectionOverrides;
 } = {}) {
-  const service = OracleService.createWith(OracleDatabase.getInstance());
+  const service = await OracleService.createWith(OracleDatabase.getInstance());
   const originalProgram = (service as any).program;
   const originalConnection = (service as any).connection;
   const operatorKeypair = (service as any).operatorKeypair;
@@ -360,7 +360,7 @@ async function runExecuteGameCompletionScenario({
 }
 
 describe("OracleService internals", () => {
-  it("wires event batching config into the event processor", () => {
+  it("wires event batching config into the event processor", async () => {
     const db = OracleDatabase.getInstance();
 
     process.env["ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS"] = "12";
@@ -368,7 +368,7 @@ describe("OracleService internals", () => {
     process.env["ORACLE_AUTOCOMPLETE_DEBOUNCE_MS"] = "34";
     resetConfigForTesting();
 
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
 
     try {
       expect((service.events as any).playerEventFlushDebounceMs).toBe(12);
@@ -383,7 +383,7 @@ describe("OracleService internals", () => {
     }
   });
 
-  it("falls back to an ephemeral operator keypair when the keypair file cannot be read", () => {
+  it("falls back to an ephemeral operator keypair when the keypair file cannot be read", async () => {
     // Create a temporary keypair file with insecure permissions
     const tempDir = fs.mkdtempSync(path.join(tmpdir(), "oracle-fallback-"));
     const keypairPath = path.join(tempDir, "insecure-keypair.json");
@@ -400,7 +400,7 @@ describe("OracleService internals", () => {
       process.env["ORACLE_KEYPAIR_PATH"] = keypairPath;
       resetConfigForTesting();
 
-      service = OracleService.createWith(OracleDatabase.getInstance());
+      service = await OracleService.createWith(OracleDatabase.getInstance());
       expect(service).toBeDefined();
 
       // It should have fallen back to ephemeral keypair
@@ -453,7 +453,7 @@ describe("OracleService internals", () => {
 
   it("allows only one completion attempt per game concurrently", async () => {
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
 
     resetPendingGames(db, { service });
 
@@ -531,7 +531,7 @@ describe("OracleService internals", () => {
 
   it("caches blockchain time within a scan sweep", async () => {
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
 
     resetPendingGames(db, { service });
 
@@ -599,7 +599,7 @@ describe("OracleService internals", () => {
 
   it("skips blockchain time fetch when readiness is already available", async () => {
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
 
     resetPendingGames(db, { service });
 
@@ -663,7 +663,7 @@ describe("OracleService internals", () => {
     process.env["ORACLE_SCAN_THROTTLE_MS"] = "25";
     resetConfigForTesting();
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
 
     resetPendingGames(db, { service });
 
@@ -773,7 +773,7 @@ describe("OracleService internals", () => {
   });
 
   it("removes previously registered listeners when setup fails", async () => {
-    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
     const originalProgram = (service as any).program;
     const removed: number[] = [];
     let callIndex = 0;
@@ -801,7 +801,7 @@ describe("OracleService internals", () => {
   });
 
   it("isGameReadyForCompletion returns false and marks completed if account missing", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     const addr = Keypair.generate().publicKey.toBase58();
     db.trackGame(addr);
@@ -822,7 +822,7 @@ describe("OracleService internals", () => {
   });
 
   it("isGameReadyForCompletion reports readiness for full and expired lobbies", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const originalProgram = (service as any).program;
     const originalConnection = (service as any).connection;
 
@@ -870,7 +870,7 @@ describe("OracleService internals", () => {
 
   it("runScanLoop respects abort signals, cleanup retention, and callbacks", async () => {
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
 
     const scanner = (service as any).scanner;
     const originalScan = scanner.scanAndCompleteActiveGames;
@@ -937,7 +937,7 @@ describe("OracleService internals", () => {
   });
 
   it("runScanLoop continues when only errors occur by default", async () => {
-    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
 
     const scanner = (service as any).scanner;
     const originalScan = scanner.scanAndCompleteActiveGames;
@@ -969,7 +969,7 @@ describe("OracleService internals", () => {
   });
 
   it("runScanLoop waits between cycles when pending-only mode sees only errors", async () => {
-    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
 
     const scanner = (service as any).scanner;
     const originalScan = scanner.scanAndCompleteActiveGames;
@@ -1010,7 +1010,7 @@ describe("OracleService internals", () => {
 
   it("resolveContextAndReadiness consumes cached readiness when on-chain lookups are optional", async () => {
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
 
     resetPendingGames(db, { service });
 
@@ -1092,7 +1092,7 @@ describe("OracleService internals", () => {
 
   it("fails game completion when unbiased winner selection is impossible", async () => {
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
     const completion = service.completionManager;
 
     const createHashSpy = spyOn(crypto, "createHash").mockImplementation(() => {
@@ -1100,7 +1100,7 @@ describe("OracleService internals", () => {
         update() {
           return {
             digest() {
-              return Buffer.alloc(64, 0xff);
+              return Buffer.alloc(32, 0xff);
             },
           };
         },
@@ -1161,7 +1161,7 @@ describe("OracleService internals", () => {
   });
 
   it("completeGame error cases: missing secret, not ready, no players", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     service.cleanupOldRecords(-1);
 
@@ -1213,7 +1213,7 @@ describe("OracleService internals", () => {
   });
 
   it("completeGame success path marks DB and returns tx hash", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     const gameAddr = "ok-game";
     const players = [
@@ -1272,7 +1272,7 @@ describe("OracleService internals", () => {
   });
 
   it("completeGame aborts when ticket registry is out of sync", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     const gameAddr = "mismatch-game";
     seedTrackedGame(db, {
@@ -1318,8 +1318,8 @@ describe("OracleService internals", () => {
     }
   });
 
-  it("requeueGame resets attempts for eligible games", () => {
-    const service = OracleService.getInstance();
+  it("requeueGame resets attempts for eligible games", async () => {
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     resetPendingGames(db, { service });
 
@@ -1350,8 +1350,8 @@ describe("OracleService internals", () => {
     expect(snapshot?.completion_attempts).toBe(0);
   });
 
-  it("requeueGame reopens finalized games and reactivates secrets", () => {
-    const service = OracleService.getInstance();
+  it("requeueGame reopens finalized games and reactivates secrets", async () => {
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     resetPendingGames(db, { service });
 
@@ -1391,8 +1391,8 @@ describe("OracleService internals", () => {
     expect(snapshot?.completed_at).toBeNull();
   });
 
-  it("requeueGame reverts secret reactivation when reset fails", () => {
-    const service = OracleService.getInstance();
+  it("requeueGame reverts secret reactivation when reset fails", async () => {
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     resetPendingGames(db, { service });
 
@@ -1418,8 +1418,8 @@ describe("OracleService internals", () => {
     }
   });
 
-  it("requeueGame succeeds for fresh pending games with zero attempts", () => {
-    const service = OracleService.getInstance();
+  it("requeueGame succeeds for fresh pending games with zero attempts", async () => {
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     resetPendingGames(db, { service });
 
@@ -1469,8 +1469,8 @@ describe("OracleService internals", () => {
     }
   });
 
-  it("requeueGame rejects when secret is missing", () => {
-    const service = OracleService.getInstance();
+  it("requeueGame rejects when secret is missing", async () => {
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
     resetPendingGames(db, { service });
 
@@ -1481,9 +1481,9 @@ describe("OracleService internals", () => {
     expect(result).toEqual({ success: false, reason: "missing-secret" });
   });
 
-  it("requeueGame succeeds on consecutive calls even without new timestamps", () => {
+  it("requeueGame succeeds on consecutive calls even without new timestamps", async () => {
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
 
     resetPendingGames(db, { service });
 
@@ -1514,7 +1514,7 @@ describe("OracleService internals", () => {
   });
 
   it("scanAndCompleteActiveGames marks games lacking secrets as desynced", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
 
     resetPendingGames(db, { service });
@@ -1541,7 +1541,7 @@ describe("OracleService internals", () => {
   });
 
   it("getBlockchainTime uses network and falls back to wall clock", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     // happy path
     (service as any).connection = {
       getSlot: async () => 1,
@@ -1561,7 +1561,7 @@ describe("OracleService internals", () => {
   });
 
   it("tryAutoComplete triggers completion and logs failures", async () => {
-    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
     const completion = service.completionManager;
     const originalReady = completion.isGameReadyForCompletion;
     const originalComplete = (service as any).completeGame;
@@ -1608,7 +1608,7 @@ describe("OracleService internals", () => {
   });
 
   it("tryAutoComplete skips completion when readiness checks fail", async () => {
-    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
     const completion = service.completionManager;
     const originalComplete = (service as any).completeGame;
 
@@ -1655,7 +1655,7 @@ describe("OracleService internals", () => {
   });
 
   it("completeGame increments attempts for validation failures", async () => {
-    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();
     const gameAddr = "validation-failure-game";
     seedTrackedGame(db, {
@@ -1709,7 +1709,7 @@ describe("OracleService internals", () => {
   });
 
   it("completeGame increments attempts when execution fails", async () => {
-    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();
     const gameAddr = "failing-game";
     seedTrackedGame(db, {
@@ -1761,7 +1761,7 @@ describe("OracleService internals", () => {
   });
 
   it("completeGame keeps games pending when confirmation fails after broadcast", async () => {
-    const service = OracleService.createWith(OracleDatabase.getInstance());
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();
     const gameAddr = "confirm-failure-game";
     resetPendingGames(db, { service });
@@ -1851,7 +1851,7 @@ describe("OracleService internals", () => {
   });
 
   it("scanAndCompleteActiveGames counts unexpected completion errors", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
 
     resetPendingGames(db, { service });
@@ -1893,7 +1893,7 @@ describe("OracleService internals", () => {
   it("records completion outcomes with metrics instrumentation", async () => {
     const metrics = new OracleMetricsRecorder();
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db, { metrics });
+    const service = await OracleService.createWith(db, { metrics });
 
     const baseAccount: TimbaGameAccount = {
       creator: Keypair.generate().publicKey,
@@ -1953,7 +1953,7 @@ describe("OracleService internals", () => {
 
   it("completeGame clears readiness cache after successful completion", async () => {
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
 
     const gameAddress = Keypair.generate().publicKey.toBase58();
     const randomHash = "ab".repeat(32);
@@ -2015,7 +2015,7 @@ describe("OracleService internals", () => {
 
   it("completeGame clears readiness cache when a fatal error occurs", async () => {
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
 
     const gameAddress = Keypair.generate().publicKey.toBase58();
     const readiness = {
@@ -2074,7 +2074,7 @@ describe("OracleService internals", () => {
 
   it("completeGame retains readiness cache on transient errors", async () => {
     const db = OracleDatabase.getInstance();
-    const service = OracleService.createWith(db);
+    const service = await OracleService.createWith(db);
 
     const gameAddress = Keypair.generate().publicKey.toBase58();
     const randomHash = "12".repeat(32);
@@ -2142,7 +2142,7 @@ describe("OracleService internals", () => {
     const metrics = new OracleMetricsRecorder();
     const db = OracleDatabase.getInstance();
     resetPendingGames(db);
-    const service = OracleService.createWith(db, { metrics });
+    const service = await OracleService.createWith(db, { metrics });
 
     await service.scanRunner.scanAndCompleteActiveGames();
     const initialCycles = metrics.getScanCycles();

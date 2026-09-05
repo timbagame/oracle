@@ -823,7 +823,7 @@ describe("OracleService event handling", () => {
     const env = await setupOracleServiceEnv("oracle-service-events-finalized");
     try {
       const db = env.OracleDatabase.getInstance();
-      const service = env.OracleService.getInstance();
+      const service = await env.OracleService.getInstance();
 
       const gameKey = Keypair.generate().publicKey;
       const gameAddress = gameKey.toBase58();

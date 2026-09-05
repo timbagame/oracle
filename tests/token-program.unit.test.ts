@@ -11,32 +11,34 @@ const WRAPPED_SOL_MINT = new PublicKey("So11111111111111111111111111111111111111
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 
 describe("token program compatibility", () => {
-  it("derives the canonical associated token address for an on-curve owner", () => {
+  it("derives the canonical associated token address for an on-curve owner", async () => {
     const owner = new PublicKey("11111111111111111111111111111111");
 
-    expect(String(deriveAssociatedTokenAddress(WRAPPED_SOL_MINT, owner))).toBe(
+    expect(String(await deriveAssociatedTokenAddress(WRAPPED_SOL_MINT, owner))).toBe(
       "aqxoAhCwpy3oB1BpNw9hL1HdLYLgPpbPjzxDrrQj3Fs",
     );
   });
 
-  it("supports PDA owners only when explicitly allowed", () => {
+  it("supports PDA owners only when explicitly allowed", async () => {
     const owner = PublicKey.findProgramAddressSync(
       [Buffer.from("owner")],
       new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111"),
     )[0];
 
-    expect(() => deriveAssociatedTokenAddress(WRAPPED_SOL_MINT, owner)).toThrow(
+    await expect(deriveAssociatedTokenAddress(WRAPPED_SOL_MINT, owner)).rejects.toThrow(
       TokenOwnerOffCurveError,
     );
     expect(
-      String(deriveAssociatedTokenAddress(WRAPPED_SOL_MINT, owner, true, TOKEN_PROGRAM_ID)),
+      String(await deriveAssociatedTokenAddress(WRAPPED_SOL_MINT, owner, true, TOKEN_PROGRAM_ID)),
     ).toBe("5myBF2P55TgTd7QW7hYYGZfcqwXDY4rgtLhRF4fJMytm");
     expect(
-      String(deriveAssociatedTokenAddress(WRAPPED_SOL_MINT, owner, true, TOKEN_2022_PROGRAM_ID)),
+      String(
+        await deriveAssociatedTokenAddress(WRAPPED_SOL_MINT, owner, true, TOKEN_2022_PROGRAM_ID),
+      ),
     ).toBe("3vdGrVDTV7fMTkQhnXgo3ZQPKfp1eqBeWvPAFdXjZGQi");
   });
 
-  it("matches the canonical PDA derivation for both token programs", () => {
+  it("matches the canonical PDA derivation for both token programs", async () => {
     const owner = new PublicKey("11111111111111111111111111111111");
 
     for (const tokenProgramId of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
@@ -50,16 +52,16 @@ describe("token program compatibility", () => {
       )[0];
 
       expect(
-        deriveAssociatedTokenAddress(WRAPPED_SOL_MINT, owner, false, tokenProgramId) ===
+        (await deriveAssociatedTokenAddress(WRAPPED_SOL_MINT, owner, false, tokenProgramId)) ===
           expected.address,
       ).toBe(true);
     }
   });
 
-  it("does not silently substitute the legacy program for Token-2022", () => {
+  it("does not silently substitute the legacy program for Token-2022", async () => {
     const owner = new PublicKey("11111111111111111111111111111111");
-    const legacy = deriveAssociatedTokenAddress(WRAPPED_SOL_MINT, owner);
-    const token2022 = deriveAssociatedTokenAddress(
+    const legacy = await deriveAssociatedTokenAddress(WRAPPED_SOL_MINT, owner);
+    const token2022 = await deriveAssociatedTokenAddress(
       WRAPPED_SOL_MINT,
       owner,
       false,

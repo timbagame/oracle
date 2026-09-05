@@ -14,7 +14,7 @@ function usage(): never {
 const [, , command, ...args] = Bun.argv;
 if (!command) usage();
 
-const oracle = OracleService.getInstance();
+const oracle = await OracleService.getInstance();
 
 try {
   if (command === "requeue") {

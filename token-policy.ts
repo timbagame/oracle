@@ -7,17 +7,11 @@ const BASIS_POINTS = 10_000n;
 const MINIMUM_GAME_USD_NUMERATOR = 1n;
 const MINIMUM_GAME_USD_DENOMINATOR = 10n;
 
-export type CreationPolicyRejectionCode =
-  "unsupported_mint" | "token_disabled" | "amount_below_minimum" | "policy_unavailable";
-
-export interface TokenPolicy {
-  mint: string;
-  enabled: boolean;
-  minimumAmountRaw: string;
-  acceptedMinimumAmountRaw: string;
-  revision: number;
-  effectiveAt: string;
-}
+import type { TokenPolicyInput as TokenPolicy } from "@timbagame/protocol/oracle";
+export type {
+  TokenPolicyInput as TokenPolicy,
+  CreationPolicyRejectionCode,
+} from "@timbagame/protocol/oracle";
 
 export interface StoredTokenPolicy {
   mint: string;

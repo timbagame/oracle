@@ -1,3 +1,4 @@
+import { selectWinnerFromEntropy } from "@timbagame/protocol/randomness";
 import { createHash } from "crypto";
 import {
   address,
@@ -249,17 +250,7 @@ export function generateUnbiasedRandom(seed: Buffer, max: bigint): bigint {
     throw new Error("Unable to generate unbiased random number - game must be cancelled");
   }
 
-  const maxU64 = 0xffff_ffff_ffff_ffffn;
-  const maxValid = maxU64 - (maxU64 % max);
-
-  const entropyHash = createHash("sha256").update(seed).digest();
-
-  for (let startPos = 0; startPos <= entropyHash.length - 8; startPos++) {
-    const randomU64 = entropyHash.readBigUInt64LE(startPos);
-    if (randomU64 < maxValid) {
-      return randomU64 % max;
-    }
-  }
-
-  throw new Error("Unable to generate unbiased random number - game must be cancelled");
+  return BigInt(
+    selectWinnerFromEntropy(createHash("sha256").update(seed).digest(), max).winnerIndex,
+  );
 }

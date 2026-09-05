@@ -35,7 +35,7 @@ afterAll(() => cleanup());
 
 describe("v0.2.0 compatibility", () => {
   it("signs legacy initialize and creator-join layouts without the v0.3 Oracle policy", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const program = (service as any).program as anchor.Program;
     const operatorKeypair = (service as any).operatorKeypair as Keypair;
     const programId = new PublicKey(String(program.programId));
@@ -57,13 +57,13 @@ describe("v0.2.0 compatibility", () => {
       [GAME_VAULT_SEED, tokenMint.toBuffer()],
       programId,
     )[0];
-    const gameVaultTokenAccount = deriveAssociatedTokenAddress(
+    const gameVaultTokenAccount = await deriveAssociatedTokenAddress(
       tokenMint,
       gameVault,
       true,
       TOKEN_PROGRAM_ID,
     );
-    const creatorTokenAccount = deriveAssociatedTokenAddress(tokenMint, creator.publicKey);
+    const creatorTokenAccount = await deriveAssociatedTokenAddress(tokenMint, creator.publicKey);
     const instruction = new TransactionInstruction({
       programId,
       data: new anchor.BorshInstructionCoder(program.idl).encode("initializeGame", {
@@ -125,7 +125,7 @@ describe("v0.2.0 compatibility", () => {
   });
 
   it("builds legacy completion accounts with GameToken and no operator token account", async () => {
-    const service = OracleService.getInstance();
+    const service = await OracleService.getInstance();
     const program = (service as any).program as anchor.Program;
     const operatorKeypair = (service as any).operatorKeypair as Keypair;
     const programId = new PublicKey(String(program.programId));
@@ -153,10 +153,7 @@ describe("v0.2.0 compatibility", () => {
     )[0];
     expect(instruction.accounts).toHaveLength(12);
     expect(instruction.accounts![2]!.address).toBe(expectedGameToken.address);
-    expect(
-      instruction.accounts!.some(
-        ({ address }) => address === deriveAssociatedTokenAddress(tokenMint, operatorPublicKey),
-      ),
-    ).toBe(false);
+    const operatorAta = await deriveAssociatedTokenAddress(tokenMint, operatorPublicKey);
+    expect(instruction.accounts!.some(({ address }) => address === operatorAta)).toBe(false);
   });
 });

@@ -4,7 +4,7 @@ async function runManualShutdown() {
   console.log("🛑 Timba Oracle Manual Shutdown");
   console.log("================================");
 
-  const oracle = OracleService.getInstance();
+  const oracle = await OracleService.getInstance();
 
   // Ensure event listeners are stopped to avoid processing between cycles
   await oracle.stopEventListening();

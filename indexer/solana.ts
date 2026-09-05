@@ -1,24 +1,11 @@
 import { address, signature, type Address } from "@solana/kit";
-import { createHash } from "node:crypto";
-import { addressFromBytes, base64ToBytes, sendRpcRequest, type OracleRpc } from "../solana-kit.ts";
-import type {
-  GameClosedEvent,
-  GameCompletedEvent,
-  GameInitializedEvent,
-  IndexedEvents,
-  IndexerCursor,
-  PlayerMembershipEvent,
-} from "./types.ts";
+import {
+  decodeProgramEvent,
+  getTrustedProgramData as trustedData,
+} from "@timbagame/protocol/contracts/events";
+import { base64ToBytes, sendRpcRequest, type OracleRpc } from "../solana-kit.ts";
+import type { IndexedEvents, IndexerCursor } from "./types.ts";
 
-const GAME_INITIALIZED = Buffer.from([82, 221, 11, 2, 244, 52, 240, 250]);
-const GAME_COMPLETED = Buffer.from([103, 26, 106, 108, 240, 191, 179, 120]);
-const GAME_CLOSED = Buffer.from([178, 203, 179, 224, 43, 18, 209, 4]);
-const PLAYER_JOINED = Buffer.from([39, 144, 49, 106, 108, 210, 183, 38]);
-const PLAYER_UNJOINED = Buffer.from([191, 34, 140, 22, 253, 20, 237, 73]);
-const OPERATOR_GAME_CLOSED = createHash("sha256")
-  .update("event:OperatorGameClosed")
-  .digest()
-  .subarray(0, 8);
 const GAME_ACCOUNT_DISCRIMINATOR = Buffer.from([27, 90, 166, 125, 74, 100, 121, 18]);
 
 const EMPTY_EVENTS = (): IndexedEvents => ({
@@ -28,108 +15,8 @@ const EMPTY_EVENTS = (): IndexedEvents => ({
   membership: [],
 });
 
-function publicKey(data: Buffer, offset: number): string {
-  return addressFromBytes(data.subarray(offset, offset + 32));
-}
-
-function safeU64(data: Buffer, offset: number, field: string): number {
-  const value = data.readBigUInt64LE(offset);
-  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error(`${field} exceeds the safe integer range`);
-  }
-  return Number(value);
-}
-
-function parseInitialized(data: Buffer): Omit<GameInitializedEvent, keyof IndexerCursor> {
-  if (data.length !== 146) throw new Error("Invalid GameInitialized event length");
-  const gameType = data.readUInt8(72);
-  const isPrivate = data.readUInt8(129);
-  if (gameType > 1) throw new Error("Invalid game type");
-  if (isPrivate > 1) throw new Error("Invalid private-game flag");
-  return {
-    gameKey: publicKey(data, 8),
-    creator: publicKey(data, 40),
-    gameType: gameType === 0 ? "coinflip" : "giveaway",
-    ticketAmount: safeU64(data, 73, "ticketAmount"),
-    totalAmount: safeU64(data, 81, "totalAmount"),
-    maxTickets: data.readUInt32LE(89),
-    minTickets: data.readUInt32LE(93),
-    tokenMint: publicKey(data, 97),
-    isPrivate: isPrivate === 1,
-    createdAt: safeU64(data, 130, "createdAt"),
-    timeout: safeU64(data, 138, "timeout"),
-  };
-}
-
-function parseCompleted(data: Buffer): Omit<GameCompletedEvent, keyof IndexerCursor> {
-  if (data.length !== 100) throw new Error("Invalid GameCompleted event length");
-  return {
-    gameKey: publicKey(data, 8),
-    winner: publicKey(data, 40),
-    ticketsCount: data.readUInt32LE(72),
-    winnerAmount: safeU64(data, 76, "winnerAmount"),
-    feeAmount: safeU64(data, 84, "feeAmount"),
-    timestamp: safeU64(data, 92, "timestamp"),
-  };
-}
-
-function parseClosed(data: Buffer, operator: boolean): Omit<GameClosedEvent, keyof IndexerCursor> {
-  const expectedLength = operator ? 128 : 48;
-  if (data.length !== expectedLength) throw new Error("Invalid game closure event length");
-  return {
-    gameKey: publicKey(data, 8),
-    timestamp: safeU64(data, data.length - 8, "timestamp"),
-    operator,
-  };
-}
-
-function parseMembership(
-  data: Buffer,
-  kind: PlayerMembershipEvent["kind"],
-): Omit<PlayerMembershipEvent, keyof IndexerCursor> {
-  const minimumLength = kind === "joined" ? 104 : 105;
-  const validLength =
-    kind === "joined" ? data.length === minimumLength : data.length === 105 || data.length === 137;
-  if (!validLength) throw new Error(`Invalid Player${kind} event length`);
-  const movedParticipant =
-    kind === "unjoined" && data.length === 137 && data.readUInt8(88) === 1
-      ? publicKey(data, 89)
-      : undefined;
-  return {
-    kind,
-    gameKey: publicKey(data, 8),
-    player: publicKey(data, 40),
-    ticketsCount: data.readUInt32LE(80),
-    ticketIndex: data.readUInt32LE(84),
-    ...(movedParticipant ? { movedParticipant } : {}),
-    timestamp: safeU64(data, data.length - 8, "timestamp"),
-  };
-}
-
-/** Extract only data emitted while the Timba program is the active invocation frame. */
 export function getTrustedProgramData(logs: readonly string[], programId: string): Buffer[] {
-  const stack: string[] = [];
-  const result: Buffer[] = [];
-  for (const log of logs) {
-    const invocation = /^Program ([1-9A-HJ-NP-Za-km-z]{32,44}) invoke \[(\d+)]$/.exec(log);
-    if (invocation) {
-      const depth = Number(invocation[2]);
-      stack.length = Math.max(0, depth - 1);
-      stack.push(invocation[1]!);
-      continue;
-    }
-    const completion = /^Program ([1-9A-HJ-NP-Za-km-z]{32,44}) (?:success|failed:)/.exec(log);
-    if (completion) {
-      if (stack.at(-1) === completion[1]) stack.pop();
-      continue;
-    }
-    if (stack.at(-1) !== programId) continue;
-    const encoded = /^Program data: ([A-Za-z0-9+/]+={0,2})$/.exec(log)?.[1];
-    if (!encoded) continue;
-    const decoded = Buffer.from(encoded, "base64");
-    if (decoded.length >= 8) result.push(decoded);
-  }
-  return result;
+  return trustedData(logs, programId).map((bytes) => Buffer.from(bytes));
 }
 
 export function parseTransactionEvents(
@@ -140,21 +27,65 @@ export function parseTransactionEvents(
 ): IndexedEvents {
   const events = EMPTY_EVENTS();
   for (const data of getTrustedProgramData(logs, programId)) {
-    const discriminator = data.subarray(0, 8);
     const cursor = { signature, slot };
     try {
-      if (discriminator.equals(GAME_INITIALIZED)) {
-        events.initialized.push({ ...parseInitialized(data), ...cursor });
-      } else if (discriminator.equals(GAME_COMPLETED)) {
-        events.completed.push({ ...parseCompleted(data), ...cursor });
-      } else if (discriminator.equals(GAME_CLOSED)) {
-        events.closed.push({ ...parseClosed(data, false), ...cursor });
-      } else if (discriminator.equals(OPERATOR_GAME_CLOSED)) {
-        events.closed.push({ ...parseClosed(data, true), ...cursor });
-      } else if (discriminator.equals(PLAYER_JOINED)) {
-        events.membership.push({ ...parseMembership(data, "joined"), ...cursor });
-      } else if (discriminator.equals(PLAYER_UNJOINED)) {
-        events.membership.push({ ...parseMembership(data, "unjoined"), ...cursor });
+      const event = decodeProgramEvent(data);
+      if (!event) continue;
+      const safe = (value: bigint): number => {
+        if (value > BigInt(Number.MAX_SAFE_INTEGER))
+          throw new Error("Event field exceeds the safe integer range");
+        return Number(value);
+      };
+      switch (event.name) {
+        case "GameInitialized": {
+          const value = event.data;
+          events.initialized.push({
+            ...value,
+            ticketAmount: safe(value.ticketAmount),
+            totalAmount: safe(value.totalAmount),
+            createdAt: safe(value.createdAt),
+            timeout: safe(value.timeout),
+            ...cursor,
+          });
+          break;
+        }
+        case "GameCompleted": {
+          const value = event.data;
+          events.completed.push({
+            ...value,
+            winnerAmount: safe(value.winnerAmount),
+            feeAmount: safe(value.feeAmount),
+            timestamp: safe(value.timestamp),
+            ...cursor,
+          });
+          break;
+        }
+        case "GameClosed":
+        case "OperatorGameClosed":
+          events.closed.push({
+            gameKey: event.data.gameKey,
+            timestamp: safe(event.data.timestamp),
+            operator: event.name === "OperatorGameClosed",
+            ...cursor,
+          });
+          break;
+        case "PlayerJoined":
+        case "PlayerUnjoined": {
+          const value = event.data;
+          const movedParticipant =
+            event.name === "PlayerUnjoined" ? event.data.movedParticipant : null;
+          events.membership.push({
+            kind: event.name === "PlayerJoined" ? "joined" : "unjoined",
+            gameKey: value.gameKey,
+            player: value.player,
+            ticketsCount: value.ticketsCount,
+            ticketIndex: value.ticketIndex,
+            timestamp: safe(value.timestamp),
+            ...(movedParticipant ? { movedParticipant } : {}),
+            ...cursor,
+          });
+          break;
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

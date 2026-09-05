@@ -1,4 +1,10 @@
-import { address, type Address, type KeyPairSigner } from "@solana/kit";
+import {
+  createKeyPairSignerFromBytes,
+  generateKeyPairSigner,
+  address,
+  type Address,
+  type KeyPairSigner,
+} from "@solana/kit";
 import { randomBytes, createHash } from "crypto";
 import * as fs from "fs";
 import {
@@ -26,7 +32,6 @@ import type { PublicKeyLike } from "./solana-utils.ts";
 import { coerceAddress, confirmTransaction, ensureAddress } from "./solana-utils.ts";
 import { PlayerRegistrySync } from "./player-registry-sync.ts";
 import type { OracleRpc } from "./solana-kit.ts";
-import { createSyncSigner, generateSyncSigner } from "./solana-kit.ts";
 import { TimbaProgramClient } from "./timba-program-client.ts";
 import {
   signGameTransactionWithPolicy,
@@ -89,7 +94,7 @@ export class CreationPolicyValidationError extends GameTransactionValidationErro
 }
 
 export class OracleService {
-  private static instance: OracleService;
+  private static instance: Promise<OracleService> | undefined;
   public static readonly EVENT_HANDLER_CONFIG = EVENT_HANDLER_CONFIG;
 
   private readonly config: OracleRuntimeConfig;
@@ -108,6 +113,7 @@ export class OracleService {
   public readonly readinessCache: Map<string, GameReadinessSnapshot>;
 
   private constructor(
+    operatorKeypair: KeyPairSigner,
     db?: OracleDatabase,
     metrics?: OracleMetrics,
     tokenPriceResolver?: TokenPriceResolver,
@@ -119,7 +125,7 @@ export class OracleService {
     this.connection = this.rpcEndpointManager.getConnection();
     this.tokenPriceResolver =
       tokenPriceResolver ?? new JupiterTokenPriceResolver(this.config.jupiterApiKey);
-    this.operatorKeypair = this.loadOperatorKeypair();
+    this.operatorKeypair = operatorKeypair;
     this.program = this.initProgram();
     this.registrySync = this.initPlayerRegistrySync();
     this.interGameDelayMs = this.config.scanThrottleMs;
@@ -131,18 +137,24 @@ export class OracleService {
     this.scanner = this.initScanner();
   }
 
-  public static getInstance(): OracleService {
+  public static async getInstance(): Promise<OracleService> {
     if (!OracleService.instance) {
-      OracleService.instance = new OracleService();
+      OracleService.instance = OracleService.createWith(OracleDatabase.getInstance()).catch(
+        (error) => {
+          OracleService.instance = undefined;
+          throw error;
+        },
+      );
     }
     return OracleService.instance;
   }
 
-  public static createWith(
+  public static async createWith(
     db: OracleDatabase,
     options: { metrics?: OracleMetrics; tokenPriceResolver?: TokenPriceResolver } = {},
-  ): OracleService {
-    return new OracleService(db, options.metrics, options.tokenPriceResolver);
+  ): Promise<OracleService> {
+    const operator = await this.loadOperatorKeypair(getConfig());
+    return new OracleService(operator, db, options.metrics, options.tokenPriceResolver);
   }
 
   public getConnection(): OracleRpc {
@@ -282,9 +294,9 @@ export class OracleService {
     }
   }
 
-  private loadOperatorKeypair(): KeyPairSigner {
-    const { operatorKeypairPath, operatorKeypairSource, useEphemeralKeypair } = this.config;
-    const { keypair, error } = this.readOperatorKeypairFromFile(operatorKeypairPath);
+  private static async loadOperatorKeypair(config: OracleRuntimeConfig): Promise<KeyPairSigner> {
+    const { operatorKeypairPath, operatorKeypairSource, useEphemeralKeypair } = config;
+    const { keypair, error } = await this.readOperatorKeypairFromFile(operatorKeypairPath);
 
     if (keypair) {
       this.logOperatorKeypairLoaded(keypair);
@@ -304,10 +316,10 @@ export class OracleService {
     throw new Error(details);
   }
 
-  private readOperatorKeypairFromFile(path: string): {
+  private static async readOperatorKeypairFromFile(path: string): Promise<{
     keypair?: KeyPairSigner;
     error?: unknown;
-  } {
+  }> {
     try {
       const stats = fs.statSync(path);
       const mode = stats.mode & 0o777;
@@ -333,14 +345,14 @@ export class OracleService {
         return value;
       });
 
-      const keypair = createSyncSigner(new Uint8Array(numbers));
+      const keypair = await createKeyPairSignerFromBytes(new Uint8Array(numbers));
       return { keypair };
     } catch (error: unknown) {
       return { error };
     }
   }
 
-  private isMissingFileError(error: unknown): boolean {
+  private static isMissingFileError(error: unknown): boolean {
     if (!error || typeof error !== "object") {
       return false;
     }
@@ -354,7 +366,7 @@ export class OracleService {
     return typeof message === "string" && message.includes("ENOENT");
   }
 
-  private isPermissionError(error: unknown): boolean {
+  private static isPermissionError(error: unknown): boolean {
     if (!error || typeof error !== "object") {
       return false;
     }
@@ -368,7 +380,7 @@ export class OracleService {
     return typeof message === "string" && /permission denied/i.test(message);
   }
 
-  private describeOperatorKeypairError(source: string, error: unknown): string {
+  private static describeOperatorKeypairError(source: string, error: unknown): string {
     if (this.isMissingFileError(error)) {
       return `${source} was not found.`;
     }
@@ -382,19 +394,22 @@ export class OracleService {
     return `${source} could not be loaded: ${message}`;
   }
 
-  private createEphemeralOperatorKeypair(source: string, reason?: string): KeyPairSigner {
-    const keypair = generateSyncSigner();
+  private static async createEphemeralOperatorKeypair(
+    source: string,
+    reason?: string,
+  ): Promise<KeyPairSigner> {
+    const keypair = await generateKeyPairSigner();
     logger.warning(
       `Using ephemeral operator keypair ${keypair.address} because ${reason ?? `${source} was not found.`}`,
     );
     return keypair;
   }
 
-  private logOperatorKeypairLoaded(keypair: KeyPairSigner): void {
+  private static logOperatorKeypairLoaded(keypair: KeyPairSigner): void {
     logger.success(`Loaded operator keypair: ${keypair.address}`);
   }
 
-  private logOperatorKeypairFailure(path: string, error: unknown): void {
+  private static logOperatorKeypairFailure(path: string, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
     logger.failure(`Failed to load operator keypair from ${path}:`, message);
   }
