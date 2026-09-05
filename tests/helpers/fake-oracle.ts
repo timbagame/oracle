@@ -60,7 +60,7 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
   return {
     generateGameSecrets:
       generateGameSecrets ??
-      ((_options?: Parameters<OracleApi["generateGameSecrets"]>[0]) => ({
+      (async (_options?: Parameters<OracleApi["generateGameSecrets"]>[0]) => ({
         randomHash: "ab".repeat(32),
         gameAddress: TEST_ADDRESS,
         oracleOperator: TEST_OPERATOR,

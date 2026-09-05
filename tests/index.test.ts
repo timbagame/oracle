@@ -56,7 +56,7 @@ describe("API handlers", () => {
     let receivedGameType: string | undefined;
     const { handleGenerateHash } = buildHandlers(
       createBasicOracle({
-        generateGameSecrets: (options) => {
+        generateGameSecrets: async (options) => {
           receivedGameType = options?.gameType;
           return {
             randomHash: "ab".repeat(32),
@@ -83,7 +83,7 @@ describe("API handlers", () => {
     let generateCalled = false;
     const { handleGenerateHash } = buildHandlers(
       createBasicOracle({
-        generateGameSecrets: () => {
+        generateGameSecrets: async () => {
           generateCalled = true;
           return { randomHash: "ignored", gameAddress: "ignored" };
         },
@@ -117,7 +117,7 @@ describe("API handlers", () => {
   it("handles generate hash errors", async () => {
     const { handleGenerateHash } = buildHandlers(
       createBasicOracle({
-        generateGameSecrets: (_options) => {
+        generateGameSecrets: async (_options) => {
           throw new Error("boom");
         },
       }),

@@ -8,7 +8,8 @@ import {
   TransactionInstruction,
 } from "./helpers/solana-fixtures.ts";
 import { GameCompletionTransactionBuilder } from "../game-completion-transaction-builder.ts";
-import { GAME_TOKEN_SEED, GAME_VAULT_SEED } from "../oracle-accounts.ts";
+const GAME_TOKEN_SEED = Buffer.from("game_token");
+const GAME_VAULT_SEED = Buffer.from("game_vault");
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
@@ -44,7 +45,7 @@ describe("v0.2.0 compatibility", () => {
       (service.events as any).options.config.map(({ event }: { event: string }) => event),
     ).not.toContain("operatorGameClosed");
 
-    const { randomHash, gameAddress } = service.generateGameSecrets({ gameType: "coinflip" });
+    const { randomHash, gameAddress } = await service.generateGameSecrets({ gameType: "coinflip" });
     const creator = Keypair.generate();
     const tokenMint = Keypair.generate().publicKey;
     const oracle = PublicKey.findProgramAddressSync([Buffer.from("oracle")], programId)[0];

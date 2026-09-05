@@ -7,7 +7,6 @@ import {
   getBase64Decoder,
   getBase64Encoder,
   getBase58Decoder,
-  getProgramDerivedAddress,
   parseBase64RpcAccount,
   signature,
   type Address,
@@ -147,17 +146,6 @@ export function addressFromBytes(bytes: ReadonlyUint8Array): Address {
 
 export function addressBytes(value: Address): ReadonlyUint8Array {
   return getAddressEncoder().encode(value);
-}
-
-export async function derivePda(
-  programAddress: Address,
-  seeds: readonly ReadonlyUint8Array[],
-): Promise<Address> {
-  const [derivedAddress] = await getProgramDerivedAddress({
-    programAddress,
-    seeds: [...seeds],
-  });
-  return derivedAddress;
 }
 
 export function derivePdaSync(
