@@ -29,7 +29,7 @@ export async function getTokenUsdPrices(
   const responses = await Promise.allSettled(
     chunks.map(async (chunk) => {
       const response = await fetch(
-        `https://api.jup.ag/price/v3?ids=${encodeURIComponent(chunk.join(","))}`,
+        `${process.env["JUPITER_PRICE_URL"] || "https://api.jup.ag/price/v3"}?ids=${encodeURIComponent(chunk.join(","))}`,
         { headers: { Accept: "application/json", "x-api-key": apiKey } },
       );
       if (!response.ok) throw new Error(`Jupiter returned ${response.status}`);
