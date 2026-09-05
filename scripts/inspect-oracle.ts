@@ -3,7 +3,7 @@ import { getContractClient } from "@timbagame/protocol/contracts/client";
 import { getConfig } from "../config.ts";
 
 async function main(): Promise<void> {
-  const oracleService = OracleService.getInstance();
+  const oracleService = await OracleService.getInstance();
   try {
     const programId = oracleService.getProgramId();
     const client = getContractClient(getConfig().contractVersion);

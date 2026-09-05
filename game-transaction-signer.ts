@@ -201,8 +201,8 @@ export async function signGameTransactionWithPolicy(
     message: "Invalid game vault account",
   });
   const [expectedVaultAta, expectedCreatorAta] = await Promise.all([
-    deriveAssociatedTokenAddress(tokenMint.address, expectedGameVault, true),
-    deriveAssociatedTokenAddress(tokenMint.address, creator.address),
+    await deriveAssociatedTokenAddress(tokenMint.address, expectedGameVault, true),
+    await deriveAssociatedTokenAddress(tokenMint.address, creator.address),
   ]);
   assertMeta(gameVaultTokenAccount, {
     address: expectedVaultAta,

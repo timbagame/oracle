@@ -42,14 +42,19 @@ export async function deriveGameAccounts(params: {
     client.findGameVaultPda({ tokenMint }, config),
     findGameTokenPda({ tokenMint }, config),
   ]);
-  const winnerTokenAccount = deriveAssociatedTokenAddress(tokenMint, winner, false, tokenProgramId);
-  const gameVaultTokenAccount = deriveAssociatedTokenAddress(
+  const winnerTokenAccount = await deriveAssociatedTokenAddress(
+    tokenMint,
+    winner,
+    false,
+    tokenProgramId,
+  );
+  const gameVaultTokenAccount = await deriveAssociatedTokenAddress(
     tokenMint,
     gameVaultPda,
     true,
     tokenProgramId,
   );
-  const oracleOperatorTokenAccount = deriveAssociatedTokenAddress(
+  const oracleOperatorTokenAccount = await deriveAssociatedTokenAddress(
     tokenMint,
     oracleOperator,
     false,

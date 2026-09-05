@@ -44,7 +44,7 @@ describe("OracleService RPC failover listener", () => {
   });
 
   it("restarts event listeners after an RPC endpoint change", async () => {
-    const service = OracleServiceClass.getInstance();
+    const service = await OracleServiceClass.getInstance();
     const previousEventProcessor = (service as any).eventProcessor;
     const previousManager = (service as any).rpcEndpointManager;
 
@@ -82,7 +82,7 @@ describe("OracleService RPC failover listener", () => {
   });
 
   it("propagates restart failures and clears pending syncs on every retry", async () => {
-    const service = OracleServiceClass.getInstance();
+    const service = await OracleServiceClass.getInstance();
     const previousEventProcessor = (service as any).eventProcessor;
     const previousManager = (service as any).rpcEndpointManager;
 

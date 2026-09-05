@@ -30,7 +30,7 @@ describe("game token onboarding", () => {
   test("uses canonical mint decimals and keeps an existing operator ATA", async () => {
     const operatorKeypair = Keypair.generate();
     const mint = Keypair.generate().publicKey;
-    const operatorAta = deriveAssociatedTokenAddress(mint, operatorKeypair.publicKey);
+    const operatorAta = await deriveAssociatedTokenAddress(mint, operatorKeypair.publicKey);
     const connection = {
       getAccountInfo: async (accountAddress: string) =>
         accountAddress === mint.address

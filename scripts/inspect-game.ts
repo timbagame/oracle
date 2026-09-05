@@ -8,7 +8,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const oracle = OracleService.getInstance();
+  const oracle = await OracleService.getInstance();
   const completion = oracle.completionManager;
   const gamePda = solanaAddress(address);
 

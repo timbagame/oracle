@@ -16,15 +16,7 @@ import {
   type KeyPairSigner,
   type ReadonlyUint8Array,
   type Signature,
-  signatureBytes,
 } from "@solana/kit";
-import {
-  createHash,
-  createPrivateKey,
-  createPublicKey,
-  randomBytes,
-  sign as signBytesSync,
-} from "node:crypto";
 import type { PublicKeyLike } from "./solana-utils.ts";
 
 export type OracleRpc = ReturnType<typeof createSolanaRpc>;
@@ -48,92 +40,11 @@ export async function createSigner(secretKey: Uint8Array): Promise<KeyPairSigner
   return createKeyPairSignerFromBytes(secretKey);
 }
 
-const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
-const PDA_MARKER = Buffer.from("ProgramDerivedAddress");
-
-function mod(value: bigint, modulus: bigint): bigint {
-  const result = value % modulus;
-  return result >= 0n ? result : result + modulus;
-}
-
-function pow(base: bigint, exponent: bigint, modulus: bigint): bigint {
-  let result = 1n;
-  let value = mod(base, modulus);
-  for (let remaining = exponent; remaining > 0n; remaining >>= 1n) {
-    if (remaining & 1n) result = mod(result * value, modulus);
-    value = mod(value * value, modulus);
-  }
-  return result;
-}
-
-function compressedPointIsOnCurve(bytes: Uint8Array): boolean {
-  if (bytes.length !== 32) return false;
-  const p = (1n << 255n) - 19n;
-  const d = 37095705934669439343138083508754565189542113879843219016388785533085940283555n;
-  const encoded = Uint8Array.from(bytes);
-  const signBit = encoded[31]! >> 7;
-  encoded[31] = encoded[31]! & 0x7f;
-  let y = 0n;
-  for (let index = 31; index >= 0; index -= 1) y = (y << 8n) | BigInt(encoded[index]!);
-  if (y >= p) return false;
-  const ySquared = mod(y * y, p);
-  const xSquared = mod((ySquared - 1n) * pow(d * ySquared + 1n, p - 2n, p), p);
-  let x = pow(xSquared, (p + 3n) / 8n, p);
-  if (mod(x * x - xSquared, p) !== 0n) x = mod(x * pow(2n, (p - 1n) / 4n, p), p);
-  if (mod(x * x - xSquared, p) !== 0n) return false;
-  if (Number(x & 1n) !== signBit) x = p - x;
-  return !(x === 0n && signBit === 1);
-}
-
-export function addressIsOnCurve(value: Address): boolean {
-  return compressedPointIsOnCurve(Uint8Array.from(addressBytes(value)));
-}
-
-export function createSyncSigner(secretKey: Uint8Array): KeyPairSigner {
-  if (secretKey.length !== 64) throw new Error("Solana keypair must contain 64 bytes");
-  const privateKey = createPrivateKey({
-    key: Buffer.concat([ED25519_PKCS8_PREFIX, Buffer.from(secretKey.subarray(0, 32))]),
-    format: "der",
-    type: "pkcs8",
-  });
-  const publicKey = createPublicKey(privateKey);
-  const publicBytes = publicKey.export({ format: "der", type: "spki" }).subarray(-32);
-  if (!Buffer.from(publicBytes).equals(Buffer.from(secretKey.subarray(32)))) {
-    throw new Error("Solana keypair public key does not match its secret seed");
-  }
-  const signerAddress = addressFromBytes(publicBytes);
-  const signContent = (content: ReadonlyUint8Array) =>
-    signatureBytes(signBytesSync(null, Buffer.from(content), privateKey));
-  return Object.freeze({
-    address: signerAddress,
-    keyPair: {} as CryptoKeyPair,
-    signMessages: async (messages: readonly { content: ReadonlyUint8Array }[]) =>
-      messages.map(({ content }) => Object.freeze({ [signerAddress]: signContent(content) })),
-    signTransactions: async (transactions: readonly { messageBytes: ReadonlyUint8Array }[]) =>
-      transactions.map(({ messageBytes }) =>
-        Object.freeze({ [signerAddress]: signContent(messageBytes) }),
-      ),
-  }) as unknown as KeyPairSigner;
-}
-
-export function generateSyncSigner(): KeyPairSigner {
-  const seed = randomBytes(32);
-  const privateKey = createPrivateKey({
-    key: Buffer.concat([ED25519_PKCS8_PREFIX, seed]),
-    format: "der",
-    type: "pkcs8",
-  });
-  const publicBytes = createPublicKey(privateKey)
-    .export({ format: "der", type: "spki" })
-    .subarray(-32);
-  return createSyncSigner(new Uint8Array(Buffer.concat([seed, publicBytes])));
-}
-
 export type KeyPairSignerLike =
   KeyPairSigner | Readonly<{ publicKey: PublicKeyLike; secretKey: Uint8Array }>;
 
-export function ensureKeyPairSigner(value: KeyPairSignerLike): KeyPairSigner {
-  return "address" in value ? value : createSyncSigner(value.secretKey);
+export async function ensureKeyPairSigner(value: KeyPairSignerLike): Promise<KeyPairSigner> {
+  return "address" in value ? value : createKeyPairSignerFromBytes(value.secretKey);
 }
 
 export function asAddress(value: string): Address {
@@ -146,29 +57,6 @@ export function addressFromBytes(bytes: ReadonlyUint8Array): Address {
 
 export function addressBytes(value: Address): ReadonlyUint8Array {
   return getAddressEncoder().encode(value);
-}
-
-export function derivePdaSync(
-  programAddress: Address,
-  seeds: readonly ReadonlyUint8Array[],
-): Address {
-  if (seeds.length > 16 || seeds.some((seed) => seed.length > 32)) {
-    throw new Error("Invalid program-derived-address seeds");
-  }
-  for (let bump = 255; bump >= 0; bump -= 1) {
-    const digest = createHash("sha256")
-      .update(
-        Buffer.concat([
-          ...seeds.map((seed) => Buffer.from(seed)),
-          Buffer.from([bump]),
-          Buffer.from(addressBytes(programAddress)),
-          PDA_MARKER,
-        ]),
-      )
-      .digest();
-    if (!compressedPointIsOnCurve(digest)) return addressFromBytes(digest);
-  }
-  throw new Error("Unable to derive program address");
 }
 
 export async function fetchAccount(

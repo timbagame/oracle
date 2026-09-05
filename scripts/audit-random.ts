@@ -309,7 +309,7 @@ function computeWinnerDisplay(args: {
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
 
-  const oracle = OracleService.getInstance();
+  const oracle = await OracleService.getInstance();
   const completion = oracle.completionManager;
   const db = OracleDatabase.getInstance();
 

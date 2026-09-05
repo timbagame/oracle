@@ -75,7 +75,7 @@ export async function prepareGameToken(options: {
   mint: PublicKeyLike;
 }): Promise<PreparedGameToken> {
   const connection = options.connection;
-  const operatorKeypair = ensureKeyPairSigner(options.operatorKeypair);
+  const operatorKeypair = await ensureKeyPairSigner(options.operatorKeypair);
   const mint = ensureAddress(options.mint);
   const mintAccount = await fetchAccount(connection, mint);
   if (!mintAccount) throw new Error(`Token mint does not exist: ${mint}`);

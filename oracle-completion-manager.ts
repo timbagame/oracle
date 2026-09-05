@@ -1,3 +1,4 @@
+import { createWinnerSeed } from "@timbagame/protocol/randomness";
 import {
   appendTransactionMessageInstruction,
   createTransactionMessage,
@@ -694,7 +695,7 @@ export class GameCompletionManager {
     const instruction = await this.transactionBuilder.buildCompletionInstruction(args);
 
     return this.transactionSubmitter.submitTransaction(async (latestBlockhash) => {
-      const operator = ensureKeyPairSigner(this.options.operatorKeypair);
+      const operator = await ensureKeyPairSigner(this.options.operatorKeypair);
       const message = pipe(
         createTransactionMessage({ version: "legacy" }),
         (value) => setTransactionMessageFeePayerSigner(operator, value),
@@ -713,16 +714,11 @@ export class GameCompletionManager {
       throw new Error(`Secret key buffer must be at least ${this.options.secretKeyLength} bytes`);
     }
 
-    const lastSlotBytes = Buffer.alloc(8);
-    lastSlotBytes.writeBigUInt64LE(BigInt(lastSlot));
-
-    const combinedData = Buffer.concat([
+    const seed = createWinnerSeed(
       secretKeyBuffer.subarray(0, this.options.secretKeyLength),
-      lastSlotBytes,
-    ]);
-
-    // Use generateUnbiasedRandom from solana-utils
-    return Number(generateUnbiasedRandom(combinedData, BigInt(nPlayers)));
+      BigInt(lastSlot),
+    );
+    return Number(generateUnbiasedRandom(Buffer.from(seed), BigInt(nPlayers)));
   }
 
   private logMissingSecret(gameAddress: string, requireOnChain: boolean): void {
