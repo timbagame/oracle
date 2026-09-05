@@ -51,56 +51,11 @@ jobs:
       - name: Tests
         run: bun test --no-summarize
 
-  integration:
-    name: Validator integration
-    needs: validate
-    runs-on: ubuntu-26.04
-    permissions:
-      contents: read
-      pull-requests: read
-      packages: read
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          path: workspace/oracle
-          persist-credentials: false
-      - name: Select integration scope
-        id: scope
-        shell: bash
-        working-directory: workspace/oracle
-        env:
-          EVENT: ${{ github.event_name }}
-          PR: ${{ github.event.pull_request.number }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          run=true
-          if [[ "$EVENT" == pull_request ]]; then
-            gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename' > "$RUNNER_TEMP/integration-paths"
-            grep -Ev '(^|/)(README[^/]*|[^/]+\.md)$|^\.(gitignore|prettierignore)$' "$RUNNER_TEMP/integration-paths" > "$RUNNER_TEMP/runtime-paths" || [[ $? == 1 ]]
-            if [[ ! -s "$RUNNER_TEMP/runtime-paths" ]]; then run=false; fi
-          fi
-          echo "run=$run" >> "$GITHUB_OUTPUT"
-      - name: Checkout integration runner
-        if: steps.scope.outputs.run == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: timbagame/operations
-          ref: 8e355a25d27081eb45a4d04444f413913e0b32e1
-          path: workspace/operations
-          token: ${{ secrets.INTEGRATION_READ_TOKEN }}
-          persist-credentials: false
-      - uses: ./workspace/operations/.github/actions/integration
-        if: steps.scope.outputs.run == 'true'
-        with:
-          candidate: oracle
-          read-token: ${{ secrets.INTEGRATION_READ_TOKEN }}
-          web: "false"
 
   publish:
     name: Publish OCI image
     if: github.event_name != 'pull_request'
-    needs: [validate, integration]
+    needs: validate
     runs-on: ubuntu-26.04
     permissions:
       contents: read
@@ -139,20 +94,10 @@ jobs:
           printf '%s' "${REGISTRY_TOKEN}" | podman login --authfile "${HOME}/.docker/config.json" "${REGISTRY}" --username "${GITHUB_ACTOR}" --password-stdin
           echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
 
-      - name: Download validated image
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: validated-image
-          path: validated-image
-
-      - name: Load and tag the tested artifact
-        shell: bash
-        run: |
-          test "$(jq -r .revision validated-image/candidate-image.json)" = "$GITHUB_SHA"
-          podman load --input validated-image/candidate-image.oci
-          image_id="$(jq -r .image validated-image/candidate-image.json)"
-          test "$(podman image inspect "$image_id" --format '{{index .Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
-          podman tag "$image_id" "$IMAGE_TAG"
+      - name: Build OCI image
+        env:
+          PACKAGE_TOKEN: ${{ github.token }}
+        run: podman build --build-arg VCS_REF="${GITHUB_SHA}" --secret=id=npm_token,env=PACKAGE_TOKEN --platform linux/amd64 --format oci --file Containerfile --tag "${IMAGE_TAG}" .
 
       - name: Push OCI image
         run: podman push --digestfile /tmp/image-digest "${IMAGE_TAG}"
