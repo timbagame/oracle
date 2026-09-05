@@ -32,7 +32,7 @@ export function createRpc(endpoint: string): OracleRpc {
 
 export function createRpcSubscriptions(endpoint: string): OracleRpcSubscriptions {
   const url = new URL(endpoint);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.protocol = url.protocol === "https:" || url.protocol === "wss:" ? "wss:" : "ws:";
   return createSolanaRpcSubscriptions(url.toString() as `${"ws" | "wss"}://${string}`);
 }
 

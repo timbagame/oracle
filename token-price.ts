@@ -31,6 +31,7 @@ export class JupiterTokenPriceResolver implements TokenPriceResolver {
     private readonly apiKey: string | null,
     private readonly fetcher: PriceFetcher = fetch,
     private readonly now: () => number = Date.now,
+    private readonly priceUrl: string = process.env["JUPITER_PRICE_URL"] || JUPITER_PRICE_URL,
   ) {}
 
   public async getTokenUsdPrices(
@@ -89,7 +90,7 @@ export class JupiterTokenPriceResolver implements TokenPriceResolver {
     const prices = new Map<string, number>();
     for (let offset = 0; offset < mints.length; offset += JUPITER_MAX_IDS) {
       const chunk = mints.slice(offset, offset + JUPITER_MAX_IDS);
-      const url = new URL(JUPITER_PRICE_URL);
+      const url = new URL(this.priceUrl);
       url.searchParams.set("ids", chunk.join(","));
       const response = await this.fetcher(url, {
         headers: { Accept: "application/json", "x-api-key": apiKey },

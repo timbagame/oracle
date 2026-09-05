@@ -67,7 +67,9 @@ export class TimbaProgramClient {
   private async ensureSubscription(): Promise<void> {
     if (this.subscriptionTask) return;
     const controller = new AbortController();
-    const subscriptions = createRpcSubscriptions(this.getRpcEndpoint());
+    const subscriptions = createRpcSubscriptions(
+      process.env["SOLANA_WS_ENDPOINT"] || this.getRpcEndpoint(),
+    );
     const notificationsPromise = subscriptions
       .logsNotifications({ mentions: [this.programId] }, { commitment: "confirmed" })
       .subscribe({ abortSignal: controller.signal });

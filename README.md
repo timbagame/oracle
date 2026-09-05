@@ -392,3 +392,9 @@ The Oracle works with Solana programs supporting multiple game types:
 - `GameInitialized` - Game creation tracking
 - `PlayerJoined`/`PlayerUnjoined` - Player state tracking
 - `GameCompleted` - Completion confirmation
+
+## Cross-repository integration
+
+The shared local-validator suite lives in the sibling `operations/integration` directory. Run `bun run test:integration --web` from `operations`; see its README for pinned toolchains, candidate protocol packages and CI credentials.
+
+`SOLANA_WS_ENDPOINT` optionally selects a WebSocket endpoint separately from `SOLANA_NETWORK`. `JUPITER_PRICE_URL` overrides the price endpoint for both signing policies and indexer pricing. The integration runner supplies local endpoints.
