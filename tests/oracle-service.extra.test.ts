@@ -132,6 +132,11 @@ const makeNotReadyResolution = (
   overrides: Parameters<typeof makeReadinessResolution>[1] = {},
 ): ReadinessResolution => makeReadinessResolution("not-ready", overrides);
 
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 const createNoopInstruction = () =>
   new anchor.web3.TransactionInstruction({
     keys: [],
@@ -1686,6 +1691,171 @@ describe("OracleService internals", () => {
     } finally {
       resolveSpy.mockRestore();
       (service as any).completeGame = originalComplete;
+    }
+  });
+
+  it("shares complete-now retries without resetting the pending timer", async () => {
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
+    const db = OracleDatabase.getInstance();
+    const gameAddress = Keypair.generate().publicKey.toBase58();
+    seedTrackedGame(db, {
+      service,
+      address: gameAddress,
+      secret: "a".repeat(64),
+      randomHash: "b".repeat(64),
+    });
+
+    const scheduledCallbacks: Array<() => void> = [];
+    const timer = { unref: () => {} } as unknown as ReturnType<typeof setTimeout>;
+    const setTimeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: TimerHandler,
+    ) => {
+      scheduledCallbacks.push(callback as () => void);
+      return timer;
+    }) as unknown as typeof setTimeout);
+    const clearTimeoutSpy = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    const attemptSpy = spyOn(service as any, "attemptGameCompletion")
+      .mockResolvedValueOnce({ success: false, error: "Transaction expired before confirmation" })
+      .mockResolvedValueOnce({ success: true });
+
+    try {
+      const first = await service.completeGameNow(gameAddress);
+      expect(first).toMatchObject({ success: false });
+      expect(attemptSpy).toHaveBeenCalledTimes(1);
+      expect(scheduledCallbacks).toHaveLength(1);
+
+      await (service as any).tryAutoComplete(
+        new PublicKey(gameAddress),
+        gameAddress,
+        "player joined",
+      );
+      expect(attemptSpy).toHaveBeenCalledTimes(1);
+      expect((service as any).completionRetries.get(gameAddress)?.attempt).toBe(1);
+
+      scheduledCallbacks[0]!();
+      await flushMicrotasks();
+
+      expect(attemptSpy).toHaveBeenCalledTimes(2);
+      expect((service as any).completionRetries.has(gameAddress)).toBe(false);
+    } finally {
+      (service as any).cancelCompletionRetry(gameAddress);
+      attemptSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      db.markGameCompleted(gameAddress);
+      db.markSecretKeyUsed(gameAddress);
+      service.cleanupOldRecords(-1);
+    }
+  });
+
+  it("retries scan-triggered completions with fresh readiness inputs", async () => {
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
+    const db = OracleDatabase.getInstance();
+    const gameAddress = Keypair.generate().publicKey.toBase58();
+    seedTrackedGame(db, {
+      service,
+      address: gameAddress,
+      secret: "c".repeat(64),
+      randomHash: "d".repeat(64),
+    });
+
+    const scheduledCallbacks: Array<() => void> = [];
+    const timer = { unref: () => {} } as unknown as ReturnType<typeof setTimeout>;
+    const setTimeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: TimerHandler,
+    ) => {
+      scheduledCallbacks.push(callback as () => void);
+      return timer;
+    }) as unknown as typeof setTimeout);
+    const clearTimeoutSpy = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    const attempts: Array<Record<string, unknown>> = [];
+    const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockImplementation(
+      async (options: Record<string, unknown>) => {
+        attempts.push(options);
+        return attempts.length === 1
+          ? { success: false, error: "RPC timeout while confirming completion" }
+          : { success: true };
+      },
+    );
+    const ready = createReadyContext();
+
+    try {
+      await (service as any).attemptScanCompletion({
+        gameAddress,
+        context: ready.context,
+        readiness: ready.readiness,
+        skipReadinessCheck: true,
+      });
+
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({
+        gameAddress,
+        context: ready.context,
+        readiness: ready.readiness,
+        skipReadinessCheck: true,
+      });
+      expect(scheduledCallbacks).toHaveLength(1);
+
+      scheduledCallbacks[0]!();
+      await flushMicrotasks();
+
+      expect(attempts).toHaveLength(2);
+      expect(attempts[1]?.["gameAddress"]).toBe(gameAddress);
+      expect(attempts[1]).not.toHaveProperty("context");
+      expect(attempts[1]).not.toHaveProperty("readiness");
+      expect(attempts[1]).not.toHaveProperty("skipReadinessCheck");
+    } finally {
+      (service as any).cancelCompletionRetry(gameAddress);
+      attemptSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      db.markGameCompleted(gameAddress);
+      db.markSecretKeyUsed(gameAddress);
+      service.cleanupOldRecords(-1);
+    }
+  });
+
+  it("stops automatic completion for disabled, finalized, and exhausted games", async () => {
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
+    const db = OracleDatabase.getInstance();
+    const disabledAddress = Keypair.generate().publicKey.toBase58();
+    const finalizedAddress = Keypair.generate().publicKey.toBase58();
+    const exhaustedAddress = Keypair.generate().publicKey.toBase58();
+
+    for (const [address, fill] of [
+      [disabledAddress, "e"],
+      [finalizedAddress, "f"],
+      [exhaustedAddress, "1"],
+    ] as const) {
+      seedTrackedGame(db, {
+        service,
+        address,
+        secret: fill.repeat(64),
+        randomHash: "2".repeat(64),
+      });
+    }
+    expect(db.setAutoCompleteDisabled(disabledAddress, true).success).toBe(true);
+    db.markGameCompleted(finalizedAddress);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      db.incrementCompletionAttempts(exhaustedAddress);
+    }
+
+    const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockResolvedValue({
+      success: true,
+    });
+    try {
+      await service.completeGameNow(disabledAddress);
+      await service.completeGameNow(finalizedAddress);
+      await service.completeGameNow(exhaustedAddress);
+      expect(attemptSpy).not.toHaveBeenCalled();
+    } finally {
+      attemptSpy.mockRestore();
+      db.markGameCompleted(disabledAddress);
+      db.markSecretKeyUsed(disabledAddress);
+      db.markSecretKeyUsed(finalizedAddress);
+      db.markGameCompleted(exhaustedAddress);
+      db.markSecretKeyUsed(exhaustedAddress);
+      service.cleanupOldRecords(-1);
     }
   });
 

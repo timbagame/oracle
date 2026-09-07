@@ -842,6 +842,42 @@ describe("OracleService", () => {
 });
 
 describe("OracleService shutdown", () => {
+  it("waits for an active automatic completion before closing the database", async () => {
+    const db = OracleDatabase.getInstance();
+    const service = await OracleService.createWith(db);
+    const gameAddress = Keypair.generate().publicKey.toBase58();
+    let resolveAttempt!: (result: { success: true }) => void;
+    const attemptPromise = new Promise<{ success: true }>((resolve) => {
+      resolveAttempt = resolve;
+    });
+    const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockReturnValue(
+      attemptPromise,
+    );
+    const dbCloseSpy = spyOn(db, "close");
+
+    try {
+      const completion = service.completeGameNow(gameAddress);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(attemptSpy).toHaveBeenCalledTimes(1);
+
+      const closing = service.close();
+      await Promise.resolve();
+      expect(dbCloseSpy).not.toHaveBeenCalled();
+
+      resolveAttempt({ success: true });
+      await completion;
+      await closing;
+      expect(dbCloseSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      attemptSpy.mockRestore();
+      if (!dbCloseSpy.mock.calls.length) {
+        resolveAttempt({ success: true });
+        await service.close();
+      }
+    }
+  });
+
   it("close() stops event listeners, scanner, and closes database", async () => {
     const db = OracleDatabase.getInstance();
     const service = await OracleService.createWith(db);

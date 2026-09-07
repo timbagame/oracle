@@ -115,6 +115,12 @@ interface PendingGame {
   completion_attempts: number;
 }
 
+export interface CompletionAttemptState {
+  status: string;
+  completionAttempts: number;
+  autoCompleteDisabled: boolean;
+}
+
 interface DatabaseStats {
   totalSecrets: number;
   usedSecrets: number;
@@ -745,6 +751,34 @@ export class OracleDatabase {
       return null;
     }
     return Boolean(record.auto_complete_disabled);
+  }
+
+  public getCompletionAttemptState(gameAddress: string): CompletionAttemptState | null {
+    const normalized = gameAddress.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const record = this.queryOne<{
+      status: string;
+      completion_attempts: number | null;
+      auto_complete_disabled: number | boolean;
+    }>(
+      SQL_QUERIES.selectGameStatusWithAttempts,
+      "Failed to lookup completion state",
+      null,
+      normalized,
+    );
+
+    if (!record) {
+      return null;
+    }
+
+    return {
+      status: record.status,
+      completionAttempts: Number(record.completion_attempts ?? 0),
+      autoCompleteDisabled: Boolean(record.auto_complete_disabled),
+    };
   }
 
   public setTokenPolicy(
