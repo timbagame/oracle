@@ -60,6 +60,7 @@ export {
 
 const SECRET_KEY_LENGTH = 32;
 const MAX_COMPLETION_ATTEMPTS = 5;
+const COMPLETION_RETRY_DELAYS_MS = [5_000, 15_000, 30_000] as const;
 export const EVENT_LISTENER_FAILURE_MESSAGE = "❌ Failed to start event listeners:";
 const NO_SECRET_KEY_MESSAGE = "No secret key found";
 
@@ -110,6 +111,10 @@ export class OracleService {
   private readonly scanner: ScanLoopRunner;
   private readonly registrySync: PlayerRegistrySync;
   private readonly tokenPriceResolver: TokenPriceResolver;
+  private readonly completionRetries = new Map<
+    string,
+    { attempt: number; timer: ReturnType<typeof setTimeout> }
+  >();
   public readonly readinessCache: Map<string, GameReadinessSnapshot>;
 
   private constructor(
@@ -209,7 +214,10 @@ export class OracleService {
           ? EVENT_HANDLER_CONFIG.filter(({ event }) => event !== "operatorGameClosed")
           : EVENT_HANDLER_CONFIG,
       syncPlayerRegistry: (options) => this.syncPlayerRegistry(options),
-      onGameFinalized: (gameAddress) => this.completion.resetRegistryPrefetchSchedule(gameAddress),
+      onGameFinalized: (gameAddress) => {
+        this.cancelCompletionRetry(gameAddress);
+        this.completion.resetRegistryPrefetchSchedule(gameAddress);
+      },
       playerEventFlushDebounceMs: this.config.playerEventFlushDebounceMs,
       playerEventFlushMaxOperations: this.config.playerEventFlushMaxOperations,
       autoCompleteDebounceMs: this.config.autoCompleteDebounceMs,
@@ -491,6 +499,7 @@ export class OracleService {
   }
 
   public async close(): Promise<void> {
+    this.clearCompletionRetries();
     await this.stopEventListening();
     this.scanner.stop();
     this.db.close();
@@ -735,6 +744,16 @@ export class OracleService {
     gameAddress: string,
     trigger: string,
   ): Promise<void> {
+    this.cancelCompletionRetry(gameAddress);
+    await this.runAutoCompleteAttempt(gameKey, gameAddress, trigger, 0);
+  }
+
+  private async runAutoCompleteAttempt(
+    gameKey: PublicKeyLike,
+    gameAddress: string,
+    trigger: string,
+    retryAttempt: number,
+  ): Promise<void> {
     const autoCompleteDisabled = this.db.isAutoCompleteDisabled(gameAddress);
     if (autoCompleteDisabled) {
       logger.info(
@@ -743,12 +762,90 @@ export class OracleService {
       return;
     }
 
-    await this.attemptGameCompletion({
-      gameAddress,
-      gameKey,
-      successLog: () => `🎯 Auto-completed game ${gameAddress} after ${trigger}`,
-      failureLog: (_address, error) => `❌ Auto-completion failed: ${error ?? "Unknown error"}`,
-    });
+    try {
+      const result = await this.attemptGameCompletion({
+        gameAddress,
+        gameKey,
+        successLog: () => `🎯 Auto-completed game ${gameAddress} after ${trigger}`,
+        failureLog: (_address, error) => `❌ Auto-completion failed: ${error ?? "Unknown error"}`,
+      });
+
+      if (!result || result.success || result.notReady) {
+        this.cancelCompletionRetry(gameAddress);
+        return;
+      }
+
+      if (this.isTransientCompletionFailure(result.error)) {
+        this.scheduleCompletionRetry(gameAddress, gameKey, trigger, retryAttempt + 1);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.failure(`Auto-completion attempt failed for ${gameAddress}:`, message);
+      if (this.isTransientCompletionFailure(message)) {
+        this.scheduleCompletionRetry(gameAddress, gameKey, trigger, retryAttempt + 1);
+      }
+    }
+  }
+
+  private isTransientCompletionFailure(error: string | undefined): boolean {
+    if (!error) return false;
+    return /expired|blockhash|block height|timeout|timed out|rpc|network|unavailable|temporary|not confirmed|failed to send|failed to fetch/i.test(
+      error,
+    );
+  }
+
+  private scheduleCompletionRetry(
+    gameAddress: string,
+    gameKey: PublicKeyLike,
+    trigger: string,
+    attempt: number,
+  ): void {
+    const delayMs = COMPLETION_RETRY_DELAYS_MS[attempt - 1];
+    if (delayMs === undefined) {
+      logger.warning(
+        `Completion retries exhausted for ${gameAddress}; fallback scan will retry it.`,
+      );
+      return;
+    }
+
+    const existing = this.completionRetries.get(gameAddress);
+    if (existing && existing.attempt <= attempt) return;
+    if (existing) clearTimeout(existing.timer);
+
+    const timer = setTimeout(() => {
+      const current = this.completionRetries.get(gameAddress);
+      if (!current || current.timer !== timer) return;
+      this.completionRetries.delete(gameAddress);
+
+      const status = this.db.getGameStatus(gameAddress);
+      if (status === "completed" || status === "cancelled" || status === "desynced") return;
+
+      void this.runAutoCompleteAttempt(
+        gameKey,
+        gameAddress,
+        `${trigger} retry ${attempt}`,
+        attempt,
+      );
+    }, delayMs);
+    (timer as unknown as { unref?: () => void }).unref?.();
+    this.completionRetries.set(gameAddress, { attempt, timer });
+    logger.info(
+      `⏳ Scheduling completion retry ${attempt}/${COMPLETION_RETRY_DELAYS_MS.length} for ${gameAddress} in ${delayMs}ms`,
+    );
+  }
+
+  private cancelCompletionRetry(gameAddress: string): void {
+    const entry = this.completionRetries.get(gameAddress);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    this.completionRetries.delete(gameAddress);
+  }
+
+  private clearCompletionRetries(): void {
+    for (const [gameAddress, entry] of this.completionRetries) {
+      clearTimeout(entry.timer);
+      this.completionRetries.delete(gameAddress);
+    }
   }
 
   private ensureGameKey(gameAddress: string): PublicKeyLike {

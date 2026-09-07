@@ -1654,6 +1654,41 @@ describe("OracleService internals", () => {
     }
   });
 
+  it("schedules bounded retries for transient completion failures", async () => {
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
+    const completion = service.completionManager;
+    const originalComplete = (service as any).completeGame;
+    const resolveSpy = spyOn(completion, "resolveContextAndReadiness").mockResolvedValue(
+      makeReadyResolution(),
+    );
+    (service as any).completeGame = async () => ({
+      success: false,
+      error: "Transaction expired before confirmation",
+    });
+
+    const gamePda = new PublicKey(Keypair.generate().publicKey.toBytes());
+
+    try {
+      await (service as any).tryAutoComplete(gamePda, "retry-game", "joined");
+
+      const retries = (service as any).completionRetries as Map<
+        string,
+        { attempt: number; timer: ReturnType<typeof setTimeout> }
+      >;
+      expect(retries.get("retry-game")?.attempt).toBe(1);
+
+      // A new event replaces the pending timer instead of creating parallel retries.
+      await (service as any).tryAutoComplete(gamePda, "retry-game", "joined");
+      expect(retries.size).toBe(1);
+      expect(retries.get("retry-game")?.attempt).toBe(1);
+      (service as any).cancelCompletionRetry("retry-game");
+      expect(retries.has("retry-game")).toBe(false);
+    } finally {
+      resolveSpy.mockRestore();
+      (service as any).completeGame = originalComplete;
+    }
+  });
+
   it("completeGame increments attempts for validation failures", async () => {
     const service = await OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();
