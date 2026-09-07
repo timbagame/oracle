@@ -712,6 +712,36 @@ export class OracleService {
     );
   }
 
+  /**
+   * Wake the automatic completion machinery without keeping the Bot HTTP
+   * request open while RPC reads and transaction confirmation run. The event
+   * listener and fallback scanner remain responsible for the same idempotent
+   * completion job if this wake-up is lost.
+   */
+  public async queueGameCompletion(gameAddress: string): Promise<GameCompletionResult | null> {
+    const normalized = gameAddress.trim();
+    if (!normalized) {
+      return { success: false, error: "gameAddress is required" };
+    }
+
+    void this.startAutomaticCompletionAttempt(
+      {
+        gameAddress: normalized,
+        gameKey: this.ensureGameKey(normalized),
+        successLog: () => `🎯 Completed game ${normalized} after bot wake-up`,
+        failureLog: (_address, error) =>
+          `❌ Bot-triggered completion failed: ${error ?? "Unknown error"}`,
+      },
+      "bot wake-up",
+      0,
+      { reportCooldownAsNotReady: true },
+    ).catch((error) => {
+      logger.warning(`Bot completion wake-up failed for ${normalized}:`, error);
+    });
+
+    return null;
+  }
+
   public requeueGame(gameAddress: string): RequeueGameResult {
     const normalized = gameAddress.trim();
     if (!normalized) {

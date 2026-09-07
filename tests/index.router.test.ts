@@ -559,6 +559,37 @@ describe("index router", () => {
     }
   });
 
+  test("POST /games/complete-now returns immediately when completion is queued", async () => {
+    const queuedCalls: string[] = [];
+    const queueContext = await createIndexRouterTestContext("index-router-complete-queued", {
+      queueGameCompletion: async (gameAddress) => {
+        queuedCalls.push(gameAddress);
+        return null;
+      },
+      completeGameNow: async () => {
+        throw new Error("synchronous completion should not be used");
+      },
+    });
+
+    try {
+      const { response, json } = await executeJsonRequest(
+        queueContext.router,
+        "/games/complete-now",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gameAddress: CONTRACT_GAME_ADDRESS }),
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect((json as any).status).toBe("in-flight");
+      expect(queuedCalls).toEqual([CONTRACT_GAME_ADDRESS]);
+    } finally {
+      queueContext.testEnv.cleanup();
+    }
+  });
+
   test("POST /games/complete-now reports non-terminal outcomes", async () => {
     const notReadyContext = await createIndexRouterTestContext("index-router-complete-not-ready", {
       completeGameNow: async () => ({ success: false, notReady: true }),
