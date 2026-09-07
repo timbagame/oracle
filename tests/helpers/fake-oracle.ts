@@ -21,6 +21,7 @@ export interface FakeOracleOptions {
   cleanupOldRecords?: OracleApi["cleanupOldRecords"];
   requeueGame?: OracleApi["requeueGame"];
   completeGameNow?: OracleApi["completeGameNow"];
+  queueGameCompletion?: NonNullable<OracleApi["queueGameCompletion"]>;
   setAutoCompleteDisabled?: OracleApi["setAutoCompleteDisabled"];
   getTokenPolicies?: OracleApi["getTokenPolicies"];
 }
@@ -53,6 +54,7 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
     cleanupOldRecords,
     requeueGame,
     completeGameNow,
+    queueGameCompletion,
     setAutoCompleteDisabled,
     getTokenPolicies,
   } = options;
@@ -75,6 +77,7 @@ export function createBasicOracle(options: FakeOracleOptions = {}): OracleApi {
     cleanupOldRecords: cleanupOldRecords ?? (() => ({ ...DEFAULT_CLEANUP_STATS })),
     requeueGame: requeueGame ?? (() => ({ success: true })),
     completeGameNow: completeGameNow ?? (async () => ({ success: false, notReady: true })),
+    queueGameCompletion,
     setAutoCompleteDisabled:
       setAutoCompleteDisabled ?? (() => ({ success: true, autoCompleteDisabled: false })),
     getTokenPolicies: getTokenPolicies ?? (async () => []),

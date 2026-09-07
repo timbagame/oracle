@@ -282,6 +282,7 @@ export interface OracleApi {
   cleanupOldRecords: OracleService["cleanupOldRecords"];
   requeueGame: (gameAddress: string) => RequeueGameResult;
   completeGameNow: (gameAddress: string) => Promise<GameCompletionResult | null>;
+  queueGameCompletion?: (gameAddress: string) => Promise<GameCompletionResult | null>;
   setAutoCompleteDisabled: (gameAddress: string, disabled: boolean) => ToggleAutoCompleteResult;
   getTokenPolicies: OracleService["getTokenPolicies"];
 }
@@ -466,7 +467,9 @@ export function buildHandlers(oracle: OracleApi) {
         if (!parsed.success) return createErrorResponse("gameAddressRequired", 400);
         const providedAddress = parsed.data.gameAddress;
 
-        const result = await oracle.completeGameNow(providedAddress);
+        const result = await (oracle.queueGameCompletion
+          ? oracle.queueGameCompletion(providedAddress)
+          : oracle.completeGameNow(providedAddress));
         if (result === null) {
           return createContractResponse(CompleteGameNowResponseSchema, {
             gameAddress: providedAddress,
@@ -840,6 +843,7 @@ export function buildProductionOracleApi(realOracle: OracleService): OracleApi {
     cleanupOldRecords: (hoursOld) => realOracle.cleanupOldRecords(hoursOld),
     requeueGame: (gameAddress) => realOracle.requeueGame(gameAddress),
     completeGameNow: (gameAddress) => realOracle.completeGameNow(gameAddress),
+    queueGameCompletion: (gameAddress) => realOracle.queueGameCompletion(gameAddress),
     setAutoCompleteDisabled: (gameAddress, disabled) =>
       realOracle.setAutoCompleteDisabled(gameAddress, disabled),
     getTokenPolicies: () => realOracle.getTokenPolicies(),
