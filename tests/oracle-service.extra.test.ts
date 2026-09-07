@@ -24,7 +24,7 @@ import { OracleMetricsRecorder } from "../metrics.ts";
 import { ScanLoopRunner } from "../oracle-scan-runner.ts";
 import { logger } from "../logger.ts";
 import { resetConfigForTesting } from "../config.ts";
-import { OracleDatabase } from "../database.ts";
+import { COMPLETION_RECOVERY_COOLDOWN_MS, OracleDatabase } from "../database.ts";
 import { confirmTransaction } from "../solana-utils.ts";
 import type { TimbaGameAccount } from "../types/timba.ts";
 import type {
@@ -1748,7 +1748,7 @@ describe("OracleService internals", () => {
     }
   });
 
-  it("keeps transient manager failures eligible for fallback recovery after bounded retries", async () => {
+  it("holds transient bursts in cooldown and recovers once after the deadline", async () => {
     const service = await OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();
     const gameAddress = Keypair.generate().publicKey.toBase58();
@@ -1778,12 +1778,14 @@ describe("OracleService internals", () => {
     let executeCalls = 0;
     completion.executeGameCompletion = async () => {
       executeCalls += 1;
-      if (executeCalls <= 5) {
+      if (executeCalls <= 4) {
         throw new Error("rpc timeout");
       }
       return "confirmed-signature";
     };
 
+    let currentTime = 1_700_000_000_000;
+    const nowSpy = spyOn(Date, "now").mockImplementation(() => currentTime);
     const scheduledCallbacks: Array<() => void> = [];
     const timer = { unref: () => {} } as unknown as ReturnType<typeof setTimeout>;
     const setTimeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
@@ -1815,20 +1817,49 @@ describe("OracleService internals", () => {
         completionAttempts: 0,
         completionFailureKind: "transient",
       });
+      const nextEligibleAt = db.getCompletionAttemptState(gameAddress)?.completionRetryAfter;
+      expect(nextEligibleAt).toBe(currentTime + COMPLETION_RECOVERY_COOLDOWN_MS);
+      expect((service as any).completionRetries.get(gameAddress)).toMatchObject({
+        phase: "cooldown",
+        nextEligibleAt,
+      });
 
-      const fifthTransientFailure = await service.completeGame(gameAddress);
-      expect(fifthTransientFailure.success).toBe(false);
+      const suppressedWake = await service.completeGameNow(gameAddress);
+      expect(suppressedWake).toMatchObject({ success: false, notReady: true });
+      await (service as any).tryAutoComplete(
+        new PublicKey(gameAddress),
+        gameAddress,
+        "player joined",
+      );
+      const suppressedScan = await service.scanRunner.scanAndCompleteActiveGames();
+      expect(suppressedScan).toEqual({ completed: 0, errors: 0, notReady: 0 });
+      expect(executeCalls).toBe(4);
+      expect(db.getCompletionAttemptState(gameAddress)?.completionRetryAfter).toBe(nextEligibleAt);
+
+      currentTime = nextEligibleAt!;
+      const recovery = service.completeGameNow(gameAddress);
+      const overlappingEvent = (service as any).tryAutoComplete(
+        new PublicKey(gameAddress),
+        gameAddress,
+        "player joined",
+      );
+      const overlappingScan = service.scanRunner.scanAndCompleteActiveGames();
+      const [recovered, , scanResult] = await Promise.all([
+        recovery,
+        overlappingEvent,
+        overlappingScan,
+      ]);
+
+      expect(recovered).toMatchObject({ success: true });
+      expect(scanResult).toEqual({ completed: 0, errors: 0, notReady: 0 });
       expect(executeCalls).toBe(5);
-      expect(db.getGameStatus(gameAddress)).toBe("pending");
-
-      const recovered = await service.scanRunner.scanAndCompleteActiveGames();
-      expect(recovered.completed).toBe(1);
-      expect(executeCalls).toBe(6);
       expect(db.getGameStatus(gameAddress)).toBe("completed");
+      expect(db.getCompletionAttemptState(gameAddress)?.completionRetryAfter).toBeNull();
     } finally {
       (service as any).cancelCompletionRetry(gameAddress);
       completion.resolveContextAndReadiness = originalResolve;
       completion.executeGameCompletion = originalExecute;
+      nowSpy.mockRestore();
       clearTimeoutSpy.mockRestore();
       setTimeoutSpy.mockRestore();
       db.markGameCompleted(gameAddress);

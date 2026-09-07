@@ -6,7 +6,7 @@ import { normalizeMint, normalizeTokenDecimals, type StoredTokenPolicy } from ".
 // Constants
 const DEFAULT_STATUS = "pending";
 const PENDING_SCAN_LIMIT = 50;
-const COMPLETION_RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
+export const COMPLETION_RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
 
 export type CompletionFailureKind = "transient" | "permanent";
 
@@ -28,15 +28,19 @@ const SQL_STATEMENTS = Object.freeze({
        last_checked = excluded.last_checked,
        auto_complete_disabled = COALESCE(game_tracking.auto_complete_disabled, excluded.auto_complete_disabled, FALSE)`,
   updateGameStatus:
-    "UPDATE game_tracking SET status = ?, completed_at = ?, last_checked = ? WHERE game_address = ?",
+    "UPDATE game_tracking SET status = ?, completion_failure_kind = NULL, completion_retry_after = NULL, completed_at = ?, last_checked = ? WHERE game_address = ?",
   deleteGamePlayers: "DELETE FROM game_players WHERE game_address = ?",
   incrementCompletionAttempts:
-    "UPDATE game_tracking SET completion_attempts = completion_attempts + 1, completion_failure_kind = 'permanent', last_checked = ? WHERE game_address = ?",
+    "UPDATE game_tracking SET completion_attempts = completion_attempts + 1, completion_failure_kind = 'permanent', completion_retry_after = NULL, last_checked = ? WHERE game_address = ?",
   recordTransientCompletionFailure:
     "UPDATE game_tracking SET completion_failure_kind = CASE WHEN completion_failure_kind = 'permanent' THEN completion_failure_kind ELSE 'transient' END, last_checked = ? WHERE game_address = ? AND status = 'pending'",
+  setCompletionRetryAfter:
+    "UPDATE game_tracking SET completion_failure_kind = CASE WHEN completion_failure_kind = 'permanent' THEN completion_failure_kind ELSE 'transient' END, completion_retry_after = ?, last_checked = ? WHERE game_address = ? AND status = 'pending' AND (completion_retry_after IS NULL OR completion_retry_after <= ?)",
+  clearCompletionRetryAfter:
+    "UPDATE game_tracking SET completion_retry_after = NULL WHERE game_address = ?",
   touchPendingGame: "UPDATE game_tracking SET last_checked = ? WHERE game_address = ?",
   resetCompletionAttempts:
-    "UPDATE game_tracking SET status = ?, completion_attempts = 0, completion_failure_kind = NULL, completed_at = NULL, last_checked = ? WHERE game_address = ?",
+    "UPDATE game_tracking SET status = ?, completion_attempts = 0, completion_failure_kind = NULL, completion_retry_after = NULL, completed_at = NULL, last_checked = ? WHERE game_address = ?",
   upsertGamePlayer:
     "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)",
   deleteGamePlayerByTicket: "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?",
@@ -45,7 +49,7 @@ const SQL_STATEMENTS = Object.freeze({
   updateGameMetadata:
     "UPDATE game_tracking SET game_type = ?, last_checked = ? WHERE game_address = ?",
   markGameDesynced:
-    "UPDATE game_tracking SET status = ?, completion_failure_kind = 'permanent', completed_at = NULL, last_checked = ? WHERE game_address = ?",
+    "UPDATE game_tracking SET status = ?, completion_failure_kind = 'permanent', completion_retry_after = NULL, completed_at = NULL, last_checked = ? WHERE game_address = ?",
   setAutoCompleteDisabled:
     "UPDATE game_tracking SET auto_complete_disabled = ?, last_checked = ? WHERE game_address = ?",
   upsertTokenPolicy: `INSERT INTO token_policies (mint, enabled, minimum_amount_raw, decimals, revision, effective_at)
@@ -68,25 +72,26 @@ const SQL_QUERIES = Object.freeze({
   selectGameType: "SELECT game_type FROM game_tracking WHERE game_address = ?",
   selectGameStatus: "SELECT status, game_type FROM game_tracking WHERE game_address = ?",
   selectGameStatusWithAttempts:
-    "SELECT status, completion_attempts, completion_failure_kind, auto_complete_disabled FROM game_tracking WHERE game_address = ?",
+    "SELECT status, completion_attempts, completion_failure_kind, completion_retry_after, auto_complete_disabled FROM game_tracking WHERE game_address = ?",
   selectGameStatusWithAutoFlag:
     "SELECT status, auto_complete_disabled FROM game_tracking WHERE game_address = ?",
   selectPendingGames:
     "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?",
   selectPendingGamesActive:
-    "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND auto_complete_disabled = FALSE ORDER BY last_checked ASC LIMIT ?",
+    "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND auto_complete_disabled = FALSE AND (completion_retry_after IS NULL OR completion_retry_after <= ?) ORDER BY last_checked ASC LIMIT ?",
   selectPendingGamesWithAttempts:
     "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND completion_attempts < ? ORDER BY last_checked ASC LIMIT ?",
   selectPendingGamesWithAttemptsActive: `SELECT game_address, completion_attempts FROM game_tracking
       WHERE status = ?
         AND auto_complete_disabled = FALSE
+        AND (completion_retry_after IS NULL OR completion_retry_after <= ?)
         AND (
           completion_attempts < ?
           OR (
-            completion_failure_kind IN ('transient')
-            OR completion_failure_kind IS NULL
+            (completion_failure_kind IN ('transient')
+             OR completion_failure_kind IS NULL)
+            AND last_checked <= ?
           )
-          AND last_checked <= ?
         )
       ORDER BY last_checked ASC LIMIT ?`,
   selectSecretsStats:
@@ -134,6 +139,7 @@ export interface CompletionAttemptState {
   status: string;
   completionAttempts: number;
   completionFailureKind: CompletionFailureKind | null;
+  completionRetryAfter: number | null;
   autoCompleteDisabled: boolean;
 }
 
@@ -181,6 +187,7 @@ const TABLE_DEFINITIONS: ReadonlyArray<{
         last_checked INTEGER NOT NULL,
         completion_attempts INTEGER DEFAULT 0,
         completion_failure_kind TEXT,
+        completion_retry_after INTEGER,
         completed_at INTEGER,
         auto_complete_disabled BOOLEAN NOT NULL DEFAULT FALSE
       )
@@ -266,6 +273,11 @@ const TRACKING_INDEX_DEFINITIONS: ReadonlyArray<{
     sql: "CREATE INDEX IF NOT EXISTS idx_tracking_completed_at ON game_tracking (status, completed_at)",
     log: "Ensuring idx_tracking_completed_at index exists",
     error: "Failed to ensure idx_tracking_completed_at index",
+  },
+  {
+    sql: "CREATE INDEX IF NOT EXISTS idx_tracking_completion_retry_after ON game_tracking (status, auto_complete_disabled, completion_retry_after, last_checked)",
+    log: "Ensuring idx_tracking_completion_retry_after index exists",
+    error: "Failed to ensure idx_tracking_completion_retry_after index",
   },
 ];
 
@@ -423,6 +435,16 @@ export class OracleDatabase {
           sql: "ALTER TABLE game_tracking ADD COLUMN completion_failure_kind TEXT",
           log: "Adding completion_failure_kind column to game_tracking",
           error: "Failed to add completion_failure_kind column to game_tracking",
+        },
+      ]);
+    }
+
+    if (!tableInfo.some((column) => column.name === "completion_retry_after")) {
+      this.executeSchemaSteps([
+        {
+          sql: "ALTER TABLE game_tracking ADD COLUMN completion_retry_after INTEGER",
+          log: "Adding completion_retry_after column to game_tracking",
+          error: "Failed to add completion_retry_after column to game_tracking",
         },
       ]);
     }
@@ -790,6 +812,7 @@ export class OracleDatabase {
       status: string;
       completion_attempts: number | null;
       completion_failure_kind: string | null;
+      completion_retry_after: number | null;
       auto_complete_disabled: number | boolean;
     }>(
       SQL_QUERIES.selectGameStatusWithAttempts,
@@ -810,6 +833,10 @@ export class OracleDatabase {
         record.completion_failure_kind === "permanent"
           ? record.completion_failure_kind
           : null,
+      completionRetryAfter:
+        record.completion_retry_after === null || record.completion_retry_after === undefined
+          ? null
+          : Number(record.completion_retry_after),
       autoCompleteDisabled: Boolean(record.auto_complete_disabled),
     };
   }
@@ -958,6 +985,36 @@ export class OracleDatabase {
     );
   }
 
+  /**
+   * Record the end of a transient automatic-completion burst. The conditional
+   * update makes the first deadline authoritative if duplicate callers race;
+   * a later caller cannot extend an existing cooldown.
+   */
+  public setCompletionRetryAfter(gameAddress: string, retryAfterMs: number): boolean {
+    if (!Number.isFinite(retryAfterMs)) {
+      return false;
+    }
+
+    const now = Date.now();
+    const result = this.runStatement(
+      SQL_STATEMENTS.setCompletionRetryAfter,
+      "Failed to set completion retry cooldown",
+      retryAfterMs,
+      now,
+      gameAddress,
+      now,
+    );
+    return typeof result?.changes === "number" && result.changes > 0;
+  }
+
+  public clearCompletionRetryAfter(gameAddress: string): void {
+    this.runStatement(
+      SQL_STATEMENTS.clearCompletionRetryAfter,
+      "Failed to clear completion retry cooldown",
+      gameAddress,
+    );
+  }
+
   public resetCompletionAttempts(
     gameAddress: string,
     options: { allowFinalized?: boolean } = {},
@@ -1045,13 +1102,16 @@ export class OracleDatabase {
   }
 
   public getActivePendingGames(maxAttempts?: number): PendingGame[] {
+    const now = Date.now();
+
     if (maxAttempts !== undefined && Number.isFinite(maxAttempts)) {
       return this.queryAll<PendingGame>(
         SQL_QUERIES.selectPendingGamesWithAttemptsActive,
         "Failed to get pending games",
         DEFAULT_STATUS,
+        now,
         maxAttempts,
-        Date.now() - COMPLETION_RECOVERY_COOLDOWN_MS,
+        now - COMPLETION_RECOVERY_COOLDOWN_MS,
         PENDING_SCAN_LIMIT,
       );
     }
@@ -1060,6 +1120,7 @@ export class OracleDatabase {
       SQL_QUERIES.selectPendingGamesActive,
       "Failed to get pending games",
       DEFAULT_STATUS,
+      now,
       PENDING_SCAN_LIMIT,
     );
   }

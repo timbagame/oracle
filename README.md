@@ -274,6 +274,8 @@ If events are missed due to network issues, the Oracle:
 - Attempts completion for ready games
 - Distinguishes between actual errors and games that are simply not ready yet
 - Skips games that have failed too many times
+- Retries transient failures at 5, 15, and 30 seconds, then pauses that game's automatic recovery for 5 minutes
+- Persists the cooldown deadline so a process restart cannot immediately reopen the same retry burst; the fallback scan resumes recovery after the deadline
 
 ### Smart Error Handling
 
@@ -331,6 +333,7 @@ bun run typecheck
 - `status` (pending/completed)
 - `last_checked` (timestamp)
 - `completion_attempts` (retry counter)
+- `completion_failure_kind` and `completion_retry_after` (transient/permanent failure state and persisted recovery cooldown)
 - `completed_at` (completion timestamp)
 
 **game_metadata table:** _(Performance optimization)_

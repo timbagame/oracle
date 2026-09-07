@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { rmSync } from "fs";
-import { OracleDatabase } from "../database.ts";
+import { COMPLETION_RECOVERY_COOLDOWN_MS, OracleDatabase } from "../database.ts";
 import { createTestEnv } from "./helpers/create-test-env.ts";
 import { Keypair } from "./helpers/solana-fixtures.ts";
 import { Database as SqliteDatabase } from "bun:sqlite";
@@ -185,6 +185,52 @@ describe("OracleDatabase", () => {
     expect(db.getActivePendingGames(5).map((game) => game.game_address)).not.toContain(
       legacyAddress,
     );
+  });
+
+  it("persists cooldown deadlines and does not extend them", () => {
+    const db = OracleDatabase.getInstance();
+    const gameAddress = "persistent-completion-cooldown";
+    const now = 1_700_000_000_000;
+    const retryAfter = now + COMPLETION_RECOVERY_COOLDOWN_MS;
+    const nowSpy = spyOn(Date, "now").mockReturnValue(now);
+
+    db.trackGame(gameAddress);
+
+    try {
+      expect(db.setCompletionRetryAfter(gameAddress, retryAfter)).toBe(true);
+      expect(db.getActivePendingGames(5).map((game) => game.game_address)).not.toContain(
+        gameAddress,
+      );
+      expect(db.getActivePendingGames().map((game) => game.game_address)).not.toContain(
+        gameAddress,
+      );
+      expect(db.getCompletionAttemptState(gameAddress)).toMatchObject({
+        completionFailureKind: "transient",
+        completionRetryAfter: retryAfter,
+      });
+
+      expect(db.setCompletionRetryAfter(gameAddress, retryAfter + 60_000)).toBe(false);
+      expect(db.getCompletionAttemptState(gameAddress)?.completionRetryAfter).toBe(retryAfter);
+
+      nowSpy.mockReturnValue(retryAfter);
+      expect(db.getActivePendingGames(5).map((game) => game.game_address)).toContain(gameAddress);
+
+      db.close();
+      const reopened = OracleDatabase.getInstance();
+      expect(reopened.getCompletionAttemptState(gameAddress)?.completionRetryAfter).toBe(
+        retryAfter,
+      );
+      reopened.clearCompletionRetryAfter(gameAddress);
+      expect(reopened.getCompletionAttemptState(gameAddress)?.completionRetryAfter).toBeNull();
+      reopened.markGameCompleted(gameAddress);
+      reopened.cleanupOldRecords(-1);
+    } finally {
+      nowSpy.mockRestore();
+      if (OracleDatabase.getInstance().getGameStatus(gameAddress)) {
+        OracleDatabase.getInstance().markGameCompleted(gameAddress);
+        OracleDatabase.getInstance().cleanupOldRecords(-1);
+      }
+    }
   });
 
   it("toggles auto-complete state and filters active pending games", () => {
