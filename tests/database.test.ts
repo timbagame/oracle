@@ -144,6 +144,49 @@ describe("OracleDatabase", () => {
     });
   });
 
+  it("keeps legacy high counters recoverable without reopening permanent lockouts", () => {
+    const db = OracleDatabase.getInstance();
+    const rawDb = (db as any).db as {
+      prepare: (sql: string) => { run: (...args: unknown[]) => void };
+    };
+    const legacyAddress = "legacy-high-counter";
+    const permanentAddress = "permanent-high-counter";
+
+    db.trackGame(legacyAddress);
+    db.trackGame(permanentAddress);
+    rawDb
+      .prepare(
+        "UPDATE game_tracking SET completion_attempts = ?, completion_failure_kind = NULL, last_checked = ? WHERE game_address = ?",
+      )
+      .run(5, Date.now(), legacyAddress);
+    db.incrementCompletionAttempts(permanentAddress);
+    db.incrementCompletionAttempts(permanentAddress);
+    db.incrementCompletionAttempts(permanentAddress);
+    db.incrementCompletionAttempts(permanentAddress);
+    db.incrementCompletionAttempts(permanentAddress);
+
+    expect(db.getActivePendingGames(5).map((game) => game.game_address)).not.toContain(
+      legacyAddress,
+    );
+    expect(db.getActivePendingGames(5).map((game) => game.game_address)).not.toContain(
+      permanentAddress,
+    );
+
+    rawDb
+      .prepare("UPDATE game_tracking SET last_checked = ? WHERE game_address = ?")
+      .run(Date.now() - 5 * 60 * 1000 - 1, legacyAddress);
+
+    expect(db.getActivePendingGames(5).map((game) => game.game_address)).toContain(legacyAddress);
+    expect(db.getActivePendingGames(5).map((game) => game.game_address)).not.toContain(
+      permanentAddress,
+    );
+
+    db.recordTransientCompletionFailure(legacyAddress);
+    expect(db.getActivePendingGames(5).map((game) => game.game_address)).not.toContain(
+      legacyAddress,
+    );
+  });
+
   it("toggles auto-complete state and filters active pending games", () => {
     const db = OracleDatabase.getInstance();
     const gameAddress = "toggle-auto";

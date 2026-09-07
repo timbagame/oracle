@@ -15,7 +15,10 @@ import {
 import { getConfig, type OracleRuntimeConfig } from "./config.ts";
 import { getOracleMetrics, type OracleMetrics } from "./metrics.ts";
 import { OracleEventProcessor, EVENT_HANDLER_CONFIG } from "./oracle-event-processor.ts";
-import { GameCompletionManager } from "./oracle-completion-manager.ts";
+import {
+  GameCompletionManager,
+  isTransientCompletionFailure,
+} from "./oracle-completion-manager.ts";
 import { ScanLoopRunner } from "./oracle-scan-runner.ts";
 import { logger } from "./logger.ts";
 
@@ -812,7 +815,7 @@ export class OracleService {
     retryAttempt: number,
   ): Promise<GameCompletionResult | null> {
     const gameAddress = options.gameAddress;
-    const stopReason = this.getAutomaticCompletionStopReason(gameAddress);
+    const stopReason = this.getAutomaticCompletionStopReason(gameAddress, trigger);
     if (stopReason) {
       logger.info(`Skipping auto-complete for ${gameAddress} after ${trigger} (${stopReason})`);
       this.cancelCompletionRetry(gameAddress);
@@ -850,7 +853,7 @@ export class OracleService {
         return result;
       }
 
-      if (this.isTransientCompletionFailure(result.error)) {
+      if (isTransientCompletionFailure(result.error)) {
         this.scheduleCompletionRetry(gameAddress, gameKey, trigger, retryAttempt + 1);
       } else {
         this.cancelCompletionRetry(gameAddress);
@@ -859,15 +862,17 @@ export class OracleService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.failure(`Auto-completion attempt failed for ${gameAddress}:`, message);
-      this.db.touchGameCheck(gameAddress);
-      if (this.isTransientCompletionFailure(message)) {
+      if (isTransientCompletionFailure(message)) {
+        this.db.recordTransientCompletionFailure(gameAddress);
         this.scheduleCompletionRetry(gameAddress, gameKey, trigger, retryAttempt + 1);
+      } else {
+        this.db.incrementCompletionAttempts(gameAddress);
       }
       return { success: false, error: message };
     }
   }
 
-  private getAutomaticCompletionStopReason(gameAddress: string): string | null {
+  private getAutomaticCompletionStopReason(gameAddress: string, trigger = ""): string | null {
     if (this.closing) {
       return "service shutting down";
     }
@@ -890,18 +895,15 @@ export class OracleService {
       return "game is desynced";
     }
 
-    if (state.completionAttempts >= MAX_COMPLETION_ATTEMPTS) {
+    const isFallbackScan = trigger === "fallback scan" || trigger.startsWith("fallback scan retry");
+    if (
+      state.completionAttempts >= MAX_COMPLETION_ATTEMPTS &&
+      (!isFallbackScan || state.completionFailureKind === "permanent")
+    ) {
       return `completion attempt limit reached (${MAX_COMPLETION_ATTEMPTS})`;
     }
 
     return null;
-  }
-
-  private isTransientCompletionFailure(error: string | undefined): boolean {
-    if (!error) return false;
-    return /expired|blockhash|block height|timeout|timed out|rpc|network|unavailable|temporary|not confirmed|failed to send|failed to fetch/i.test(
-      error,
-    );
   }
 
   private scheduleCompletionRetry(
@@ -910,7 +912,7 @@ export class OracleService {
     trigger: string,
     attempt: number,
   ): void {
-    if (this.closing || this.getAutomaticCompletionStopReason(gameAddress)) {
+    if (this.closing || this.getAutomaticCompletionStopReason(gameAddress, trigger)) {
       return;
     }
 
@@ -930,7 +932,7 @@ export class OracleService {
       if (!current || current.timer !== timer) return;
       this.completionRetries.delete(gameAddress);
 
-      if (this.getAutomaticCompletionStopReason(gameAddress)) return;
+      if (this.getAutomaticCompletionStopReason(gameAddress, trigger)) return;
 
       void this.startAutomaticCompletionAttempt(
         {

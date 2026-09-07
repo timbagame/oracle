@@ -1748,6 +1748,95 @@ describe("OracleService internals", () => {
     }
   });
 
+  it("keeps transient manager failures eligible for fallback recovery after bounded retries", async () => {
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
+    const db = OracleDatabase.getInstance();
+    const gameAddress = Keypair.generate().publicKey.toBase58();
+    const playerAddress = Keypair.generate().publicKey.toBase58();
+    seedTrackedGame(db, {
+      service,
+      address: gameAddress,
+      secret: "e".repeat(64),
+      randomHash: "f".repeat(64),
+      players: [{ address: playerAddress, ticketIndex: 0 }],
+    });
+
+    const completion = service.completionManager;
+    const originalResolve = completion.resolveContextAndReadiness;
+    const originalExecute = completion.executeGameCompletion;
+    const ready = createReadyContext({
+      gameAccount: createGameAccountStub({
+        ticketsCount: 1,
+        maxTickets: 1,
+        minTickets: 1,
+        lastSlot: 1,
+      }),
+    });
+    completion.resolveContextAndReadiness = async () =>
+      makeReadyResolution({ context: ready.context, readiness: ready.readiness });
+
+    let executeCalls = 0;
+    completion.executeGameCompletion = async () => {
+      executeCalls += 1;
+      if (executeCalls <= 5) {
+        throw new Error("rpc timeout");
+      }
+      return "confirmed-signature";
+    };
+
+    const scheduledCallbacks: Array<() => void> = [];
+    const timer = { unref: () => {} } as unknown as ReturnType<typeof setTimeout>;
+    const setTimeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: TimerHandler,
+    ) => {
+      scheduledCallbacks.push(callback as () => void);
+      return timer;
+    }) as unknown as typeof setTimeout);
+    const clearTimeoutSpy = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+
+    try {
+      const initial = await service.completeGameNow(gameAddress);
+      expect(initial?.success).toBe(false);
+      expect(executeCalls).toBe(1);
+      expect(scheduledCallbacks).toHaveLength(1);
+
+      for (let index = 0; index < 3; index++) {
+        for (let spin = 0; scheduledCallbacks[index] === undefined && spin < 10; spin++) {
+          await flushMicrotasks();
+        }
+        scheduledCallbacks[index]!();
+        for (let spin = 0; spin < 10; spin++) {
+          await flushMicrotasks();
+        }
+      }
+
+      expect(executeCalls).toBe(4);
+      expect(db.getCompletionAttemptState(gameAddress)).toMatchObject({
+        completionAttempts: 0,
+        completionFailureKind: "transient",
+      });
+
+      const fifthTransientFailure = await service.completeGame(gameAddress);
+      expect(fifthTransientFailure.success).toBe(false);
+      expect(executeCalls).toBe(5);
+      expect(db.getGameStatus(gameAddress)).toBe("pending");
+
+      const recovered = await service.scanRunner.scanAndCompleteActiveGames();
+      expect(recovered.completed).toBe(1);
+      expect(executeCalls).toBe(6);
+      expect(db.getGameStatus(gameAddress)).toBe("completed");
+    } finally {
+      (service as any).cancelCompletionRetry(gameAddress);
+      completion.resolveContextAndReadiness = originalResolve;
+      completion.executeGameCompletion = originalExecute;
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      db.markGameCompleted(gameAddress);
+      db.markSecretKeyUsed(gameAddress);
+      service.cleanupOldRecords(-1);
+    }
+  });
+
   it("retries scan-triggered completions with fresh readiness inputs", async () => {
     const service = await OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();
@@ -1913,7 +2002,7 @@ describe("OracleService internals", () => {
     }
   });
 
-  it("completeGame increments attempts when execution fails", async () => {
+  it("completeGame records transient execution failures without consuming the permanent budget", async () => {
     const service = await OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();
     const gameAddr = "failing-game";
@@ -1957,11 +2046,15 @@ describe("OracleService internals", () => {
       expect(result.success).toBe(false);
       expect(String(result.error || "")).toContain("rpc fail");
       const pending = db.getPendingGames().find((g) => g.game_address === gameAddr);
-      expect(pending?.completion_attempts).toBe(1);
+      expect(pending?.completion_attempts).toBe(0);
+      expect(db.getCompletionAttemptState(gameAddr)?.completionFailureKind).toBe("transient");
     } finally {
       completion.resolveContextAndReadiness = originalResolve;
       completion.executeGameCompletion = originalExecute;
       (service as any).program = originalProgram;
+      db.markGameCompleted(gameAddr);
+      db.markSecretKeyUsed(gameAddr);
+      service.cleanupOldRecords(-1);
     }
   });
 
@@ -2316,9 +2409,7 @@ describe("OracleService internals", () => {
     const playersSpy = spyOn(dbInstance, "getGamePlayers").mockReturnValue([
       Keypair.generate().publicKey.toBase58(),
     ]);
-    const attemptsSpy = spyOn(dbInstance, "incrementCompletionAttempts").mockImplementation(
-      () => undefined,
-    );
+    const transientFailureSpy = spyOn(dbInstance, "recordTransientCompletionFailure");
 
     completion.resolveContextAndReadiness = async () => makeReadyResolution({ context, readiness });
 
@@ -2328,7 +2419,7 @@ describe("OracleService internals", () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe("rpc down");
       expect((service as any).readinessCache.has(gameAddress)).toBe(true);
-      expect(attemptsSpy).toHaveBeenCalledWith(gameAddress);
+      expect(transientFailureSpy).toHaveBeenCalledWith(gameAddress);
       expect(executeSpy).toHaveBeenCalled();
       expect(finalizeSpy).not.toHaveBeenCalled();
     } finally {
@@ -2338,7 +2429,7 @@ describe("OracleService internals", () => {
       executeSpy.mockRestore();
       finalizeSpy.mockRestore();
       playersSpy.mockRestore();
-      attemptsSpy.mockRestore();
+      transientFailureSpy.mockRestore();
       (service as any).readinessCache.clear();
     }
   });
