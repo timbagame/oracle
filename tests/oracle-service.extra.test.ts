@@ -24,7 +24,7 @@ import { OracleMetricsRecorder } from "../metrics.ts";
 import { ScanLoopRunner } from "../oracle-scan-runner.ts";
 import { logger } from "../logger.ts";
 import { resetConfigForTesting } from "../config.ts";
-import { OracleDatabase } from "../database.ts";
+import { COMPLETION_RECOVERY_COOLDOWN_MS, OracleDatabase } from "../database.ts";
 import { confirmTransaction } from "../solana-utils.ts";
 import type { TimbaGameAccount } from "../types/timba.ts";
 import type {
@@ -131,6 +131,11 @@ const makeReadyResolution = (
 const makeNotReadyResolution = (
   overrides: Parameters<typeof makeReadinessResolution>[1] = {},
 ): ReadinessResolution => makeReadinessResolution("not-ready", overrides);
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 const createNoopInstruction = () =>
   new anchor.web3.TransactionInstruction({
@@ -1654,6 +1659,326 @@ describe("OracleService internals", () => {
     }
   });
 
+  it("schedules bounded retries for transient completion failures", async () => {
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
+    const completion = service.completionManager;
+    const originalComplete = (service as any).completeGame;
+    const resolveSpy = spyOn(completion, "resolveContextAndReadiness").mockResolvedValue(
+      makeReadyResolution(),
+    );
+    (service as any).completeGame = async () => ({
+      success: false,
+      error: "Transaction expired before confirmation",
+    });
+
+    const gamePda = new PublicKey(Keypair.generate().publicKey.toBytes());
+
+    try {
+      await (service as any).tryAutoComplete(gamePda, "retry-game", "joined");
+
+      const retries = (service as any).completionRetries as Map<
+        string,
+        { attempt: number; timer: ReturnType<typeof setTimeout> }
+      >;
+      expect(retries.get("retry-game")?.attempt).toBe(1);
+
+      // A new event replaces the pending timer instead of creating parallel retries.
+      await (service as any).tryAutoComplete(gamePda, "retry-game", "joined");
+      expect(retries.size).toBe(1);
+      expect(retries.get("retry-game")?.attempt).toBe(1);
+      (service as any).cancelCompletionRetry("retry-game");
+      expect(retries.has("retry-game")).toBe(false);
+    } finally {
+      resolveSpy.mockRestore();
+      (service as any).completeGame = originalComplete;
+    }
+  });
+
+  it("shares complete-now retries without resetting the pending timer", async () => {
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
+    const db = OracleDatabase.getInstance();
+    const gameAddress = Keypair.generate().publicKey.toBase58();
+    seedTrackedGame(db, {
+      service,
+      address: gameAddress,
+      secret: "a".repeat(64),
+      randomHash: "b".repeat(64),
+    });
+
+    const scheduledCallbacks: Array<() => void> = [];
+    const timer = { unref: () => {} } as unknown as ReturnType<typeof setTimeout>;
+    const setTimeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: TimerHandler,
+    ) => {
+      scheduledCallbacks.push(callback as () => void);
+      return timer;
+    }) as unknown as typeof setTimeout);
+    const clearTimeoutSpy = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    const attemptSpy = spyOn(service as any, "attemptGameCompletion")
+      .mockResolvedValueOnce({ success: false, error: "Transaction expired before confirmation" })
+      .mockResolvedValueOnce({ success: true });
+
+    try {
+      const first = await service.completeGameNow(gameAddress);
+      expect(first).toMatchObject({ success: false });
+      expect(attemptSpy).toHaveBeenCalledTimes(1);
+      expect(scheduledCallbacks).toHaveLength(1);
+
+      await (service as any).tryAutoComplete(
+        new PublicKey(gameAddress),
+        gameAddress,
+        "player joined",
+      );
+      expect(attemptSpy).toHaveBeenCalledTimes(1);
+      expect((service as any).completionRetries.get(gameAddress)?.attempt).toBe(1);
+
+      scheduledCallbacks[0]!();
+      await flushMicrotasks();
+
+      expect(attemptSpy).toHaveBeenCalledTimes(2);
+      expect((service as any).completionRetries.has(gameAddress)).toBe(false);
+    } finally {
+      (service as any).cancelCompletionRetry(gameAddress);
+      attemptSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      db.markGameCompleted(gameAddress);
+      db.markSecretKeyUsed(gameAddress);
+      service.cleanupOldRecords(-1);
+    }
+  });
+
+  it("holds transient bursts in cooldown and recovers once after the deadline", async () => {
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
+    const db = OracleDatabase.getInstance();
+    const gameAddress = Keypair.generate().publicKey.toBase58();
+    const playerAddress = Keypair.generate().publicKey.toBase58();
+    seedTrackedGame(db, {
+      service,
+      address: gameAddress,
+      secret: "e".repeat(64),
+      randomHash: "f".repeat(64),
+      players: [{ address: playerAddress, ticketIndex: 0 }],
+    });
+
+    const completion = service.completionManager;
+    const originalResolve = completion.resolveContextAndReadiness;
+    const originalExecute = completion.executeGameCompletion;
+    const ready = createReadyContext({
+      gameAccount: createGameAccountStub({
+        ticketsCount: 1,
+        maxTickets: 1,
+        minTickets: 1,
+        lastSlot: 1,
+      }),
+    });
+    completion.resolveContextAndReadiness = async () =>
+      makeReadyResolution({ context: ready.context, readiness: ready.readiness });
+
+    let executeCalls = 0;
+    completion.executeGameCompletion = async () => {
+      executeCalls += 1;
+      if (executeCalls <= 4) {
+        throw new Error("rpc timeout");
+      }
+      return "confirmed-signature";
+    };
+
+    let currentTime = 1_700_000_000_000;
+    const nowSpy = spyOn(Date, "now").mockImplementation(() => currentTime);
+    const scheduledCallbacks: Array<() => void> = [];
+    const timer = { unref: () => {} } as unknown as ReturnType<typeof setTimeout>;
+    const setTimeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: TimerHandler,
+    ) => {
+      scheduledCallbacks.push(callback as () => void);
+      return timer;
+    }) as unknown as typeof setTimeout);
+    const clearTimeoutSpy = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+
+    try {
+      const initial = await service.completeGameNow(gameAddress);
+      expect(initial?.success).toBe(false);
+      expect(executeCalls).toBe(1);
+      expect(scheduledCallbacks).toHaveLength(1);
+
+      for (let index = 0; index < 3; index++) {
+        for (let spin = 0; scheduledCallbacks[index] === undefined && spin < 10; spin++) {
+          await flushMicrotasks();
+        }
+        scheduledCallbacks[index]!();
+        for (let spin = 0; spin < 10; spin++) {
+          await flushMicrotasks();
+        }
+      }
+
+      expect(executeCalls).toBe(4);
+      expect(db.getCompletionAttemptState(gameAddress)).toMatchObject({
+        completionAttempts: 0,
+        completionFailureKind: "transient",
+      });
+      const nextEligibleAt = db.getCompletionAttemptState(gameAddress)?.completionRetryAfter;
+      expect(nextEligibleAt).toBe(currentTime + COMPLETION_RECOVERY_COOLDOWN_MS);
+      expect((service as any).completionRetries.get(gameAddress)).toMatchObject({
+        phase: "cooldown",
+        nextEligibleAt,
+      });
+
+      const suppressedWake = await service.completeGameNow(gameAddress);
+      expect(suppressedWake).toMatchObject({ success: false, notReady: true });
+      await (service as any).tryAutoComplete(
+        new PublicKey(gameAddress),
+        gameAddress,
+        "player joined",
+      );
+      const suppressedScan = await service.scanRunner.scanAndCompleteActiveGames();
+      expect(suppressedScan).toEqual({ completed: 0, errors: 0, notReady: 0 });
+      expect(executeCalls).toBe(4);
+      expect(db.getCompletionAttemptState(gameAddress)?.completionRetryAfter).toBe(nextEligibleAt);
+
+      currentTime = nextEligibleAt!;
+      const recovery = service.completeGameNow(gameAddress);
+      const overlappingEvent = (service as any).tryAutoComplete(
+        new PublicKey(gameAddress),
+        gameAddress,
+        "player joined",
+      );
+      const overlappingScan = service.scanRunner.scanAndCompleteActiveGames();
+      const [recovered, , scanResult] = await Promise.all([
+        recovery,
+        overlappingEvent,
+        overlappingScan,
+      ]);
+
+      expect(recovered).toMatchObject({ success: true });
+      expect(scanResult).toEqual({ completed: 0, errors: 0, notReady: 0 });
+      expect(executeCalls).toBe(5);
+      expect(db.getGameStatus(gameAddress)).toBe("completed");
+      expect(db.getCompletionAttemptState(gameAddress)?.completionRetryAfter).toBeNull();
+    } finally {
+      (service as any).cancelCompletionRetry(gameAddress);
+      completion.resolveContextAndReadiness = originalResolve;
+      completion.executeGameCompletion = originalExecute;
+      nowSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      db.markGameCompleted(gameAddress);
+      db.markSecretKeyUsed(gameAddress);
+      service.cleanupOldRecords(-1);
+    }
+  });
+
+  it("retries scan-triggered completions with fresh readiness inputs", async () => {
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
+    const db = OracleDatabase.getInstance();
+    const gameAddress = Keypair.generate().publicKey.toBase58();
+    seedTrackedGame(db, {
+      service,
+      address: gameAddress,
+      secret: "c".repeat(64),
+      randomHash: "d".repeat(64),
+    });
+
+    const scheduledCallbacks: Array<() => void> = [];
+    const timer = { unref: () => {} } as unknown as ReturnType<typeof setTimeout>;
+    const setTimeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: TimerHandler,
+    ) => {
+      scheduledCallbacks.push(callback as () => void);
+      return timer;
+    }) as unknown as typeof setTimeout);
+    const clearTimeoutSpy = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    const attempts: Array<Record<string, unknown>> = [];
+    const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockImplementation(
+      async (options: Record<string, unknown>) => {
+        attempts.push(options);
+        return attempts.length === 1
+          ? { success: false, error: "RPC timeout while confirming completion" }
+          : { success: true };
+      },
+    );
+    const ready = createReadyContext();
+
+    try {
+      await (service as any).attemptScanCompletion({
+        gameAddress,
+        context: ready.context,
+        readiness: ready.readiness,
+        skipReadinessCheck: true,
+      });
+
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({
+        gameAddress,
+        context: ready.context,
+        readiness: ready.readiness,
+        skipReadinessCheck: true,
+      });
+      expect(scheduledCallbacks).toHaveLength(1);
+
+      scheduledCallbacks[0]!();
+      await flushMicrotasks();
+
+      expect(attempts).toHaveLength(2);
+      expect(attempts[1]?.["gameAddress"]).toBe(gameAddress);
+      expect(attempts[1]).not.toHaveProperty("context");
+      expect(attempts[1]).not.toHaveProperty("readiness");
+      expect(attempts[1]).not.toHaveProperty("skipReadinessCheck");
+    } finally {
+      (service as any).cancelCompletionRetry(gameAddress);
+      attemptSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      db.markGameCompleted(gameAddress);
+      db.markSecretKeyUsed(gameAddress);
+      service.cleanupOldRecords(-1);
+    }
+  });
+
+  it("stops automatic completion for disabled, finalized, and exhausted games", async () => {
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
+    const db = OracleDatabase.getInstance();
+    const disabledAddress = Keypair.generate().publicKey.toBase58();
+    const finalizedAddress = Keypair.generate().publicKey.toBase58();
+    const exhaustedAddress = Keypair.generate().publicKey.toBase58();
+
+    for (const [address, fill] of [
+      [disabledAddress, "e"],
+      [finalizedAddress, "f"],
+      [exhaustedAddress, "1"],
+    ] as const) {
+      seedTrackedGame(db, {
+        service,
+        address,
+        secret: fill.repeat(64),
+        randomHash: "2".repeat(64),
+      });
+    }
+    expect(db.setAutoCompleteDisabled(disabledAddress, true).success).toBe(true);
+    db.markGameCompleted(finalizedAddress);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      db.incrementCompletionAttempts(exhaustedAddress);
+    }
+
+    const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockResolvedValue({
+      success: true,
+    });
+    try {
+      await service.completeGameNow(disabledAddress);
+      await service.completeGameNow(finalizedAddress);
+      await service.completeGameNow(exhaustedAddress);
+      expect(attemptSpy).not.toHaveBeenCalled();
+    } finally {
+      attemptSpy.mockRestore();
+      db.markGameCompleted(disabledAddress);
+      db.markSecretKeyUsed(disabledAddress);
+      db.markSecretKeyUsed(finalizedAddress);
+      db.markGameCompleted(exhaustedAddress);
+      db.markSecretKeyUsed(exhaustedAddress);
+      service.cleanupOldRecords(-1);
+    }
+  });
+
   it("completeGame increments attempts for validation failures", async () => {
     const service = await OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();
@@ -1708,7 +2033,7 @@ describe("OracleService internals", () => {
     }
   });
 
-  it("completeGame increments attempts when execution fails", async () => {
+  it("completeGame records transient execution failures without consuming the permanent budget", async () => {
     const service = await OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();
     const gameAddr = "failing-game";
@@ -1752,11 +2077,15 @@ describe("OracleService internals", () => {
       expect(result.success).toBe(false);
       expect(String(result.error || "")).toContain("rpc fail");
       const pending = db.getPendingGames().find((g) => g.game_address === gameAddr);
-      expect(pending?.completion_attempts).toBe(1);
+      expect(pending?.completion_attempts).toBe(0);
+      expect(db.getCompletionAttemptState(gameAddr)?.completionFailureKind).toBe("transient");
     } finally {
       completion.resolveContextAndReadiness = originalResolve;
       completion.executeGameCompletion = originalExecute;
       (service as any).program = originalProgram;
+      db.markGameCompleted(gameAddr);
+      db.markSecretKeyUsed(gameAddr);
+      service.cleanupOldRecords(-1);
     }
   });
 
@@ -2111,9 +2440,7 @@ describe("OracleService internals", () => {
     const playersSpy = spyOn(dbInstance, "getGamePlayers").mockReturnValue([
       Keypair.generate().publicKey.toBase58(),
     ]);
-    const attemptsSpy = spyOn(dbInstance, "incrementCompletionAttempts").mockImplementation(
-      () => undefined,
-    );
+    const transientFailureSpy = spyOn(dbInstance, "recordTransientCompletionFailure");
 
     completion.resolveContextAndReadiness = async () => makeReadyResolution({ context, readiness });
 
@@ -2123,7 +2450,7 @@ describe("OracleService internals", () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe("rpc down");
       expect((service as any).readinessCache.has(gameAddress)).toBe(true);
-      expect(attemptsSpy).toHaveBeenCalledWith(gameAddress);
+      expect(transientFailureSpy).toHaveBeenCalledWith(gameAddress);
       expect(executeSpy).toHaveBeenCalled();
       expect(finalizeSpy).not.toHaveBeenCalled();
     } finally {
@@ -2133,7 +2460,7 @@ describe("OracleService internals", () => {
       executeSpy.mockRestore();
       finalizeSpy.mockRestore();
       playersSpy.mockRestore();
-      attemptsSpy.mockRestore();
+      transientFailureSpy.mockRestore();
       (service as any).readinessCache.clear();
     }
   });

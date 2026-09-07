@@ -34,6 +34,14 @@ import { GameCompletionTransactionBuilder } from "./game-completion-transaction-
 import { RegistrySyncManager } from "./registry-sync-manager.ts";
 import { TransactionSubmitter } from "./transaction-submitter.ts";
 import type { ContractVersion } from "./contract-idl.ts";
+import type { CompletionFailureKind } from "./database.ts";
+
+export function isTransientCompletionFailure(error: string | undefined): boolean {
+  if (!error) return false;
+  return /expired|blockhash|block height|timeout|timed out|rpc|network|unavailable|temporary|not confirmed|failed to send|failed to fetch/i.test(
+    error,
+  );
+}
 
 export interface GameCompletionManagerOptions extends CoreOracleDependencies {
   contractVersion: ContractVersion;
@@ -398,9 +406,15 @@ export class GameCompletionManager {
   private recordCompletionFailure(
     gameAddress: string,
     error: string,
-    options: { clearReadiness?: boolean } = {},
+    options: { clearReadiness?: boolean; failureKind?: CompletionFailureKind } = {},
   ): GameCompletionResult {
-    this.options.db.incrementCompletionAttempts(gameAddress);
+    const failureKind =
+      options.failureKind ?? (isTransientCompletionFailure(error) ? "transient" : "permanent");
+    if (failureKind === "transient") {
+      this.options.db.recordTransientCompletionFailure(gameAddress);
+    } else {
+      this.options.db.incrementCompletionAttempts(gameAddress);
+    }
 
     if (options.clearReadiness) {
       this.options.readinessCache.delete(gameAddress);
@@ -410,7 +424,10 @@ export class GameCompletionManager {
   }
 
   private recordFatalCompletionFailure(gameAddress: string, error: string): GameCompletionResult {
-    return this.recordCompletionFailure(gameAddress, error, { clearReadiness: true });
+    return this.recordCompletionFailure(gameAddress, error, {
+      clearReadiness: true,
+      failureKind: "permanent",
+    });
   }
 
   private guardFatalCompletionRequirement(

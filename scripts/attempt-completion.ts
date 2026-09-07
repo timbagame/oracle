@@ -9,9 +9,7 @@ async function main(): Promise<void> {
 
   const service = await OracleService.getInstance();
   try {
-    const result = await service.completionManager.attemptGameCompletion({
-      gameAddress,
-    });
+    const result = await service.completeGameNow(gameAddress);
 
     console.log(JSON.stringify({ result }, null, 2));
   } catch (error) {
