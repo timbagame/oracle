@@ -75,6 +75,8 @@ type CompletionRetry = {
   phase: "active" | "cooldown";
   attempt: number;
   mode: CompletionRetryMode;
+  transientAttempt: number;
+  readinessAttempt: number;
   timer?: ReturnType<typeof setTimeout>;
   gameKey?: PublicKeyLike;
   trigger: string;
@@ -905,7 +907,8 @@ export class OracleService {
         const isExpectedRetry =
           retryAttempt > 0 &&
           existing.mode === retryMode &&
-          existing.attempt === retryAttempt &&
+          (retryMode === "readiness" ? existing.readinessAttempt : existing.transientAttempt) ===
+            retryAttempt &&
           existing.timer === undefined;
         if (!isExpectedRetry) {
           return { allowed: false, reason: "active" };
@@ -948,6 +951,8 @@ export class OracleService {
       phase: "active",
       attempt: retryAttempt,
       mode: retryMode,
+      transientAttempt: retryMode === "transient" ? retryAttempt : 0,
+      readinessAttempt: retryMode === "readiness" ? retryAttempt : 0,
       gameKey,
       trigger,
     });
@@ -1004,7 +1009,12 @@ export class OracleService {
             this.getNextReadinessAttempt(gameAddress, retryMode, retryAttempt),
           );
         } else if (retryAttempt > 0) {
-          this.scheduleCompletionRetry(gameAddress, gameKey, trigger, retryAttempt + 1);
+          this.scheduleCompletionRetry(
+            gameAddress,
+            gameKey,
+            trigger,
+            this.getNextTransientAttempt(gameAddress, retryMode, retryAttempt),
+          );
         } else {
           this.cancelCompletionRetry(gameAddress);
         }
@@ -1032,7 +1042,12 @@ export class OracleService {
 
       if (isTransientCompletionFailure(result.error)) {
         this.recordTransientCompletionFailure(gameAddress);
-        this.scheduleCompletionRetry(gameAddress, gameKey, trigger, retryAttempt + 1);
+        this.scheduleCompletionRetry(
+          gameAddress,
+          gameKey,
+          trigger,
+          this.getNextTransientAttempt(gameAddress, retryMode, retryAttempt),
+        );
       } else {
         this.cancelCompletionRetry(gameAddress);
       }
@@ -1042,7 +1057,12 @@ export class OracleService {
       logger.failure(`Auto-completion attempt failed for ${gameAddress}:`, message);
       if (isTransientCompletionFailure(message)) {
         this.recordTransientCompletionFailure(gameAddress);
-        this.scheduleCompletionRetry(gameAddress, gameKey, trigger, retryAttempt + 1);
+        this.scheduleCompletionRetry(
+          gameAddress,
+          gameKey,
+          trigger,
+          this.getNextTransientAttempt(gameAddress, retryMode, retryAttempt),
+        );
       } else {
         this.db.incrementCompletionAttempts(gameAddress);
         this.cancelCompletionRetry(gameAddress);
@@ -1117,6 +1137,8 @@ export class OracleService {
       if (!current || current.timer !== timer) return;
       current.timer = undefined;
       current.attempt = attempt;
+      current.transientAttempt = attempt;
+      current.mode = "transient";
       current.gameKey = gameKey ?? current.gameKey;
       current.trigger = trigger;
       this.completionRetries.set(gameAddress, current);
@@ -1144,6 +1166,7 @@ export class OracleService {
       phase: "active",
       attempt,
       mode: "transient",
+      transientAttempt: attempt,
       timer,
       gameKey: gameKey ?? existing.gameKey,
       trigger,
@@ -1163,10 +1186,22 @@ export class OracleService {
     retryAttempt: number,
   ): number {
     const existing = this.completionRetries.get(gameAddress);
-    if (existing?.phase === "active" && existing.mode === "readiness") {
-      return existing.attempt + 1;
+    if (existing?.phase === "active" && existing.readinessAttempt > 0) {
+      return existing.readinessAttempt + 1;
     }
     return retryMode === "readiness" ? retryAttempt + 1 : 1;
+  }
+
+  private getNextTransientAttempt(
+    gameAddress: string,
+    retryMode: CompletionRetryMode,
+    retryAttempt: number,
+  ): number {
+    const existing = this.completionRetries.get(gameAddress);
+    if (existing?.phase === "active" && existing.transientAttempt > 0) {
+      return existing.transientAttempt + 1;
+    }
+    return retryMode === "transient" ? retryAttempt + 1 : 1;
   }
 
   private scheduleReadinessRetry(
@@ -1197,6 +1232,7 @@ export class OracleService {
       if (!current || current.timer !== timer || current.phase !== "active") return;
       current.timer = undefined;
       current.attempt = attempt;
+      current.readinessAttempt = attempt;
       current.mode = "readiness";
       current.gameKey = gameKey ?? current.gameKey;
       current.trigger = trigger;
@@ -1229,6 +1265,7 @@ export class OracleService {
       phase: "active",
       attempt,
       mode: "readiness",
+      readinessAttempt: attempt,
       timer,
       gameKey: gameKey ?? existing.gameKey,
       trigger,
@@ -1302,6 +1339,8 @@ export class OracleService {
       phase: "cooldown",
       attempt,
       mode: "transient",
+      transientAttempt: attempt,
+      readinessAttempt: existing?.readinessAttempt ?? 0,
       gameKey,
       trigger,
       nextEligibleAt,

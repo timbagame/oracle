@@ -1756,6 +1756,68 @@ describe("OracleService internals", () => {
     }
   });
 
+  it("resets transient backoff independently after readiness retries", async () => {
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
+    const db = OracleDatabase.getInstance();
+    const gameAddress = Keypair.generate().publicKey.toBase58();
+    seedTrackedGame(db, {
+      service,
+      address: gameAddress,
+      secret: "c".repeat(64),
+      randomHash: "d".repeat(64),
+    });
+
+    const scheduledCallbacks: Array<() => void> = [];
+    const delays: number[] = [];
+    const timer = { unref: () => {} } as unknown as ReturnType<typeof setTimeout>;
+    const setTimeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: TimerHandler,
+      delay?: number,
+    ) => {
+      scheduledCallbacks.push(callback as () => void);
+      delays.push(delay ?? 0);
+      return timer;
+    }) as unknown as typeof setTimeout);
+    const clearTimeoutSpy = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    let attempts = 0;
+    const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockImplementation(
+      async () => {
+        attempts += 1;
+        return attempts <= 3
+          ? { success: false, notReady: true }
+          : { success: false, error: "RPC timeout" };
+      },
+    );
+
+    try {
+      await service.completeGameNow(gameAddress);
+      expect(attempts).toBe(1);
+      expect(delays).toEqual([1_000]);
+
+      for (let index = 0; index < 3; index++) {
+        scheduledCallbacks[index]!();
+        await flushMicrotasks();
+      }
+
+      expect(attempts).toBe(4);
+      expect(delays).toEqual([1_000, 3_000, 10_000, 5_000]);
+      expect((service as any).completionRetries.get(gameAddress)).toMatchObject({
+        phase: "active",
+        mode: "transient",
+        transientAttempt: 1,
+        readinessAttempt: 3,
+      });
+    } finally {
+      (service as any).cancelCompletionRetry(gameAddress);
+      attemptSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      db.markGameCompleted(gameAddress);
+      db.markSecretKeyUsed(gameAddress);
+      service.cleanupOldRecords(-1);
+    }
+  });
+
   it("shares complete-now retries without resetting the pending timer", async () => {
     const service = await OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();
