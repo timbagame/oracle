@@ -65,12 +65,16 @@ export {
 const SECRET_KEY_LENGTH = 32;
 const MAX_COMPLETION_ATTEMPTS = 5;
 const COMPLETION_RETRY_DELAYS_MS = [5_000, 15_000, 30_000] as const;
+const READINESS_RETRY_DELAYS_MS = [1_000, 3_000, 10_000] as const;
 export const EVENT_LISTENER_FAILURE_MESSAGE = "❌ Failed to start event listeners:";
 const NO_SECRET_KEY_MESSAGE = "No secret key found";
+
+type CompletionRetryMode = "transient" | "readiness";
 
 type CompletionRetry = {
   phase: "active" | "cooldown";
   attempt: number;
+  mode: CompletionRetryMode;
   timer?: ReturnType<typeof setTimeout>;
   gameKey?: PublicKeyLike;
   trigger: string;
@@ -828,13 +832,18 @@ export class OracleService {
     options: AttemptGameCompletionOptions,
     trigger: string,
     retryAttempt: number,
-    admissionOptions: { reportCooldownAsNotReady?: boolean } = {},
+    admissionOptions: {
+      reportCooldownAsNotReady?: boolean;
+      retryMode?: CompletionRetryMode;
+    } = {},
   ): Promise<GameCompletionResult | null> {
+    const retryMode = admissionOptions.retryMode ?? "transient";
     const admission = this.admitAutomaticCompletion(
       options.gameAddress,
       options.gameKey,
       trigger,
       retryAttempt,
+      retryMode,
     );
     if (!admission.allowed) {
       if (admission.reason === "cooldown" && admissionOptions.reportCooldownAsNotReady) {
@@ -847,7 +856,13 @@ export class OracleService {
       return Promise.resolve(null);
     }
 
-    const run = this.runAutoCompleteAttempt(options, options.gameKey, trigger, retryAttempt);
+    const run = this.runAutoCompleteAttempt(
+      options,
+      options.gameKey,
+      trigger,
+      retryAttempt,
+      retryMode,
+    );
     return this.trackAutomaticCompletionRun(run);
   }
 
@@ -856,6 +871,7 @@ export class OracleService {
     gameKey: PublicKeyLike | undefined,
     trigger: string,
     retryAttempt: number,
+    retryMode: CompletionRetryMode,
   ): AutomaticCompletionAdmission {
     if (this.closing) {
       return { allowed: false, reason: "closing" };
@@ -875,8 +891,22 @@ export class OracleService {
         this.completionRetries.delete(gameAddress);
         this.db.clearCompletionRetryAfter(gameAddress);
       } else {
+        // A fresh bot/event wake-up can consume a pending readiness retry
+        // immediately. This avoids waiting behind a stale-read timer while
+        // still keeping transient transaction retries coalesced.
+        if (retryAttempt === 0 && existing.mode === "readiness" && existing.timer) {
+          clearTimeout(existing.timer);
+          existing.timer = undefined;
+          existing.gameKey = gameKey ?? existing.gameKey;
+          existing.trigger = trigger;
+          return { allowed: true };
+        }
+
         const isExpectedRetry =
-          retryAttempt > 0 && existing.attempt === retryAttempt && existing.timer === undefined;
+          retryAttempt > 0 &&
+          existing.mode === retryMode &&
+          existing.attempt === retryAttempt &&
+          existing.timer === undefined;
         if (!isExpectedRetry) {
           return { allowed: false, reason: "active" };
         }
@@ -917,6 +947,7 @@ export class OracleService {
     this.completionRetries.set(gameAddress, {
       phase: "active",
       attempt: retryAttempt,
+      mode: retryMode,
       gameKey,
       trigger,
     });
@@ -941,6 +972,7 @@ export class OracleService {
     gameKey: PublicKeyLike | undefined,
     trigger: string,
     retryAttempt: number,
+    retryMode: CompletionRetryMode,
   ): Promise<GameCompletionResult | null> {
     const gameAddress = options.gameAddress;
     const stopReason = this.getAutomaticCompletionStopReason(gameAddress, trigger);
@@ -964,7 +996,14 @@ export class OracleService {
       const result = await this.attemptGameCompletion(attemptOptions);
 
       if (result === null) {
-        if (retryAttempt > 0) {
+        if (!this.isFallbackScanTrigger(trigger)) {
+          this.scheduleReadinessRetry(
+            gameAddress,
+            gameKey,
+            trigger,
+            this.getNextReadinessAttempt(gameAddress, retryMode, retryAttempt),
+          );
+        } else if (retryAttempt > 0) {
           this.scheduleCompletionRetry(gameAddress, gameKey, trigger, retryAttempt + 1);
         } else {
           this.cancelCompletionRetry(gameAddress);
@@ -972,8 +1011,22 @@ export class OracleService {
         return result;
       }
 
-      if (result.success || result.notReady) {
+      if (result.success) {
         this.cancelCompletionRetry(gameAddress);
+        return result;
+      }
+
+      if (result.notReady) {
+        if (this.isFallbackScanTrigger(trigger)) {
+          this.cancelCompletionRetry(gameAddress);
+        } else {
+          this.scheduleReadinessRetry(
+            gameAddress,
+            gameKey,
+            trigger,
+            this.getNextReadinessAttempt(gameAddress, retryMode, retryAttempt),
+          );
+        }
         return result;
       }
 
@@ -1028,7 +1081,7 @@ export class OracleService {
       return "game is desynced";
     }
 
-    const isFallbackScan = trigger === "fallback scan" || trigger.startsWith("fallback scan retry");
+    const isFallbackScan = this.isFallbackScanTrigger(trigger);
     if (
       state.completionAttempts >= MAX_COMPLETION_ATTEMPTS &&
       (!isFallbackScan || state.completionFailureKind === "permanent")
@@ -1090,12 +1143,98 @@ export class OracleService {
       ...existing,
       phase: "active",
       attempt,
+      mode: "transient",
       timer,
       gameKey: gameKey ?? existing.gameKey,
       trigger,
     });
     logger.info(
       `⏳ Scheduling completion retry ${attempt}/${COMPLETION_RETRY_DELAYS_MS.length} for ${gameAddress} in ${delayMs}ms`,
+    );
+  }
+
+  private isFallbackScanTrigger(trigger: string): boolean {
+    return trigger === "fallback scan" || trigger.startsWith("fallback scan retry");
+  }
+
+  private getNextReadinessAttempt(
+    gameAddress: string,
+    retryMode: CompletionRetryMode,
+    retryAttempt: number,
+  ): number {
+    const existing = this.completionRetries.get(gameAddress);
+    if (existing?.phase === "active" && existing.mode === "readiness") {
+      return existing.attempt + 1;
+    }
+    return retryMode === "readiness" ? retryAttempt + 1 : 1;
+  }
+
+  private scheduleReadinessRetry(
+    gameAddress: string,
+    gameKey: PublicKeyLike | undefined,
+    trigger: string,
+    attempt: number,
+  ): void {
+    if (this.closing || this.getAutomaticCompletionStopReason(gameAddress, trigger)) {
+      this.cancelCompletionRetry(gameAddress);
+      return;
+    }
+
+    const delayMs = READINESS_RETRY_DELAYS_MS[attempt - 1];
+    if (delayMs === undefined) {
+      this.cancelCompletionRetry(gameAddress);
+      logger.info(
+        `Readiness retries exhausted for ${gameAddress}; awaiting the next game event or scan.`,
+      );
+      return;
+    }
+
+    const existing = this.completionRetries.get(gameAddress);
+    if (!existing || existing.phase !== "active" || existing.timer) return;
+
+    const timer = setTimeout(() => {
+      const current = this.completionRetries.get(gameAddress);
+      if (!current || current.timer !== timer || current.phase !== "active") return;
+      current.timer = undefined;
+      current.attempt = attempt;
+      current.mode = "readiness";
+      current.gameKey = gameKey ?? current.gameKey;
+      current.trigger = trigger;
+      this.completionRetries.set(gameAddress, current);
+
+      if (this.getAutomaticCompletionStopReason(gameAddress, trigger)) {
+        this.cancelCompletionRetry(gameAddress);
+        return;
+      }
+
+      void this.startAutomaticCompletionAttempt(
+        {
+          gameAddress,
+          gameKey,
+          successLog: () =>
+            `🎯 Auto-completed game ${gameAddress} after ${trigger} readiness retry`,
+          failureLog: (_address, error) =>
+            `❌ Auto-completion failed after ${trigger} readiness retry: ${error ?? "Unknown error"}`,
+        },
+        `${trigger} readiness retry ${attempt}`,
+        attempt,
+        { retryMode: "readiness" },
+      ).catch((error) => {
+        logger.warning(`Readiness retry failed for ${gameAddress}:`, error);
+      });
+    }, delayMs);
+    (timer as unknown as { unref?: () => void }).unref?.();
+    this.completionRetries.set(gameAddress, {
+      ...existing,
+      phase: "active",
+      attempt,
+      mode: "readiness",
+      timer,
+      gameKey: gameKey ?? existing.gameKey,
+      trigger,
+    });
+    logger.info(
+      `⏳ Scheduling readiness retry ${attempt}/${READINESS_RETRY_DELAYS_MS.length} for ${gameAddress} in ${delayMs}ms`,
     );
   }
 
@@ -1162,6 +1301,7 @@ export class OracleService {
     const entry: CompletionRetry = {
       phase: "cooldown",
       attempt,
+      mode: "transient",
       gameKey,
       trigger,
       nextEligibleAt,

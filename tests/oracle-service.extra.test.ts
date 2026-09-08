@@ -1659,6 +1659,68 @@ describe("OracleService internals", () => {
     }
   });
 
+  it("retries stale not-ready wake-ups with bounded fresh readiness reads", async () => {
+    const service = await OracleService.createWith(OracleDatabase.getInstance());
+    const db = OracleDatabase.getInstance();
+    const gameAddress = Keypair.generate().publicKey.toBase58();
+    seedTrackedGame(db, {
+      service,
+      address: gameAddress,
+      secret: "a".repeat(64),
+      randomHash: "b".repeat(64),
+    });
+
+    const scheduledCallbacks: Array<() => void> = [];
+    const timer = { unref: () => {} } as unknown as ReturnType<typeof setTimeout>;
+    const setTimeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: TimerHandler,
+    ) => {
+      scheduledCallbacks.push(callback as () => void);
+      return timer;
+    }) as unknown as typeof setTimeout);
+    const clearTimeoutSpy = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    const attempts: Array<Record<string, unknown>> = [];
+    const attemptSpy = spyOn(service as any, "attemptGameCompletion").mockImplementation(
+      async (options: Record<string, unknown>) => {
+        attempts.push(options);
+        return { success: false, notReady: true };
+      },
+    );
+
+    try {
+      await service.completeGameNow(gameAddress);
+      expect(attempts).toHaveLength(1);
+      expect((service as any).completionRetries.get(gameAddress)).toMatchObject({
+        phase: "active",
+        mode: "readiness",
+        attempt: 1,
+      });
+      expect(scheduledCallbacks).toHaveLength(1);
+
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        scheduledCallbacks[attempt - 1]!();
+        await flushMicrotasks();
+        expect(attempts).toHaveLength(attempt + 1);
+        expect(attempts[attempt]).not.toHaveProperty("context");
+        expect(attempts[attempt]).not.toHaveProperty("readiness");
+        expect(attempts[attempt]).not.toHaveProperty("skipReadinessCheck");
+        if (attempt < 3) {
+          expect(scheduledCallbacks).toHaveLength(attempt + 1);
+        }
+      }
+
+      expect((service as any).completionRetries.has(gameAddress)).toBe(false);
+    } finally {
+      (service as any).cancelCompletionRetry(gameAddress);
+      attemptSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      db.markGameCompleted(gameAddress);
+      db.markSecretKeyUsed(gameAddress);
+      service.cleanupOldRecords(-1);
+    }
+  });
+
   it("schedules bounded retries for transient completion failures", async () => {
     const service = await OracleService.createWith(OracleDatabase.getInstance());
     const completion = service.completionManager;
