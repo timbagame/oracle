@@ -13,12 +13,14 @@ export type CompletionFailureKind = "transient" | "permanent";
 const SQL_STATEMENTS = Object.freeze({
   insertSecretKey:
     "INSERT INTO secret_keys (game_address, secret_key, random_hash, created_at) VALUES (?, ?, ?, ?)",
-  markSecretKeyUsed: "UPDATE secret_keys SET used = TRUE WHERE game_address = ?",
+  markSecretKeyUsed:
+    "UPDATE secret_keys SET used = TRUE, committed_at = COALESCE(committed_at, created_at) WHERE game_address = ?",
   markSecretKeySigned:
-    "UPDATE secret_keys SET signed_at = COALESCE(signed_at, ?) WHERE game_address = ? AND used = FALSE",
+    "UPDATE secret_keys SET signed_at = COALESCE(signed_at, ?) WHERE game_address = ? AND used = FALSE AND committed_at IS NULL AND NOT EXISTS (SELECT 1 FROM game_tracking WHERE game_address = secret_keys.game_address AND status IN ('completed', 'cancelled'))",
   markSecretKeyCommitted:
     "UPDATE secret_keys SET committed_at = COALESCE(committed_at, ?) WHERE game_address = ? AND used = FALSE",
-  reactivateSecretKey: "UPDATE secret_keys SET used = FALSE WHERE game_address = ?",
+  reactivateSecretKey:
+    "UPDATE secret_keys SET used = FALSE, committed_at = COALESCE(committed_at, created_at) WHERE game_address = ?",
   deleteSecretKey: "DELETE FROM secret_keys WHERE game_address = ?",
   upsertGameTracking: `INSERT INTO game_tracking (game_address, status, game_type, last_checked, auto_complete_disabled)
      VALUES (?, ?, ?, ?, COALESCE((SELECT auto_complete_disabled FROM game_tracking WHERE game_address = ?), FALSE))
@@ -633,12 +635,14 @@ export class OracleDatabase {
   }
 
   public markSecretKeySigned(gameAddress: string): void {
-    this.runStatement(
+    const result = this.runStatement(
       SQL_STATEMENTS.markSecretKeySigned,
       "Failed to mark secret key as signed",
       Date.now(),
       gameAddress,
     );
+    if (result?.changes !== 1)
+      throw new Error("Commitment is no longer eligible for creation signing");
   }
 
   public markSecretKeyCommitted(gameAddress: string): void {
@@ -662,7 +666,7 @@ export class OracleDatabase {
               `DELETE FROM game_players
              WHERE game_address IN (
                SELECT game_address FROM secret_keys
-               WHERE committed_at IS NULL AND used = FALSE AND created_at < ?
+               WHERE committed_at IS NULL AND signed_at IS NULL AND used = FALSE AND created_at < ?
              )`,
             )
             .run(cutoffTime);
@@ -671,7 +675,7 @@ export class OracleDatabase {
               `DELETE FROM game_tracking
              WHERE status = ? AND game_address IN (
                SELECT game_address FROM secret_keys
-               WHERE committed_at IS NULL AND used = FALSE AND created_at < ?
+               WHERE committed_at IS NULL AND signed_at IS NULL AND used = FALSE AND created_at < ?
              )`,
             )
             .run(DEFAULT_STATUS, cutoffTime);
@@ -679,6 +683,7 @@ export class OracleDatabase {
             .query(
               `DELETE FROM secret_keys
              WHERE committed_at IS NULL
+               AND signed_at IS NULL
                AND used = FALSE
                AND created_at < ?
                AND game_address NOT IN (
@@ -933,6 +938,7 @@ export class OracleDatabase {
     errorMessage: string,
   ): void {
     const now = Date.now();
+    this.markSecretKeyCommitted(gameAddress);
     this.runStatement(SQL_STATEMENTS.updateGameStatus, errorMessage, status, now, now, gameAddress);
   }
 
