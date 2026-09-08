@@ -123,6 +123,8 @@ Configure via environment variables in `.env`:
 # Required: Solana network endpoints (JSON array or comma-separated list); the oracle walks
 # the ordered set automatically when it encounters transient RPC failures.
 SOLANA_NETWORK=["https://api.mainnet-beta.solana.com","https://rpc-backup.example.com"]
+# Optional: add rebate-address to Helius sendTransaction requests on every endpoint.
+HELIUS_REBATE_ADDRESS=
 
 # Keep 0.2.0 until the program upgrade; switch to 0.3.0 during migration.
 CONTRACT_VERSION=0.2.0
@@ -401,3 +403,5 @@ The Oracle works with Solana programs supporting multiple game types:
 The shared local-validator suite lives in the sibling `operations/integration` directory. Run `bun run test:integration --web` from `operations`; see its README for pinned toolchains, candidate protocol packages and optional manual GitHub runs. Normal CI does not run the combined system suite or require a cross-repository credential.
 
 `SOLANA_WS_ENDPOINT` optionally selects a WebSocket endpoint separately from `SOLANA_NETWORK`. `JUPITER_PRICE_URL` overrides the price endpoint for both signing policies and indexer pricing. The integration runner supplies local endpoints.
+
+When `HELIUS_REBATE_ADDRESS` is set, Oracle applies it to Helius transaction submissions, including completion and token onboarding. Each configured endpoint gets the same handling when selected. Reads, WebSocket subscriptions, and non-Helius providers are unchanged.

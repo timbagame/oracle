@@ -27,7 +27,19 @@ export type LatestBlockhash = Readonly<{
 }>;
 
 export function createRpc(endpoint: string): OracleRpc {
-  return createSolanaRpc(endpoint as `${string}://${string}`);
+  const rpc = createSolanaRpc(endpoint as `${string}://${string}`);
+  const rebate = process.env["HELIUS_REBATE_ADDRESS"]?.trim();
+  const url = new URL(endpoint);
+  if (!rebate || !/(^|\.)helius-rpc\.com$/i.test(url.hostname)) return rpc;
+  url.searchParams.set("rebate-address", rebate);
+  const submissionRpc = createSolanaRpc(url.toString() as `${string}://${string}`);
+  // Route only transaction submissions; reads and subscriptions keep their URL.
+  return new Proxy(rpc, {
+    get(target, property, receiver) {
+      if (property === "sendTransaction") return submissionRpc.sendTransaction;
+      return Reflect.get(target, property, receiver);
+    },
+  });
 }
 
 export function createRpcSubscriptions(endpoint: string): OracleRpcSubscriptions {
