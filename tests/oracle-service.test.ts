@@ -282,6 +282,22 @@ describe("OracleService", () => {
     );
   });
 
+  it("rejects creation signing after a completed game is requeued", async () => {
+    const service = testService;
+    service.cleanupOldRecords(-1);
+    const db = OracleDatabase.getInstance();
+    const { tokenMint, transaction } = await buildInitializeTransaction(service);
+    db.setTokenPolicy(tokenMint.toBase58(), true, "0");
+    const game = transaction.instructions[0]!.keys[0]!.pubkey.toBase58();
+    const payload = serializeUnsigned(transaction);
+    await expect(service.signGameTransaction(payload)).resolves.toEqual(expect.any(String));
+    await expect(service.signGameTransaction(payload)).resolves.toEqual(expect.any(String));
+    db.finalizeCompletedGame(game);
+    expect(service.requeueGame(game).success).toBe(true);
+    expect(db.getSecretKey(game)).not.toBeNull();
+    await expect(service.signGameTransaction(payload)).rejects.toThrow();
+  });
+
   it("rejects a v0.3 initialization with a substituted vault account", async () => {
     const service = testService;
     service.cleanupOldRecords(-1);

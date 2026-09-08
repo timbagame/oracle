@@ -602,9 +602,42 @@ describe("unsigned commitment cleanup", () => {
     const sqlite = (db as any).db;
     sqlite.query("UPDATE secret_keys SET created_at = 0").run();
 
-    expect(db.cleanupUnsignedCommitments(10)).toBe(2);
+    expect(db.cleanupUnsignedCommitments(10)).toBe(1);
     expect(db.getSecretKeyInfo(generated)).toBeNull();
-    expect(db.getSecretKeyInfo(signed)).toBeNull();
+    expect(db.getSecretKeyInfo(signed)).not.toBeNull();
     expect(db.getSecretKeyInfo(initialized)).not.toBeNull();
+  });
+});
+
+describe("creation signing retirement", () => {
+  it("allows retries but rejects initialized and recovered commitments", () => {
+    const db = OracleDatabase.getInstance();
+    const game = "signing-retirement";
+    db.saveSecretKey(game, "aa", "bb");
+    db.trackGame(game);
+    db.markSecretKeySigned(game);
+    db.markSecretKeySigned(game);
+    db.markSecretKeyCommitted(game);
+    expect(() => db.markSecretKeySigned(game)).toThrow();
+    db.finalizeCompletedGame(game);
+    db.reactivateSecretKey(game);
+    expect(db.getSecretKey(game)).not.toBeNull();
+    expect(() => db.markSecretKeySigned(game)).toThrow();
+  });
+  it("retires commitments finalized through events without requiring used=true", () => {
+    const db = OracleDatabase.getInstance();
+    for (const status of ["completed", "cancelled"]) {
+      const game = `event-retired-${status}`;
+      db.saveSecretKey(game, "aa", "bb");
+      db.trackGame(game);
+      if (status === "completed") db.markGameCompleted(game);
+      else db.markGameClosed(game);
+      db.reactivateSecretKey(game);
+      expect(() => db.markSecretKeySigned(game)).toThrow();
+    }
+  });
+  it("fails closed when cleanup removed a commitment before signing", () => {
+    const db = OracleDatabase.getInstance();
+    expect(() => db.markSecretKeySigned("missing-commitment")).toThrow();
   });
 });

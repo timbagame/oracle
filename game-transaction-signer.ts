@@ -310,7 +310,10 @@ export async function signGameTransactionWithPolicy(
         ),
       })
     : transaction;
+  // Reserve retention before asynchronous signing; cleanup must not remove this secret.
+  options.markCommitmentSigned(expectedGame);
   const signed = await partiallySignTransactionWithSigners([options.operator], transactionToSign);
+  // Recheck eligibility after signing in case finalization raced with the signature.
   options.markCommitmentSigned(expectedGame);
   return getBase64EncodedWireTransaction(signed);
 }
