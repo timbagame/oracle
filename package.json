@@ -16,7 +16,7 @@
     "@solana-program/system": "0.14.1",
     "@solana-program/token": "0.16.1",
     "@solana/kit": "8.2.0",
-    "@timbagame/protocol": "0.12.0",
+    "@timbagame/protocol": "0.12.1",
     "viem": "2.56.3",
     "zod": "4.5.4"
   },
