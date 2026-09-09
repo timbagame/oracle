@@ -84,6 +84,21 @@ export class EvmStore {
       .all(game?.toLowerCase() ?? null)
       .map((row) => JSON.parse(row.data) as unknown);
   }
+  listedGameIds(offset: number, player?: string) {
+    return this.db
+      .query<{ id: Hex }, [string | null, number]>(
+        `
+      SELECT json_extract(c.data, '$.event.reference.gameId') AS id
+      FROM events c WHERE json_extract(c.data, '$.event.kind')='created'
+      AND ((?1 IS NULL AND json_extract(c.data, '$.event.isPrivate')=0)
+        OR (?1 IS NOT NULL AND (lower(json_extract(c.data, '$.event.creator'))=?1 OR EXISTS (
+          SELECT 1 FROM events j WHERE json_extract(j.data, '$.event.reference.gameId')=json_extract(c.data, '$.event.reference.gameId') AND lower(json_extract(j.data, '$.event.player'))=?1))))
+      ORDER BY c.block DESC, c.log_index DESC LIMIT 21 OFFSET ?2
+    `,
+      )
+      .all(player?.toLowerCase() ?? null, offset)
+      .map((row) => row.id);
+  }
   close() {
     this.db.close();
   }

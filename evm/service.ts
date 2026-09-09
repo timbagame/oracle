@@ -1,5 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { z } from "zod";
+import {
+  evmIntentSchema as intentSchema,
+  evmPrivateJoinSchema as privateJoinSchema,
+} from "@timbagame/protocol/evm";
 import {
   BaseError,
   ContractFunctionRevertedError,
@@ -24,37 +27,14 @@ import {
   decodeEvmGameEvent,
   type CreateGameRequest,
 } from "@timbagame/protocol/evm/v0.1.0";
-import { gameLifecycle, observeEvmGame } from "@timbagame/protocol/games";
-import { addressSchema, uintSchema, tokenPolicy, type EvmConfig } from "./config.ts";
+import { gameLifecycle, observeEvmGame, transactionProgress } from "@timbagame/protocol/games";
+import { tokenPolicy, type EvmConfig } from "./config.ts";
 import { EvmStore, json } from "./store.ts";
 
-const hexSignature = z
-  .string()
-  .regex(/^0x(?:[a-fA-F0-9]{2})+$/)
-  .max(8194)
-  .transform((value) => value as Hex);
-export const intentSchema = z.strictObject({
-  creator: addressSchema,
-  token: addressSchema,
-  gameType: z.union([z.literal(0), z.literal(1)]),
-  amount: uintSchema,
-  minPlayers: z.number().int().min(1).max(100),
-  maxPlayers: z.number().int().min(1).max(100),
-  timeout: z.number().int().min(300).max(86400),
-  isPrivate: z.boolean(),
-  nonce: uintSchema,
-  deadline: uintSchema,
-  proof: hexSignature,
-});
-export const privateJoinSchema = z.strictObject({
-  gameId: z
-    .string()
-    .regex(/^0x[0-9a-fA-F]{64}$/)
-    .transform((v) => v as Hex),
-  player: addressSchema,
-  deadline: uintSchema,
-  proof: hexSignature,
-});
+export {
+  evmIntentSchema as intentSchema,
+  evmPrivateJoinSchema as privateJoinSchema,
+} from "@timbagame/protocol/evm";
 export class EvmService {
   readonly publicClient;
   readonly wallet;
@@ -197,7 +177,15 @@ export class EvmService {
           });
         if (receipt) {
           const head = await this.publicClient.getBlockNumber({ cacheTime: 0 });
-          if (head - receipt.blockNumber + 1n >= BigInt(this.config.confirmations))
+          if (
+            transactionProgress(
+              {
+                success: receipt.status === "success",
+                confirmations: Number(head - receipt.blockNumber + 1n),
+              },
+              this.config.confirmations,
+            ) !== "submitted"
+          )
             this.store.clearPending();
         } else {
           // Preserve the exact signed transaction across transport failures and process restarts.

@@ -1,3 +1,4 @@
+import { timbaAbi } from "@timbagame/protocol/evm/v0.1.0";
 import { hasValidBearerToken, MAX_REQUEST_BODY_BYTES } from "../api-security.ts";
 import { json } from "./store.ts";
 import type { EvmService } from "./service.ts";
@@ -22,7 +23,12 @@ export function createEvmRouter(service: EvmService, apiToken: string) {
     const path = new URL(request.url).pathname;
     if (request.method === "GET" && path === "/evm/config") {
       const { chainId, address, version, tokens, confirmations } = service.config;
-      return reply({ chainId, address, version, tokens, confirmations });
+      const limits = await service.publicClient.readContract({
+        address,
+        abi: timbaAbi,
+        functionName: "config",
+      });
+      return reply({ chainId, address, version, tokens, confirmations, buffer: limits[1] });
     }
     if (request.method === "GET" && path === "/evm/health") {
       const healthy =
@@ -39,6 +45,26 @@ export function createEvmRouter(service: EvmService, apiToken: string) {
     }
     if (request.method === "GET" && path === "/evm/events")
       return reply({ events: service.store.events() });
+    if (request.method === "GET" && path === "/evm/games") {
+      const query = new URL(request.url).searchParams;
+      const offsetText = query.get("offset") ?? "0";
+      const player = query.get("player") ?? undefined;
+      if (
+        !/^(0|[1-9][0-9]{0,6})$/.test(offsetText) ||
+        (player && !/^0x[0-9a-fA-F]{40}$/.test(player))
+      )
+        return reply({ error: "Invalid query" }, 400);
+      const offset = Number(offsetText);
+      const ids = service.store.listedGameIds(offset, player);
+      const games = await Promise.all(
+        ids.slice(0, 20).map(async (id) => ({
+          id,
+          game: await service.game(id),
+          events: service.store.events(id),
+        })),
+      );
+      return reply({ games, nextOffset: ids.length > 20 ? offset + 20 : null });
+    }
     const game = /^\/evm\/games\/(0x[0-9a-fA-F]{64})$/.exec(path);
     if (request.method === "GET" && game)
       return reply({

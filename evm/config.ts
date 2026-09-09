@@ -2,15 +2,8 @@ import { readFileSync, statSync } from "node:fs";
 import { z } from "zod";
 import { getAddress, type Address } from "viem";
 
-export const addressSchema = z
-  .string()
-  .regex(/^0x[0-9a-fA-F]{40}$/)
-  .transform((value) => getAddress(value));
-export const uintSchema = z
-  .string()
-  .regex(/^(0|[1-9][0-9]*)$/)
-  .max(78)
-  .refine((value) => BigInt(value) < 2n ** 256n);
+import { addressSchema, uintSchema, evmMetadataSchema } from "@timbagame/protocol/evm";
+export { addressSchema, uintSchema } from "@timbagame/protocol/evm";
 export const configSchema = z.strictObject({
   chainId: z.number().int().positive().safe(),
   address: addressSchema,
@@ -24,16 +17,7 @@ export const configSchema = z.strictObject({
   apiTokenFile: z.string().min(1),
   port: z.number().int().min(1).max(65535).default(3002),
   // Token policy is deliberately off chain. Never authorize arbitrary contracts.
-  tokens: z
-    .array(
-      z.strictObject({
-        address: addressSchema,
-        symbol: z.string().regex(/^[A-Za-z0-9_-]{1,16}$/),
-        decimals: z.number().int().min(0).max(36),
-        minimumAmount: uintSchema.refine((value) => BigInt(value) > 0n),
-      }),
-    )
-    .min(1),
+  tokens: evmMetadataSchema.shape.tokens,
 });
 export type EvmConfig = z.output<typeof configSchema>;
 export function loadConfig(path: string): EvmConfig {

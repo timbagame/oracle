@@ -86,3 +86,26 @@ test("all EVM API routes require bearer auth and body limits cannot be bypassed"
     ).status,
   ).toBe(400);
 });
+
+test("indexed game discovery excludes private games from public lists", () => {
+  const store = new EvmStore(":memory:", "test");
+  // Use the real event envelope; only indexed games can be discovered.
+  const insert = (block: number, event: unknown) =>
+    store.db
+      .query("INSERT INTO events VALUES (?,?,?,?)")
+      .run(block, `hash${block}`, 0, JSON.stringify({ event }));
+  insert(1, {
+    kind: "created",
+    reference: { gameId: "0x1111" },
+    creator: "alice",
+    isPrivate: false,
+  });
+  insert(2, { kind: "created", reference: { gameId: "0x2222" }, creator: "bob", isPrivate: true });
+  insert(3, { kind: "joined", reference: { gameId: "0x2222" }, player: "alice" });
+  expect(store.listedGameIds(0)).toEqual(["0x1111"]);
+  expect(store.listedGameIds(0, "alice")).toEqual(["0x2222", "0x1111"]);
+  expect(store.listedGameIds(0, "stranger")).toEqual([]);
+  store.resetIndex();
+  expect(store.listedGameIds(0, "alice")).toEqual([]);
+  store.close();
+});

@@ -30,3 +30,17 @@ bytes are persisted before sending. Completion retries preserve bytes across
 restarts; no automatic fee replacement is performed. Back up this database,
 restrict its directory, and operate only one writer per deployment/operator.
 Use the Operations EVM acceptance test and rollout guide before enabling stakes.
+
+## Shared contracts and discovery
+
+API schemas, authorization input validation and caller action policy live in
+`@timbagame/protocol/evm`; lifecycle decisions use `protocol/games`. This service
+keeps its EVM-specific operator wallet, event index and durable signed transactions.
+
+`GET /evm/config` includes the current recovery buffer. `GET /evm/games` lists
+indexed public games in pages of 20 (`offset`, response `nextOffset`). The optional
+`player` address selects games that address created or joined, including private
+games. These are public on-chain records, not confidential wallet data. Draft
+authorizations are never listed. All routes still require the API bearer token.
+Reorg rebuilding also rebuilds the discovery source; no second game registry is
+introduced.
