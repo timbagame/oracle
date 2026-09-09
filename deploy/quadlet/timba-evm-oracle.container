@@ -1,0 +1,26 @@
+[Unit]
+Description=Timba EVM oracle (opt-in)
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=ghcr.io/timbagame/oracle:main
+ContainerName=evm-oracle
+AutoUpdate=registry
+Network=timba.network
+Environment=EVM_CONFIG_FILE=/config/evm.json
+Volume=%h/timba/evm/oracle.json:/config/evm.json:ro,Z
+Volume=%h/timba/evm/secrets/operator:/run/secrets/evm_operator:ro,Z
+Volume=%h/timba/evm/secrets/api-token:/run/secrets/evm_api_token:ro,z
+Volume=%h/timba/evm/oracle-data:/data:Z
+Exec=bun run start:evm
+NoNewPrivileges=true
+DropCapability=all
+PidsLimit=128
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+TimeoutStopSec=90
+
+# Install explicitly after configuring and validating a deployment.

@@ -9,13 +9,15 @@
     "format:check": "prettier . --check",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
-    "typecheck": "bun x tsc -p tsconfig.json --noEmit"
+    "typecheck": "bun x tsc -p tsconfig.json --noEmit",
+    "start:evm": "bun run evm/main.ts"
   },
   "dependencies": {
     "@solana-program/system": "0.14.1",
     "@solana-program/token": "0.16.1",
     "@solana/kit": "8.2.0",
-    "@timbagame/protocol": "0.10.0",
+    "@timbagame/protocol": "0.12.1",
+    "viem": "2.56.3",
     "zod": "4.5.4"
   },
   "devDependencies": {

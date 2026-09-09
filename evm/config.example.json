@@ -1,0 +1,21 @@
+{
+  "chainId": 31337,
+  "address": "0x1111111111111111111111111111111111111111",
+  "version": "0.1.0",
+  "rpcUrls": ["http://127.0.0.1:8545"],
+  "startBlock": "0",
+  "confirmations": 2,
+  "pollMs": 2000,
+  "database": "/data/evm.sqlite",
+  "operatorKeyFile": "/run/secrets/evm_operator",
+  "apiTokenFile": "/run/secrets/evm_api_token",
+  "port": 3002,
+  "tokens": [
+    {
+      "address": "0x2222222222222222222222222222222222222222",
+      "symbol": "TEST",
+      "decimals": 18,
+      "minimumAmount": "1000000000000000000"
+    }
+  ]
+}
