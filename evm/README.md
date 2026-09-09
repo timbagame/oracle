@@ -1,7 +1,7 @@
 # EVM Oracle
 
 `EVM_CONFIG_FILE=/path/config.json bun run start:evm` starts a separate,
-explicitly configured service using protocol 0.11.0's EVM ABI and algorithms.
+explicitly configured service using protocol 0.12.1's EVM ABI and algorithms.
 It does not load or alter the Solana service database or operator key.
 
 Every route requires the configured bearer token. Request bodies are limited to
@@ -24,6 +24,8 @@ token metadata are returned by `/evm/config`; RPC URLs and secrets remain privat
 - `GET /evm/events`: up to 100 most recent canonical events, each with transaction,
   log index, block hash/number and normalized protocol event.
 - `GET /evm/health`: process status and the pending settlement transaction hash.
+  A failed rebroadcast returns HTTP 503 with a fixed, sanitized error; signed
+  bytes remain pending. Health recovers after a successful cycle.
 
 Secrets are written durably before an authorization response. Signed settlement
 bytes are persisted before sending. Completion retries preserve bytes across

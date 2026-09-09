@@ -38,6 +38,9 @@ export function createEvmRouter(service: EvmService, apiToken: string) {
         {
           status: healthy ? "healthy" : "degraded",
           lastCycleAt: service.lastCycleAt,
+          error: service.lastCycleFailed
+            ? "EVM oracle cycle failed; durable work retained for retry"
+            : null,
           pendingTransaction: service.store.pending()?.hash ?? null,
         },
         healthy ? 200 : 503,

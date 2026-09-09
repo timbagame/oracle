@@ -189,9 +189,8 @@ export class EvmService {
             this.store.clearPending();
         } else {
           // Preserve the exact signed transaction across transport failures and process restarts.
-          await this.publicClient
-            .sendRawTransaction({ serializedTransaction: pending.raw })
-            .catch(() => undefined);
+          // A rejected rebroadcast must degrade health while retaining the journal.
+          await this.publicClient.sendRawTransaction({ serializedTransaction: pending.raw });
         }
         return;
       }

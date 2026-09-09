@@ -109,3 +109,69 @@ test("indexed game discovery excludes private games from public lists", () => {
   expect(store.listedGameIds(0, "alice")).toEqual([]);
   store.close();
 });
+
+test("failed settlement rebroadcast degrades health without discarding pending bytes", async () => {
+  const { spyOn } = await import("bun:test");
+  const { TransactionReceiptNotFoundError } = await import("viem");
+  const { EvmService } = await import("../evm/service.ts");
+  const store = new EvmStore(":memory:", "health-test");
+  const service = new EvmService(
+    {
+      chainId: 31337,
+      address: `0x${"11".repeat(20)}`,
+      version: "0.1.0",
+      rpcUrls: ["http://127.0.0.1:1"],
+      startBlock: "0",
+      confirmations: 2,
+      pollMs: 250,
+      database: ":memory:",
+      operatorKeyFile: "unused",
+      apiTokenFile: "unused",
+      port: 3002,
+      tokens: [
+        { address: `0x${"22".repeat(20)}`, symbol: "TEST", decimals: 18, minimumAmount: "1" },
+      ],
+    },
+    `0x${"1".padStart(64, "0")}`,
+    store,
+  );
+  const pending = { game: id, raw: "0xab" as const, hash: id };
+  store.submit(pending);
+  const deployment = spyOn(service, "validateDeployment").mockResolvedValue(undefined);
+  const index = spyOn(service, "index").mockResolvedValue(undefined);
+  const receipt = spyOn(service.publicClient, "getTransactionReceipt").mockRejectedValue(
+    new TransactionReceiptNotFoundError({ hash: id }),
+  );
+  const send = spyOn(service.publicClient, "sendRawTransaction").mockRejectedValue(
+    new Error("secret RPC URL"),
+  );
+  const router = createEvmRouter(service, "test-token");
+  const health = () =>
+    router(
+      new Request("http://localhost/evm/health", {
+        headers: { authorization: "Bearer test-token" },
+      }),
+    );
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(service.tick()).rejects.toThrow();
+      expect(store.pending()).toEqual(pending);
+      const response = await health();
+      expect(response.status).toBe(503);
+      const body = await response.text();
+      expect(body).toContain("durable work retained");
+      expect(body).not.toContain("secret RPC URL");
+    }
+    send.mockResolvedValue(id);
+    await service.tick();
+    expect(store.pending()).toEqual(pending);
+    expect((await health()).status).toBe(200);
+    expect(send).toHaveBeenLastCalledWith({ serializedTransaction: pending.raw });
+  } finally {
+    deployment.mockRestore();
+    index.mockRestore();
+    receipt.mockRestore();
+    send.mockRestore();
+    store.close();
+  }
+});
