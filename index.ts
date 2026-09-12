@@ -40,6 +40,7 @@ import {
 } from "@timbagame/protocol/oracle";
 import { IndexerDatabase } from "./indexer/database.ts";
 import { PublicIndexer } from "./indexer/service.ts";
+import { createWebGameApi } from "./web-api/api.ts";
 import { createIndexerApi } from "./indexer/api.ts";
 
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
@@ -766,6 +767,7 @@ export interface RouterSecurityOptions {
   apiToken?: string | null;
   checkRateLimit?: (path: string) => RateLimitResult;
   enableAdminRoutesForTesting?: boolean;
+  handleWebGameRequest?: (request: Request) => Promise<Response>;
   handleIndexerRequest?: (request: Request) => Promise<Response>;
 }
 
@@ -785,7 +787,11 @@ export function buildFetchRouter(
     }
 
     const isIndexerRoute = path === "/indexer" || path.startsWith("/indexer/");
-    if ((PROTECTED_ROUTES.has(path) || isIndexerRoute) && security.apiToken !== undefined) {
+    const isWebRoute = path.startsWith("/web/");
+    if (
+      (PROTECTED_ROUTES.has(path) || isIndexerRoute || isWebRoute) &&
+      security.apiToken !== undefined
+    ) {
       if (
         !security.apiToken ||
         !hasValidBearerToken(request.headers.get("authorization"), security.apiToken)
@@ -802,6 +808,8 @@ export function buildFetchRouter(
     }
 
     try {
+      if (isWebRoute && security.handleWebGameRequest)
+        return await security.handleWebGameRequest(request);
       if (isIndexerRoute && security.handleIndexerRequest) {
         return await security.handleIndexerRequest(request);
       }
@@ -870,9 +878,12 @@ if (!IS_TEST_ENV) {
   const handleIndexerRequest = createIndexerApi(indexerDatabase, config.jupiterApiKey);
   const oracleApi = buildProductionOracleApi(realOracle);
   const handlers = buildHandlers(oracleApi);
+  const webGameApi = createWebGameApi(realOracle, indexerDatabase);
+  const verificationDatabase = indexerDatabase;
   const fetchRouter = buildFetchRouter(handlers, {
     apiToken: config.apiToken,
     handleIndexerRequest,
+    handleWebGameRequest: webGameApi,
   });
   server = Bun.serve({
     port,
@@ -926,7 +937,26 @@ if (!IS_TEST_ENV) {
       }
     };
 
-    backgroundLoop = Promise.all([runBackgroundLoop(), publicIndexer.run(signal)])
+    const runVerificationJobs = async () => {
+      while (!signal.aborted) {
+        const job = verificationDatabase.nextVerificationJob();
+        if (job) {
+          try {
+            await webGameApi.verify(job.signature);
+            if (!signal.aborted) verificationDatabase.finishVerificationJob(job.signature);
+          } catch {
+            if (!signal.aborted)
+              verificationDatabase.retryVerificationJob(job.signature, job.attempts);
+          }
+        }
+        await delay(10_000, { signal });
+      }
+    };
+    backgroundLoop = Promise.all([
+      runBackgroundLoop(),
+      publicIndexer.run(signal),
+      runVerificationJobs(),
+    ])
       .then(() => undefined)
       .catch((error) => {
         if (!signal.aborted) {
