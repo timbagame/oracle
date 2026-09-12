@@ -1,3 +1,5 @@
+import { SolanaSignatureSchema } from "@timbagame/protocol/common";
+import { FinalizedVerifiedGameSchema } from "@timbagame/protocol/web";
 import { createHash } from "node:crypto";
 import { getBase58Encoder, signature, type Address } from "@solana/kit";
 import {
@@ -13,7 +15,7 @@ import { getTokenSymbol } from "./token-utils.ts";
 import { getGameTokenMetadata } from "./game-token-config.ts";
 import { tokensToAmount } from "./amounts.ts";
 
-export const isValidSignature = (value: string) => /^[1-9A-HJ-NP-Za-km-z]{87,88}$/.test(value);
+export const isValidSignature = (value: string) => SolanaSignatureSchema.safeParse(value).success;
 const completeDiscriminator = Buffer.from([105, 69, 184, 5, 143, 182, 92, 132]);
 type Event = NonNullable<ReturnType<typeof decodeProgramEvent>>;
 
@@ -172,7 +174,7 @@ export async function verifyGameTransaction(
   );
   if (!metadata) throw new Error("Token metadata unavailable");
   const decimals = metadata.decimals;
-  return {
+  return FinalizedVerifiedGameSchema.parse({
     gameKey: game.gameKey,
     signature: value,
     timestamp: Number(game.timestamp),
@@ -210,5 +212,5 @@ export async function verifyGameTransaction(
       formula: `u64_le_window(SHA-256(secret || ${lastSlot}_le)) % ${game.ticketsCount} = ${result.winnerIndex}`,
     },
     explorerUrl: `https://solscan.io/tx/${value}`,
-  };
+  });
 }

@@ -421,7 +421,8 @@ and history verification off the Cloudflare Worker:
 
 Web retains the public endpoint URLs and the private VPC transport. Deploy this
 Oracle change before merging/deploying the dependent Web PR. Both repositories use
-the existing Protocol 0.12.1 builders and request schemas; no package release is needed.
+Protocol 0.13.0 for shared Solana plans and finalized proof schemas. Publish the
+protocol release before updating the consumer pins; then deploy Oracle before Web.
 
 Verification records and background jobs live in `indexer.sqlite`. Newly indexed
 completions queue a backfill after one minute, with one background job at a time and
