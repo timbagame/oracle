@@ -5,6 +5,11 @@ export const MAX_REQUEST_BODY_BYTES = 16 * 1024;
 const WINDOW_MS = 1_000;
 const INDEXER_ROUTE_LIMIT = 100;
 const ROUTE_LIMITS: Readonly<Record<string, number>> = {
+  "/web/verification": 10,
+  "/web/games/prepare": 10,
+  "/web/games/submit": 10,
+  "/web/games/read": 100,
+  "/web/config": 20,
   "/generate-hash": 20,
   "/sign-game-transaction": 20,
   "/games/complete-now": 50,
@@ -33,6 +38,12 @@ export function createRouteRateLimiter(
   const windows = new Map<string, { startedAt: number; count: number }>();
 
   return (path: string): RateLimitResult => {
+    if (path.startsWith("/web/verification/")) path = "/web/verification";
+    else if (
+      path.startsWith("/web/games/") &&
+      !["/web/games/prepare", "/web/games/submit"].includes(path)
+    )
+      path = "/web/games/read";
     const limit =
       ROUTE_LIMITS[path] ??
       (path === "/indexer" || path.startsWith("/indexer/") ? INDEXER_ROUTE_LIMIT : undefined);

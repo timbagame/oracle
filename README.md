@@ -405,3 +405,35 @@ The shared local-validator suite lives in the sibling `operations/integration` d
 `SOLANA_WS_ENDPOINT` optionally selects a WebSocket endpoint separately from `SOLANA_NETWORK`. `JUPITER_PRICE_URL` overrides the price endpoint for both signing policies and indexer pricing. The integration runner supplies local endpoints.
 
 When `HELIUS_REBATE_ADDRESS` is set, Oracle applies it to Helius transaction submissions, including completion and token onboarding. Each configured endpoint gets the same handling when selected. Reads, WebSocket subscriptions, and non-Helius providers are unchanged.
+
+## Web blockchain API
+
+The authenticated `/web/*` routes move blockchain RPC, transaction construction,
+and history verification off the Cloudflare Worker:
+
+- `GET /web/config`: cached token configuration and prices.
+- `POST /web/games/prepare`: validates terms/policy and returns an unsigned transaction.
+  Requires `X-Timba-Contract-Version` matching `CONTRACT_VERSION`.
+- `POST /web/games/submit`: validates and co-signs the user's transaction using the
+  existing signing policy, then broadcasts the exact signed bytes.
+- `GET /web/games/:address?fresh=1`: reads and decodes an active account.
+- `GET /web/verification/:signature`: returns a persisted finalized verification record.
+
+Web retains the public endpoint URLs and the private VPC transport. Deploy this
+Oracle change before merging/deploying the dependent Web PR. Both repositories use
+the existing Protocol 0.12.1 builders and request schemas; no package release is needed.
+
+Verification records and background jobs live in `indexer.sqlite`. Newly indexed
+completions queue a backfill after one minute, with one background job at a time and
+exponential retry delays. Requests can backfill older records on demand. At most two
+reconstructions run concurrently across background and HTTP work; duplicate reads
+share the same work. No task is added to the critical payout/completion queue.
+
+Reconstruction requires finalized, successful transactions, trusted program events,
+initialization history, a valid commitment/game PDA, complete ticket replay, and a
+matching calculated winner. Transactions sharing a slot are ordered using the block's
+signature list, and events retain their log order. History is bounded to 2,000 signatures
+and a two-minute RPC deadline; missing/pruned history or an exceeded budget returns
+503 without storing an incomplete result. Failures and live account data are never
+stored as immutable results. Public records contain only the on-chain revealed secret,
+not unpublished oracle secrets, and include chain transaction references.

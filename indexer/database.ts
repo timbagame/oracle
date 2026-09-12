@@ -17,6 +17,8 @@ const BACKFILL_NAME = "game-lifecycle-v3-player-history";
 const DEFAULT_TOKEN_MINT = "F3A1baCgv4TF79TSjdMTvpMDtNv8DJvHZwNc9DG8pump";
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS verification_jobs (signature TEXT PRIMARY KEY, next_attempt INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS verified_games (cache_key TEXT PRIMARY KEY, payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS games (
   signature TEXT PRIMARY KEY, game_key TEXT NOT NULL, winner TEXT NOT NULL,
   winner_amount INTEGER NOT NULL, fee_amount INTEGER NOT NULL,
@@ -147,6 +149,50 @@ function booleanInteger(value: unknown): 0 | 1 {
 export class IndexerDatabase {
   private readonly sqlite: Database;
 
+  queueVerification(signature: string): void {
+    this.sqlite
+      .query("INSERT OR IGNORE INTO verification_jobs(signature,next_attempt) VALUES (?,?)")
+      .run(signature, Date.now() + 60_000);
+  }
+
+  nextVerificationJob(): { signature: string; attempts: number } | null {
+    return this.sqlite
+      .query(
+        "SELECT signature,attempts FROM verification_jobs WHERE next_attempt<=? ORDER BY next_attempt LIMIT 1",
+      )
+      .get(Date.now()) as { signature: string; attempts: number } | null;
+  }
+
+  finishVerificationJob(signature: string): void {
+    this.sqlite.query("DELETE FROM verification_jobs WHERE signature=?").run(signature);
+  }
+
+  retryVerificationJob(signature: string, attempts: number): void {
+    this.sqlite
+      .query("UPDATE verification_jobs SET next_attempt=?,attempts=? WHERE signature=?")
+      .run(
+        Date.now() + Math.min(86_400_000, 60_000 * 2 ** Math.min(attempts, 11)),
+        attempts + 1,
+        signature,
+      );
+  }
+
+  getVerifiedGame(key: string): string | null {
+    return (
+      (
+        this.sqlite.query("SELECT payload FROM verified_games WHERE cache_key = ?").get(key) as {
+          payload: string;
+        } | null
+      )?.payload ?? null
+    );
+  }
+
+  saveVerifiedGame(key: string, payload: string): void {
+    this.sqlite
+      .query("INSERT OR REPLACE INTO verified_games (cache_key, payload) VALUES (?, ?)")
+      .run(key, payload);
+  }
+
   constructor(file: string) {
     this.sqlite = new Database(file, { create: true, strict: true });
     this.sqlite.exec("PRAGMA journal_mode = WAL");
@@ -253,6 +299,7 @@ export class IndexerDatabase {
       for (const event of events.membership) this.applyMembership(event);
       for (const event of events.completed) {
         changed += this.applyCompleted(event) ? 1 : 0;
+        this.queueVerification(event.signature);
       }
       for (const event of events.closed) {
         this.applyClosed(event);
