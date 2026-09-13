@@ -52,9 +52,9 @@ jobs:
         run: bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage
 
       - name: Test coverage gate
-        run: python3 scripts/test_coverage_gate.py
+        run: bun test scripts/check-coverage.test.ts
       - name: Enforce 95% line coverage
-        run: python3 scripts/check-coverage.py coverage-scope.json coverage/lcov.info
+        run: bun run scripts/check-coverage.ts coverage-scope.json coverage/lcov.info
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
