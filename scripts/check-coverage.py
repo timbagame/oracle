@@ -1,10 +1,12 @@
-"""Fail closed on missing source reports or weighted line coverage below 85%."""
+"""Fail closed on missing source reports or weighted line coverage below 95%."""
 import argparse
 import fnmatch
 import json
 from pathlib import Path
 import subprocess
 import sys
+
+THRESHOLD = 95
 
 
 def check(config, reports, root):
@@ -52,8 +54,8 @@ def check(config, reports, root):
     missing = sorted(sources - seen)
     covered = sum(lines.values())
     total = len(lines)
-    passed = not missing and covered * 100 >= 85 * total
-    result = {'threshold': 85, 'covered': covered, 'total': total,
+    passed = not missing and covered * 100 >= THRESHOLD * total
+    result = {'threshold': THRESHOLD, 'covered': covered, 'total': total,
               'percent': round(covered * 100 / total, 2), 'missing': missing, 'passed': passed}
     print(json.dumps(result, indent=2))
     if missing:

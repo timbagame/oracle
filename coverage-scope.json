@@ -1,12 +1,17 @@
 {
   "roots": [
-    "web-api",
+    "oracle-completion-manager.ts",
+    "oracle-event-processor.ts",
+    "oracle-scan-runner.ts",
+    "registry-sync-manager.ts",
+    "transaction-submitter.ts",
+    "token-price.ts",
+    "rpc-endpoints.ts",
+    "player-registry-utils.ts",
     "database.ts",
-    "oracle-service.ts",
-    "solana-utils.ts",
     "player-registry-sync.ts",
-    "game-transaction-signer.ts",
-    "game-type.ts"
+    "solana-utils.ts",
+    "game-transaction-signer.ts"
   ],
   "extensions": [".ts"],
   "exclude": [
@@ -16,13 +21,6 @@
     "*.test.ts",
     "*.spec.ts",
     "*/tests/*",
-    "*/fixtures/*",
-    "indexer/types.ts",
-    "types/contract.ts",
-    "types/timba.ts",
-    "web-api/connection.ts",
-    "web-api/types.ts",
-    "web-api/verify-types.ts",
-    "web-api/wsol.ts"
+    "*/fixtures/*"
   ]
 }

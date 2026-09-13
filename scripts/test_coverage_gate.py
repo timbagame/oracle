@@ -22,9 +22,9 @@ class CoverageGateTests(unittest.TestCase):
                 path = root / name
                 path.write_text('SF:src/a.ts\n' + ''.join(f'DA:{n},{int(n in hits)}\n' for n in range(1, 101)) + 'end_of_record\n')
                 return path
-            low = report('low.info', range(1, 85))
-            exact = report('exact.info', range(1, 86))
-            extra = report('extra.info', [85])
+            low = report('low.info', range(1, 95))
+            exact = report('exact.info', range(1, 96))
+            extra = report('extra.info', [95])
             self.assertFalse(gate.check(config, [low], root))
             self.assertTrue(gate.check(config, [exact], root))
             self.assertTrue(gate.check(config, [low, extra], root))
