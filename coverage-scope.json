@@ -1,5 +1,13 @@
 {
-  "roots": ["."],
+  "roots": [
+    "web-api",
+    "database.ts",
+    "oracle-service.ts",
+    "solana-utils.ts",
+    "player-registry-sync.ts",
+    "game-transaction-signer.ts",
+    "game-type.ts"
+  ],
   "extensions": [".ts"],
   "exclude": [
     "tests/*",
