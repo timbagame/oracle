@@ -1,0 +1,26 @@
+{
+  "roots": [
+    "oracle-completion-manager.ts",
+    "oracle-event-processor.ts",
+    "oracle-scan-runner.ts",
+    "registry-sync-manager.ts",
+    "transaction-submitter.ts",
+    "token-price.ts",
+    "rpc-endpoints.ts",
+    "player-registry-utils.ts",
+    "database.ts",
+    "player-registry-sync.ts",
+    "solana-utils.ts",
+    "game-transaction-signer.ts"
+  ],
+  "extensions": [".ts"],
+  "exclude": [
+    "tests/*",
+    "scripts/*",
+    "*.d.ts",
+    "*.test.ts",
+    "*.spec.ts",
+    "*/tests/*",
+    "*/fixtures/*"
+  ]
+}
