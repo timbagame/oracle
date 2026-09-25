@@ -1,7 +1,7 @@
 # EVM Oracle
 
 `EVM_CONFIG_FILE=/path/config.json bun run start:evm` starts a separate,
-explicitly configured service using protocol 0.13.0's EVM ABI and algorithms.
+explicitly configured service using protocol 0.14.1's EVM ABI and algorithms.
 It does not load or alter the Solana service database or operator key.
 
 Every route requires the configured bearer token. Request bodies are limited to

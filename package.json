@@ -13,12 +13,12 @@
     "start:evm": "bun run evm/main.ts"
   },
   "dependencies": {
-    "@solana-program/system": "0.14.1",
-    "@solana-program/token": "0.16.1",
+    "@solana-program/system": "0.15.0",
+    "@solana-program/token": "0.17.0",
     "@solana/kit": "8.3.0",
-    "@timbagame/protocol": "0.13.0",
-    "viem": "2.56.3",
-    "zod": "4.5.4"
+    "@timbagame/protocol": "0.14.1",
+    "viem": "2.56.9",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
