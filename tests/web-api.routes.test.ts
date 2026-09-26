@@ -18,7 +18,7 @@ import {
 import { getGameEncoder as getGameEncoderV030 } from "@timbagame/protocol/contracts/v0.3.0/kit";
 import { createWebGameApi } from "../web-api/api.ts";
 import { PROGRAM_ID, getGameTokenPDA } from "../web-api/program.ts";
-import { contractVersion } from "../web-api/contract-version.ts";
+import { contractCapabilities, contractVersion } from "../web-api/contract-version.ts";
 import { TOKEN_PROGRAM_ID } from "../web-api/token-program.ts";
 import { TOKEN_SYMBOLS, USDC_MINT } from "../web-api/token-utils.ts";
 import type { OracleRpc } from "../solana-kit.ts";
@@ -168,6 +168,18 @@ function freezeClock(start: number) {
   };
 }
 
+/**
+ * The contract generation is fixed when the module loads. Deployments without per-token game
+ * accounts (v0.3) take creation minimums from the oracle's token policy instead.
+ */
+function useOracleTokenPolicies() {
+  const previous = contractCapabilities.gameTokenAccount;
+  (contractCapabilities as { gameTokenAccount: boolean }).gameTokenAccount = false;
+  restores.push(() => {
+    (contractCapabilities as { gameTokenAccount: boolean }).gameTokenAccount = previous;
+  });
+}
+
 /** Lets background work (PDA hashing, RPC doubles) settle without a timed sleep. */
 async function settle(done: () => boolean = () => false, ticks = 50): Promise<void> {
   for (let index = 0; index < ticks && !done(); index++) {
@@ -268,6 +280,41 @@ describe("web game API token config", () => {
 
     expect(stale.status).toBe(200);
     expect(await stale.json()).toEqual(first);
+  });
+});
+
+describe("web game API token config from oracle policies", () => {
+  test("lists tokens with the minimums from the oracle token policy", async () => {
+    useOracleTokenPolicies();
+    const { rpc, calls } = rpcFor(await tokenChain());
+    let policyReads = 0;
+    const handler = createApi(rpc, {
+      getTokenPolicies: async () => {
+        policyReads += 1;
+        return [
+          {
+            mint: USDC_MINT,
+            enabled: true,
+            minimumAmountRaw: "2500",
+            acceptedMinimumAmountRaw: "2400",
+            revision: 3,
+            effectiveAt: "2026-01-01T00:00:00.000Z",
+          },
+        ];
+      },
+    });
+
+    const response = await handler(new Request("http://oracle/web/config"));
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      tokens: Array<{ mint: string; minimumAmountRaw: string; enabled: boolean }>;
+    };
+    expect(body.tokens).toEqual([
+      expect.objectContaining({ mint: USDC_MINT, minimumAmountRaw: "2500", enabled: true }),
+    ]);
+    expect(policyReads).toBe(1);
+    expect(calls).not.toContain("getProgramAccounts");
   });
 });
 
@@ -453,6 +500,60 @@ describe("web game API preparation guards", () => {
 
     const response = await handler(prepare({ "x-timba-contract-version": contractVersion }));
 
+    expect(response.status).toBe(503);
+  });
+});
+
+describe("web game API preparation with oracle token policies", () => {
+  const prepare = (amount: string) =>
+    new Request("http://oracle/web/games/prepare", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-timba-contract-version": contractVersion },
+      body: JSON.stringify({
+        creator: "HGBiGfyR9GF36J4SMPjxsRkFuwYNuNYuzdCjgR4aw4FC",
+        tokenMint: USDC_MINT,
+        type: "giveaway",
+        amount,
+        minPlayers: 1,
+        maxPlayers: 2,
+        timeoutSeconds: 600,
+      }),
+    });
+
+  test("rejects amounts below the oracle policy minimum before generating secrets", async () => {
+    useOracleTokenPolicies();
+    const { rpc } = rpcFor(await tokenChain());
+    let secrets = 0;
+    const handler = createApi(rpc, {
+      generateGameSecrets: async () => {
+        secrets += 1;
+        throw new Error("unexpected secret generation");
+      },
+    });
+
+    const response = await handler(prepare("10"));
+
+    expect(response.status).toBe(400);
+    expect(secrets).toBe(0);
+  });
+
+  test("checks the policy minimum and then requests game secrets", async () => {
+    useOracleTokenPolicies();
+    const { rpc } = rpcFor(await tokenChain());
+    let secrets = 0;
+    const handler = createApi(rpc, {
+      generateGameSecrets: async () => {
+        secrets += 1;
+        return {
+          randomHash: "07".repeat(32),
+          gameAddress: "HGBiGfyR9GF36J4SMPjxsRkFuwYNuNYuzdCjgR4aw4FC",
+        };
+      },
+    });
+
+    const response = await handler(prepare("1000000"));
+
+    expect(secrets).toBe(1);
     expect(response.status).toBe(503);
   });
 });
