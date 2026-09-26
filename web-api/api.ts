@@ -87,8 +87,21 @@ export function createWebGameApi(
   });
   let tokenCache: { value: unknown; expires: number } | undefined;
   let tokenPending: Promise<unknown> | undefined;
+  // After the fresh window, keep serving the last value while one background
+  // refresh runs, so page loads do not wait on Solana RPC and Jupiter.
+  const TOKEN_CACHE_STALE_MS = 5 * 60_000;
   async function tokenConfig() {
-    if (tokenCache && tokenCache.expires > Date.now()) return tokenCache.value;
+    const now = Date.now();
+    if (tokenCache && tokenCache.expires > now) return tokenCache.value;
+    if (tokenCache && tokenCache.expires + TOKEN_CACHE_STALE_MS > now) {
+      refreshTokenConfig().catch(() => {
+        // Keep serving the stale value; the next request retries.
+      });
+      return tokenCache.value;
+    }
+    return refreshTokenConfig();
+  }
+  async function refreshTokenConfig() {
     if (tokenPending) return tokenPending;
     tokenPending = (async () => {
       const rpc = oracle.getConnection();

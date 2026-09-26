@@ -16,6 +16,12 @@ const PROGRAM_CURSOR = "program-transactions";
 const BACKFILL_NAME = "game-lifecycle-v3-player-history";
 const DEFAULT_TOKEN_MINT = "F3A1baCgv4TF79TSjdMTvpMDtNv8DJvHZwNc9DG8pump";
 
+// Games a player created or took part in. Equivalent to
+// "l.creator=? OR p.player IS NOT NULL" but resolved through the creator and
+// player indexes instead of scanning every lifecycle row.
+const PLAYER_GAME_KEYS_SQL = `SELECT game_key FROM game_lifecycle WHERE creator=?
+  UNION SELECT game_key FROM game_players WHERE player=?`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS verification_jobs (signature TEXT PRIMARY KEY, next_attempt INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS verified_games (cache_key TEXT PRIMARY KEY, payload TEXT NOT NULL);
@@ -29,6 +35,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_games_game_key_unique ON games(game_key);
 CREATE INDEX IF NOT EXISTS idx_games_timestamp ON games(timestamp DESC, slot DESC);
 CREATE INDEX IF NOT EXISTS idx_games_winner ON games(winner);
 CREATE INDEX IF NOT EXISTS idx_games_token ON games(token_mint, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_games_token_biggest ON games(token_mint, winner_amount DESC, slot DESC);
 
 CREATE TABLE IF NOT EXISTS active_games (
   game_key TEXT PRIMARY KEY, creator TEXT NOT NULL, ticket_amount INTEGER NOT NULL,
@@ -85,8 +92,10 @@ CREATE TABLE IF NOT EXISTS game_lifecycle (
   slot INTEGER NOT NULL, indexed_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_lifecycle_timestamp ON game_lifecycle(timestamp DESC, slot DESC);
-CREATE INDEX IF NOT EXISTS idx_lifecycle_token ON game_lifecycle(token_mint);
+CREATE INDEX IF NOT EXISTS idx_lifecycle_token_timestamp ON game_lifecycle(token_mint, timestamp DESC, slot DESC);
+CREATE INDEX IF NOT EXISTS idx_lifecycle_type_timestamp ON game_lifecycle(game_type, timestamp DESC, slot DESC);
 CREATE INDEX IF NOT EXISTS idx_lifecycle_creator ON game_lifecycle(creator, timestamp DESC);
+DROP INDEX IF EXISTS idx_lifecycle_token;
 
 CREATE TABLE IF NOT EXISTS indexer_state (
   name TEXT PRIMARY KEY, signature TEXT NOT NULL, slot INTEGER NOT NULL, updated_at INTEGER NOT NULL
@@ -775,10 +784,10 @@ export class IndexerDatabase {
            LEFT JOIN active_games a ON a.game_key=l.game_key
            LEFT JOIN game_initializations i ON i.game_key=l.game_key
            LEFT JOIN game_players p ON p.game_key=l.game_key AND p.player=?
-           WHERE l.creator=? OR p.player IS NOT NULL
+           WHERE l.game_key IN (${PLAYER_GAME_KEYS_SQL})
            ORDER BY l.timestamp DESC, l.slot DESC LIMIT ? OFFSET ?`,
         )
-        .all(player, player, player, limit, offset),
+        .all(player, player, player, player, limit, offset),
     );
   }
 
@@ -803,9 +812,9 @@ export class IndexerDatabase {
               MAX(l.timestamp) last_activity
              FROM game_lifecycle l LEFT JOIN games g ON g.game_key=l.game_key
              LEFT JOIN game_players p ON p.game_key=l.game_key AND p.player=?
-             WHERE l.creator=? OR p.player IS NOT NULL`,
+             WHERE l.game_key IN (${PLAYER_GAME_KEYS_SQL})`,
         )
-        .get(player, player, player, player, player),
+        .get(player, player, player, player, player, player),
     ) ?? {
       related_games: 0,
       created_games: 0,
