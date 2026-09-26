@@ -6,6 +6,7 @@ import {
   RPC_RETRY_BASE_DELAY_MS,
   RpcEndpointManager,
   parseRpcEndpointList,
+  resolvePrimaryRpcEndpoint,
 } from "../rpc-endpoints.ts";
 
 class FakeConnection {
@@ -254,5 +255,34 @@ describe("RpcEndpointManager", () => {
     expect(blockHeight).toBe(789);
     expect(delayedMs).toHaveLength(1);
     expect(delayedMs[0]).toBeGreaterThanOrEqual(1000);
+  });
+});
+
+describe("RpcEndpointManager listeners and primary endpoint", () => {
+  test("stops notifying a listener after it unsubscribes", async () => {
+    const endpoints = ["https://rpc-a", "https://rpc-b"];
+    const manager = new RpcEndpointManager(endpoints, {
+      connectionFactory: (endpoint: string, commitment: string) =>
+        new FakeConnection(
+          endpoint,
+          commitment,
+          endpoint === endpoints[0],
+        ) as unknown as anchor.web3.Connection,
+    });
+    const changes: string[] = [];
+    const unsubscribe = manager.onActiveEndpointChange((change) => {
+      changes.push(change.endpoint);
+    });
+
+    unsubscribe();
+    await manager.getConnection().getBlockHeight();
+
+    expect(manager.getActiveEndpoint()).toBe("https://rpc-b");
+    expect(changes).toEqual([]);
+  });
+
+  test("resolves the first configured endpoint or the fallback", () => {
+    expect(resolvePrimaryRpcEndpoint("https://one, https://two")).toBe("https://one");
+    expect(resolvePrimaryRpcEndpoint(undefined, "https://fallback")).toBe("https://fallback");
   });
 });

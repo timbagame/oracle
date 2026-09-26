@@ -2312,39 +2312,36 @@ describe("OracleService internals", () => {
   });
 
   it("scanAndCompleteActiveGames counts unexpected completion errors", async () => {
-    const service = await OracleService.getInstance();
     const db = OracleDatabase.getInstance();
+    const service = await OracleService.createWith(db);
 
     resetPendingGames(db, { service });
 
-    const failingGame = "error-prone-game";
+    const failingGame = Keypair.generate().publicKey.toBase58();
     seedTrackedGame(db, {
       address: failingGame,
       secret: "a".repeat(64),
       randomHash: "b".repeat(64),
     });
 
-    const originalExists = (service as any).gameExistsOnChain;
-    const originalComplete = (service as any).completeGame;
-
-    let attempts = 0;
-    (service as any).gameExistsOnChain = async () => ({
-      gamePda: Keypair.generate().publicKey,
-      secretData: { secretKey: "aa".repeat(32), randomHash: "bb".repeat(32) },
-      readiness: { ready: true, gameAccount: createGameAccountStub() },
-    });
-    (service as any).completeGame = async () => {
-      attempts++;
+    const resolveSpy = spyOn(
+      service.completionManager,
+      "resolveContextAndReadiness",
+    ).mockImplementation(async () => makeReadyResolution());
+    const completeSpy = spyOn(service, "completeGame").mockImplementation(async () => {
       throw new Error("forced failure");
-    };
+    });
 
     try {
       const stats = await service.scanRunner.scanAndCompleteActiveGames();
       expect(stats).toEqual({ completed: 0, errors: 1, notReady: 0 });
-      expect(attempts).toBe(1);
+      expect(resolveSpy).toHaveBeenCalledWith(failingGame, expect.anything());
+      expect(completeSpy).toHaveBeenCalledTimes(1);
+      expect(completeSpy.mock.calls[0]?.[0]).toBe(failingGame);
+      expect(db.getCompletionAttemptState(failingGame)?.completionAttempts).toBe(1);
     } finally {
-      (service as any).gameExistsOnChain = originalExists;
-      (service as any).completeGame = originalComplete;
+      resolveSpy.mockRestore();
+      completeSpy.mockRestore();
       db.markGameCompleted(failingGame);
       db.markSecretKeyUsed(failingGame);
       service.cleanupOldRecords(-1);

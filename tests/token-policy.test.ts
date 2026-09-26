@@ -29,3 +29,9 @@ describe("dynamic token minimum", () => {
     expect(() => computeMinimumAmountRaw(1e-100, 15)).toThrow("dynamic minimum amount exceeds u64");
   });
 });
+
+describe("computeMinimumAmountRaw price parsing", () => {
+  test("rejects prices whose decimal exponent is out of range", () => {
+    expect(() => computeMinimumAmountRaw(1e-120, 6)).toThrow("token USD price exponent is invalid");
+  });
+});

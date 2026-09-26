@@ -641,3 +641,31 @@ describe("creation signing retirement", () => {
     expect(() => db.markSecretKeySigned("missing-commitment")).toThrow();
   });
 });
+
+describe("OracleDatabase player registry helpers", () => {
+  it("summarizes ticket indexes for a game", () => {
+    const db = OracleDatabase.getInstance();
+    db.trackGame("ticket-stats");
+
+    expect(db.getPlayerTicketStats("ticket-stats")).toEqual({
+      count: 0,
+      maxIndex: null,
+      minIndex: null,
+    });
+    db.addPlayerToGame("ticket-stats", "player-a", 1);
+    db.addPlayerToGame("ticket-stats", "player-b", 3);
+
+    expect(db.getPlayerTicketStats("ticket-stats")).toEqual({ count: 2, maxIndex: 3, minIndex: 1 });
+  });
+
+  it("removes a moved participant from its previous ticket", () => {
+    const db = OracleDatabase.getInstance();
+    db.trackGame("moved-player");
+    db.addPlayerToGame("moved-player", "player-a", 0);
+    db.addPlayerToGame("moved-player", "player-b", 1);
+
+    db.removePlayerAddressFromGame("moved-player", "player-b");
+
+    expect(db.getGamePlayers("moved-player")).toEqual(["player-a"]);
+  });
+});

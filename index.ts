@@ -859,7 +859,7 @@ export function buildProductionOracleApi(realOracle: OracleService): OracleApi {
 }
 
 // Main server
-if (!IS_TEST_ENV) {
+export async function start(): Promise<void> {
   const config = getConfig();
   const port = config.oraclePort ?? DEFAULT_ORACLE_PORT;
   if (!config.apiToken) {
@@ -988,6 +988,10 @@ if (!IS_TEST_ENV) {
 
   process.once("SIGINT", () => shutdown(oracleApi, "SIGINT"));
   process.once("SIGTERM", () => shutdown(oracleApi, "SIGTERM"));
+}
+
+if (!IS_TEST_ENV) {
+  await start();
 }
 
 // Initialize and start services

@@ -1,8 +1,8 @@
 import { address as solanaAddress } from "@solana/kit";
 import { OracleService } from "../oracle-service.ts";
 
-async function main(): Promise<void> {
-  const address = process.argv[2];
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const address = argv[0];
   if (!address) {
     console.error("Usage: bun run scripts/inspect-game.ts <gameAddress>");
     process.exit(1);
@@ -45,4 +45,6 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+if (import.meta.main) {
+  main();
+}

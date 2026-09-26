@@ -151,3 +151,139 @@ describe("PublicIndexer cache flushing", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 });
+
+describe("PublicIndexer active-game reconciliation", () => {
+  function reconcilingIndexer(activeKeys: string[]) {
+    const removed: string[][] = [];
+    const database = {
+      getCursor: () => ({ signature: "cursor", slot: 1 }),
+      apply: () => 0,
+      flushCaches: () => false,
+      msUntilCacheFlush: () => null,
+      getActiveGames: () => activeKeys.map((game_key) => ({ game_key })),
+      removeStaleActiveGames: (keys: string[]) => {
+        removed.push(keys);
+      },
+    };
+    const indexer = new PublicIndexer(
+      database as never,
+      {} as never,
+      Keypair.generate().publicKey,
+      60_000,
+    );
+    return { indexer, removed };
+  }
+
+  it("drops active games whose accounts no longer exist on chain", async () => {
+    const solana = await import("../indexer/solana.ts");
+    const events = spyOn(solana, "getEventsSince").mockResolvedValue({
+      events: { initialized: [], membership: [], completed: [], closed: [] },
+      cursor: null,
+      transactions: 0,
+    } as never);
+    const stale = spyOn(solana, "findStaleActiveGames").mockResolvedValue(["gone"]);
+    try {
+      const { indexer, removed } = reconcilingIndexer(["live", "gone"]);
+
+      await indexer.runOnce();
+
+      expect(stale.mock.calls[0]?.[2]).toEqual(["live", "gone"]);
+      expect(removed).toEqual([["gone"]]);
+    } finally {
+      events.mockRestore();
+      stale.mockRestore();
+    }
+  });
+
+  it("skips the chain lookup when no games are active", async () => {
+    const solana = await import("../indexer/solana.ts");
+    const events = spyOn(solana, "getEventsSince").mockResolvedValue({
+      events: { initialized: [], membership: [], completed: [], closed: [] },
+      cursor: null,
+      transactions: 0,
+    } as never);
+    const stale = spyOn(solana, "findStaleActiveGames");
+    try {
+      const { indexer, removed } = reconcilingIndexer([]);
+
+      await indexer.runOnce();
+
+      expect(stale).not.toHaveBeenCalled();
+      expect(removed).toEqual([]);
+    } finally {
+      events.mockRestore();
+      stale.mockRestore();
+    }
+  });
+
+  it("keeps indexing when reconciliation fails", async () => {
+    const solana = await import("../indexer/solana.ts");
+    const { logger } = await import("../logger.ts");
+    const events = spyOn(solana, "getEventsSince").mockResolvedValue({
+      events: { initialized: [], membership: [], completed: [], closed: [] },
+      cursor: null,
+      transactions: 2,
+    } as never);
+    const failure = new Error("rpc offline");
+    const stale = spyOn(solana, "findStaleActiveGames").mockRejectedValue(failure);
+    const warning = spyOn(logger, "warning").mockImplementation(() => {});
+    try {
+      const { indexer, removed } = reconcilingIndexer(["live"]);
+
+      await expect(indexer.runOnce()).resolves.toMatchObject({ transactions: 2 });
+
+      expect(removed).toEqual([]);
+      expect(warning).toHaveBeenCalledWith(
+        "Public indexer active-game reconciliation failed:",
+        failure,
+      );
+    } finally {
+      events.mockRestore();
+      stale.mockRestore();
+      warning.mockRestore();
+    }
+  });
+});
+
+describe("PublicIndexer event debounce", () => {
+  it("coalesces live events for the debounce window before catching up", async () => {
+    const indexer = createIndexer(60_000, 20);
+    const controller = new AbortController();
+    const scheduled: Array<{ callback: () => void; ms: number }> = [];
+    const timers = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: () => void,
+      ms: number,
+    ) => {
+      scheduled.push({ callback, ms });
+      return scheduled.length as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout);
+    const clears = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    let cycle = 0;
+    const runOnce = spyOn(indexer, "runOnce").mockImplementation(async () => {
+      cycle += 1;
+      if (cycle === 2) controller.abort();
+      return { indexed: 0, transactions: 0 };
+    });
+
+    try {
+      const running = indexer.run(controller.signal);
+      for (let spin = 0; spin < 10 && scheduled.length === 0; spin++) await Promise.resolve();
+      expect(scheduled.map(({ ms }) => ms)).toEqual([60_000]);
+
+      indexer.requestCatchUp();
+      indexer.requestCatchUp();
+      const debounces = scheduled.filter(({ ms }) => ms === 20);
+      expect(debounces).toHaveLength(1);
+      expect(runOnce).toHaveBeenCalledTimes(1);
+
+      debounces[0]!.callback();
+      await running;
+
+      expect(runOnce).toHaveBeenCalledTimes(2);
+      expect(runOnce.mock.calls[1]?.[0]).toEqual({ reconcileActiveGames: false });
+    } finally {
+      timers.mockRestore();
+      clears.mockRestore();
+    }
+  });
+});

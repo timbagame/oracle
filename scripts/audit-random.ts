@@ -306,8 +306,8 @@ function computeWinnerDisplay(args: {
   return `${winner} (index=${winnerIndex}, position=${winnerIndex + 1})`;
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const options = parseArgs(argv);
 
   const oracle = await OracleService.getInstance();
   const completion = oracle.completionManager;

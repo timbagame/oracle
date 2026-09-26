@@ -113,7 +113,7 @@ export async function checkCoverage(
   };
 }
 
-async function main(args: string[]): Promise<number> {
+export async function main(args: string[] = process.argv.slice(2)): Promise<number> {
   const [configPath, ...reports] = args;
   if (!configPath || reports.length === 0) {
     console.error("Usage: bun run scripts/check-coverage.ts <config> <lcov-report> [...]");
