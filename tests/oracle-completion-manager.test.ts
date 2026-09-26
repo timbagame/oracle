@@ -857,3 +857,19 @@ describe("GameCompletionManager.ensurePlayersInSync boundary cases", () => {
     expect(receivedError).toBe("No ticket entries available for completion");
   });
 });
+
+describe("GameCompletionManager.attemptGameCompletion address resolution", () => {
+  it("skips completion when the game address is not a valid public key", async () => {
+    const { manager } = createManager();
+    const readinessSpy = spyOn(manager as any, "resolveContextAndReadiness");
+
+    try {
+      const result = await manager.attemptGameCompletion({ gameAddress: "not-a-public-key" });
+
+      expect(result).toBeNull();
+      expect(readinessSpy).not.toHaveBeenCalled();
+    } finally {
+      readinessSpy.mockRestore();
+    }
+  });
+});
