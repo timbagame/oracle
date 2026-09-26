@@ -179,7 +179,7 @@ describe("PlayerRegistrySync", () => {
     expect(players).toBeNull();
   });
 
-  it("applies playerUnjoined events after the registry initially looks satisfied", async () => {
+  it("rejects a partial registry after unjoin even if it initially looked satisfied", async () => {
     const gamePda = Keypair.generate().publicKey;
     const playerOne = Keypair.generate().publicKey;
     const playerTwo = Keypair.generate().publicKey;
@@ -220,7 +220,7 @@ describe("PlayerRegistrySync", () => {
       expectedTickets: 2,
     });
 
-    expect(players).toEqual([playerTwo.toBase58()]);
+    expect(players).toBeNull();
   });
 
   it("ignores negative ticket indexes in parsed events", async () => {
@@ -310,6 +310,49 @@ describe("PlayerRegistrySync", () => {
 
     expect(players).toEqual([player.toBase58()]);
     expect(requestedLimits.every((limit) => limit > 0)).toBe(true);
+  });
+
+  it("pages beyond the current ticket count to recover earlier surviving joins", async () => {
+    const gamePda = Keypair.generate().publicKey;
+    const survivor = Keypair.generate().publicKey.toBase58();
+    const replacement = Keypair.generate().publicKey.toBase58();
+    // Two current players, but eight intervening transactions before the oldest join.
+    const history = Array.from({ length: 10 }, (_, index) => ({
+      signature: `history-${9 - index}`,
+      slot: BigInt(9 - index),
+    }));
+    const limits: number[] = [];
+    const connection = {
+      async getSignaturesForAddress(
+        _address: PublicKey,
+        config: { before?: string; limit: number },
+      ) {
+        limits.push(config.limit);
+        const start = config.before
+          ? history.findIndex((item) => item.signature === config.before) + 1
+          : 0;
+        return history.slice(start, start + config.limit);
+      },
+      async getTransaction() {
+        return { meta: { logMessages: [] } };
+      },
+    } as unknown as anchor.web3.Connection;
+    const sync = createSync([], {
+      connection,
+      batchSize: 10,
+      parseEvents: (_logs, signature) => {
+        if (signature === "history-0")
+          return [{ kind: "join", ticketIndex: 0, playerAddress: survivor }];
+        if (signature === "history-9")
+          return [{ kind: "join", ticketIndex: 1, playerAddress: replacement }];
+        return [];
+      },
+    });
+    expect(await sync.fetchPlayersFromChain({ gamePda, expectedTickets: 2 })).toEqual([
+      survivor,
+      replacement,
+    ]);
+    expect(limits).toEqual([10, 10]);
   });
 
   it("honors maxSignatures limits when paging signatures", async () => {

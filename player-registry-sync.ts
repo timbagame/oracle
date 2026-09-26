@@ -62,7 +62,6 @@ export class PlayerRegistrySync {
   public async fetchPlayersFromChain(params: FetchRegistryParams): Promise<string[] | null> {
     const signatures = await this.collectSignatures(params.gamePda, {
       maxSignatures: params.maxSignatures,
-      expectedTickets: params.expectedTickets,
     });
     if (signatures.length === 0) return null;
 
@@ -85,7 +84,6 @@ export class PlayerRegistrySync {
     });
 
     const ticketAssignments = new Map<number, string>();
-    let sawUnjoinEvent = false;
     for (const events of transactionEvents) {
       for (const event of events) {
         if (event.kind === "unjoin") {
@@ -97,7 +95,6 @@ export class PlayerRegistrySync {
             if (movedIndex !== undefined) ticketAssignments.delete(movedIndex);
             ticketAssignments.set(event.ticketIndex, event.movedParticipant);
           }
-          sawUnjoinEvent = true;
         } else {
           ticketAssignments.set(event.ticketIndex, event.playerAddress);
         }
@@ -113,7 +110,7 @@ export class PlayerRegistrySync {
       );
       return null;
     }
-    if (!analysis.expectedMatches && !sawUnjoinEvent) return null;
+    if (!analysis.expectedMatches) return null;
     return orderedEntries.map(([, playerAddress]) => playerAddress);
   }
 
@@ -145,15 +142,11 @@ export class PlayerRegistrySync {
 
   private async collectSignatures(
     gamePda: PublicKeyLike,
-    options: { maxSignatures?: number; expectedTickets?: number } = {},
+    options: { maxSignatures?: number } = {},
   ): Promise<SignatureInfo[]> {
     const finiteMax =
       options.maxSignatures !== undefined && Number.isFinite(options.maxSignatures)
         ? Math.max(0, Math.floor(options.maxSignatures))
-        : undefined;
-    const target =
-      options.expectedTickets !== undefined && options.expectedTickets > 0
-        ? Math.floor(options.expectedTickets)
         : undefined;
     const collected: SignatureInfo[] = [];
     let before: Signature | undefined;
@@ -161,11 +154,9 @@ export class PlayerRegistrySync {
     for (let batch = 0; batch < this.maxBatches; batch += 1) {
       if (finiteMax !== undefined && collected.length >= finiteMax) break;
       const remainingMax = finiteMax === undefined ? this.batchSize : finiteMax - collected.length;
-      const remainingTarget = target === undefined ? this.batchSize : target - collected.length;
-      const limit = Math.max(
-        1,
-        Math.min(this.batchSize, remainingMax, Math.max(1, remainingTarget)),
-      );
+      // Current ticket count does not bound the history: joins, unjoins, and
+      // unrelated transactions can precede the surviving participants.
+      const limit = Math.max(1, Math.min(this.batchSize, remainingMax));
       const page = await sendRpcRequest(
         this.options.connection.getSignaturesForAddress(ensureAddress(gamePda), {
           ...(before ? { before } : {}),
