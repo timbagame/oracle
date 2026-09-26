@@ -104,6 +104,17 @@ describe("OracleService RPC failover listener", () => {
     const manager = new TestRpcEndpointManager();
     (service as any).rpcEndpointManager = manager;
 
+    // Skip the real 250ms/500ms retry backoff; record the requested delays instead.
+    const backoffDelays: number[] = [];
+    const setTimeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: () => void,
+      delay?: number,
+    ) => {
+      backoffDelays.push(delay ?? 0);
+      callback();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout);
+
     try {
       (service as any).registerRpcEndpointFailoverListener();
 
@@ -119,7 +130,9 @@ describe("OracleService RPC failover listener", () => {
       expect(stopSpy).toHaveBeenCalledTimes(3);
       expect(startSpy).toHaveBeenCalledTimes(3);
       expect(clearSpy).toHaveBeenCalledTimes(3);
+      expect(backoffDelays).toEqual([250, 500]);
     } finally {
+      setTimeoutSpy.mockRestore();
       (service as any).eventProcessor = previousEventProcessor;
       (service as any).rpcEndpointManager = previousManager;
     }
