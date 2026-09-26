@@ -1,7 +1,7 @@
 import { OracleService } from "../oracle-service.ts";
 
-async function main(): Promise<void> {
-  const gameAddress = process.argv[2];
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const gameAddress = argv[0];
   if (!gameAddress) {
     console.error("Usage: bun run scripts/attempt-completion.ts <gameAddress>");
     process.exit(1);
@@ -19,4 +19,6 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+if (import.meta.main) {
+  main();
+}

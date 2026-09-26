@@ -2,7 +2,7 @@ import { OracleService } from "../oracle-service.ts";
 import { getContractClient } from "@timbagame/protocol/contracts/client";
 import { getConfig } from "../config.ts";
 
-async function main(): Promise<void> {
+export async function main(_argv: string[] = process.argv.slice(2)): Promise<void> {
   const oracleService = await OracleService.getInstance();
   try {
     const programId = oracleService.getProgramId();
@@ -29,4 +29,6 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+if (import.meta.main) {
+  main();
+}

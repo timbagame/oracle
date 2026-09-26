@@ -1,8 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkCoverage } from "../scripts/check-coverage.ts";
+import { checkCoverage, main } from "../scripts/check-coverage.ts";
 
 async function git(root: string, ...args: string[]): Promise<void> {
   const result = Bun.spawnSync(["git", ...args], { cwd: root, stderr: "pipe" });
@@ -95,6 +95,56 @@ test("rejects unusable scopes, repositories and LCOV data", async () => {
       "Invalid LCOV line data",
     );
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the CLI prints usage, results and failures with matching exit codes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "timba-coverage-cli-"));
+  const previous = process.cwd();
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const log = spyOn(console, "log").mockImplementation((value: unknown) => {
+    logs.push(String(value));
+  });
+  const error = spyOn(console, "error").mockImplementation((value: unknown) => {
+    errors.push(String(value));
+  });
+  try {
+    await mkdir(join(root, "src"));
+    await writeFile(join(root, "src/a.ts"), "synthetic\n".repeat(100));
+    await writeFile(join(root, "src/b.ts"), "synthetic\n");
+    await git(root, "init", "-q");
+    await git(root, "add", ".");
+    await writeFile(
+      join(root, "scope.json"),
+      JSON.stringify({ roots: ["src"], extensions: [".ts"] }),
+    );
+    await writeFile(
+      join(root, "all.json"),
+      JSON.stringify({ roots: ["src/a.ts"], extensions: [".ts"] }),
+    );
+    await writeFile(join(root, "full.info"), report(Array.from({ length: 100 }, (_, i) => i + 1)));
+    process.chdir(root);
+
+    expect(await main([])).toBe(2);
+    expect(errors.shift()).toStartWith("Usage:");
+
+    expect(await main(["all.json", "full.info"])).toBe(0);
+    expect(JSON.parse(logs.pop()!)).toMatchObject({ percent: 100, passed: true });
+
+    expect(await main(["scope.json", "full.info"])).toBe(1);
+    expect(JSON.parse(logs.pop()!)).toMatchObject({ missing: ["src/b.ts"], passed: false });
+    expect(errors.shift()).toBe(
+      "Coverage is incomplete: scoped source files are absent from LCOV.",
+    );
+
+    expect(await main(["missing.json", "full.info"])).toBe(1);
+    expect(errors.shift()).toStartWith("Coverage gate failed:");
+  } finally {
+    process.chdir(previous);
+    log.mockRestore();
+    error.mockRestore();
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -55,3 +55,15 @@ export async function until(condition: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 1_000 && !condition(); attempt++) await tick();
   expect(condition()).toBe(true);
 }
+
+/** Makes `process.exit` throw so a script stops where it would have exited. */
+export function exitThrows(restorer: Restorer): Array<number | undefined> {
+  const exits: Array<number | undefined> = [];
+  restorer.track(
+    spyOn(process, "exit").mockImplementation(((code?: number) => {
+      exits.push(code);
+      throw new Error(`process.exit(${code})`);
+    }) as never),
+  );
+  return exits;
+}

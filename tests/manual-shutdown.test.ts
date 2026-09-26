@@ -1,6 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { OracleService } from "../oracle-service.ts";
-import { captureConsole, createRestorer, setArgv, until } from "./helpers/cli.ts";
+import { main } from "../scripts/manual-shutdown.ts";
+import { captureConsole, createRestorer } from "./helpers/cli.ts";
 
 const restorer = createRestorer();
 afterEach(() => restorer.restoreAll());
@@ -8,7 +9,6 @@ afterEach(() => restorer.restoreAll());
 type CycleStats = { completed: number; notReady: number; errors: number };
 
 test("drains pending games, cleans every record and prints a summary", async () => {
-  setArgv(restorer, "scripts/manual-shutdown.ts", []);
   const output = captureConsole(restorer);
   const calls: string[] = [];
   const cleanupAges: number[] = [];
@@ -40,8 +40,7 @@ test("drains pending games, cleans every record and prints a summary", async () 
     } as never),
   );
 
-  await import("../scripts/manual-shutdown.ts");
-  await until(() => output.log.some((line) => line.includes("Manual shutdown scan complete")));
+  await main([]);
 
   expect(calls).toEqual(["stop", "scan"]);
   expect(cleanupAges).toEqual([0]);
