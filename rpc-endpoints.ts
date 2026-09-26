@@ -194,6 +194,10 @@ function isRetryableRpcError(error: unknown): boolean {
     return false;
   }
 
+  if (isRateLimitError(error)) {
+    return true;
+  }
+
   const code = (error as { code?: string | number }).code;
   if (typeof code === "string") {
     const normalized = code.toLowerCase();

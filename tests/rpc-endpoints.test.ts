@@ -155,6 +155,38 @@ describe("RpcEndpointManager", () => {
     expect(manager.getAllEndpoints()).toEqual(["https://rpc"]);
   });
 
+  for (const statusFields of [
+    { status: 429 },
+    { statusCode: 429 },
+    { response: { status: 429 } },
+    { code: 429 },
+    { code: "429" },
+  ]) {
+    test(`honors status-only rate limits: ${JSON.stringify(statusFields)}`, async () => {
+      const waits: number[] = [];
+      const manager = new RpcEndpointManager(["https://rpc-a", "https://rpc-b"], {
+        connectionFactory: (endpoint) => ({
+          getBlockHeight: () => ({
+            send: async () => {
+              if (endpoint === "https://rpc-a") {
+                throw Object.assign(new Error("Too Many Requests"), statusFields, {
+                  headers: { "Retry-After": "2" },
+                });
+              }
+              return 789n;
+            },
+          }),
+        }),
+        delayFn: async (ms) => {
+          waits.push(ms);
+        },
+      });
+      expect(await manager.getConnection().getBlockHeight().send()).toBe(789n);
+      expect(waits).toEqual([2000]);
+      expect(manager.getActiveEndpoint()).toBe("https://rpc-b");
+    });
+  }
+
   test("waits before rotating endpoints on rate limit", async () => {
     const endpoints = ["https://rpc-a", "https://rpc-b"];
     const warnings: string[] = [];
