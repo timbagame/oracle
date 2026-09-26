@@ -143,6 +143,32 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
+export type LeaderboardPeriod = "24h" | "7d" | "all";
+
+const LEADERBOARD_PERIOD_SECONDS: Record<Exclude<LeaderboardPeriod, "all">, number> = {
+  "24h": 86_400,
+  "7d": 7 * 86_400,
+};
+const LEADERBOARD_MAX_ROWS = 100;
+const LEADERBOARD_CACHE_MAX_ENTRIES = 256;
+
+export const DEFAULT_CACHE_REBUILD_INTERVAL_MS = 30_000;
+export const DEFAULT_LEADERBOARD_CACHE_TTL_MS = 30_000;
+
+export interface IndexerDatabaseOptions {
+  /**
+   * Minimum time between materialized cache rebuilds triggered by `apply()`.
+   * Changes inside the window mark the caches dirty; `flushCaches()` (called by
+   * the indexer loop) or the next `apply()` after the window rebuilds them.
+   * Use 0 to rebuild after every batch.
+   */
+  cacheRebuildIntervalMs?: number;
+  /** How long windowed (24h / 7d) leaderboards are served from memory. */
+  leaderboardCacheTtlMs?: number;
+  /** Millisecond clock, injectable for deterministic tests. */
+  now?: () => number;
+}
+
 function rows<T>(value: unknown): T[] {
   return value as T[];
 }
@@ -157,6 +183,12 @@ function booleanInteger(value: unknown): 0 | 1 {
 
 export class IndexerDatabase {
   private readonly sqlite: Database;
+  private readonly cacheRebuildIntervalMs: number;
+  private readonly leaderboardCacheTtlMs: number;
+  private readonly clock: () => number;
+  private cachesDirty = false;
+  private lastCacheRebuildAt: number | null = null;
+  private readonly leaderboardWindows = new Map<string, { expiresAt: number; rows: Row[] }>();
 
   queueVerification(signature: string): void {
     this.sqlite
@@ -202,7 +234,16 @@ export class IndexerDatabase {
       .run(key, payload);
   }
 
-  constructor(file: string) {
+  constructor(file: string, options: IndexerDatabaseOptions = {}) {
+    this.cacheRebuildIntervalMs = Math.max(
+      0,
+      options.cacheRebuildIntervalMs ?? DEFAULT_CACHE_REBUILD_INTERVAL_MS,
+    );
+    this.leaderboardCacheTtlMs = Math.max(
+      0,
+      options.leaderboardCacheTtlMs ?? DEFAULT_LEADERBOARD_CACHE_TTL_MS,
+    );
+    this.clock = options.now ?? Date.now;
     this.sqlite = new Database(file, { create: true, strict: true });
     this.sqlite.exec("PRAGMA journal_mode = WAL");
     this.sqlite.exec("PRAGMA foreign_keys = ON");
@@ -315,9 +356,45 @@ export class IndexerDatabase {
         changed++;
       }
       this.setCursor(cursor);
-      if (changed > 0) this.rebuildCachesInTransaction();
+      if (changed > 0) {
+        this.cachesDirty = true;
+        if (this.cacheRebuildDue()) this.rebuildCachesInTransaction();
+      }
     })();
     return changed;
+  }
+
+  private cacheRebuildDue(): boolean {
+    return (
+      this.lastCacheRebuildAt == null ||
+      this.clock() - this.lastCacheRebuildAt >= this.cacheRebuildIntervalMs
+    );
+  }
+
+  /** True when indexed changes are not yet reflected in the materialized caches. */
+  hasPendingCacheRebuild(): boolean {
+    return this.cachesDirty;
+  }
+
+  /**
+   * Milliseconds until a pending cache rebuild becomes due, or null when the
+   * caches are current. The indexer loop uses this to wake up and flush.
+   */
+  msUntilCacheFlush(): number | null {
+    if (!this.cachesDirty) return null;
+    if (this.lastCacheRebuildAt == null) return 0;
+    return Math.max(0, this.lastCacheRebuildAt + this.cacheRebuildIntervalMs - this.clock());
+  }
+
+  /**
+   * Rebuilds dirty caches once the throttle window has passed (or immediately
+   * with `force`). Returns true when a rebuild ran.
+   */
+  flushCaches(options: { force?: boolean } = {}): boolean {
+    if (!this.cachesDirty) return false;
+    if (!options.force && !this.cacheRebuildDue()) return false;
+    this.rebuildCaches();
+    return true;
   }
 
   private applyInitialized(game: GameInitializedEvent): void {
@@ -549,6 +626,9 @@ export class IndexerDatabase {
   }
 
   private rebuildCachesInTransaction(): void {
+    this.cachesDirty = false;
+    this.lastCacheRebuildAt = this.clock();
+    this.leaderboardWindows.clear();
     const now = nowSeconds();
     this.sqlite.exec("DELETE FROM token_stats_cache");
     this.sqlite.exec(`INSERT INTO token_stats_cache
@@ -723,7 +803,8 @@ export class IndexerDatabase {
     );
   }
 
-  getLeaderboard(limit: number, tokenMint?: string): Row[] {
+  getLeaderboard(limit: number, tokenMint?: string, period: LeaderboardPeriod = "all"): Row[] {
+    if (period !== "all") return this.getWindowedLeaderboard(limit, period, tokenMint);
     const scope = tokenMint ?? "*";
     return rows<Row>(
       this.sqlite
@@ -735,6 +816,50 @@ export class IndexerDatabase {
         )
         .all(scope, scope, limit),
     );
+  }
+
+  private getWindowedLeaderboard(
+    limit: number,
+    period: Exclude<LeaderboardPeriod, "all">,
+    tokenMint?: string,
+  ): Row[] {
+    const key = `${period}:${tokenMint ?? "*"}`;
+    const now = this.clock();
+    const cached = this.leaderboardWindows.get(key);
+    if (cached && cached.expiresAt > now) return cached.rows.slice(0, limit);
+
+    const since = Math.floor(now / 1000) - LEADERBOARD_PERIOD_SECONDS[period];
+    // Served by idx_games_token (token_mint, timestamp) or idx_games_timestamp.
+    const result = tokenMint
+      ? rows<Row>(
+          this.sqlite
+            .query(
+              `SELECT winner player, COUNT(*) games_won, SUM(winner_amount) total_winnings,
+                 AVG(winner_amount) avg_win
+               FROM games WHERE token_mint=? AND timestamp>=?
+               GROUP BY winner ORDER BY total_winnings DESC, player ASC LIMIT ?`,
+            )
+            .all(tokenMint, since, LEADERBOARD_MAX_ROWS),
+        )
+      : rows<Row>(
+          this.sqlite
+            .query(
+              `SELECT winner player, COUNT(*) games_won, NULL total_winnings, NULL avg_win
+               FROM games WHERE timestamp>=?
+               GROUP BY winner ORDER BY games_won DESC, player ASC LIMIT ?`,
+            )
+            .all(since, LEADERBOARD_MAX_ROWS),
+        );
+    if (this.leaderboardWindows.size >= LEADERBOARD_CACHE_MAX_ENTRIES) {
+      this.leaderboardWindows.clear();
+    }
+    if (this.leaderboardCacheTtlMs > 0) {
+      this.leaderboardWindows.set(key, {
+        expiresAt: now + this.leaderboardCacheTtlMs,
+        rows: result,
+      });
+    }
+    return result.slice(0, limit);
   }
 
   getTokens(): Row[] {
@@ -776,7 +901,9 @@ export class IndexerDatabase {
         .query(
           `SELECT l.*, COALESCE(a.timeout, i.timeout) timeout,
              g.winner, g.winner_amount, g.fee_amount,
-             COALESCE(g.tickets_count, a.current_tickets) tickets_count,
+             COALESCE(g.tickets_count, a.current_tickets,
+               (SELECT COUNT(*) FROM game_players joined
+                WHERE joined.game_key=l.game_key AND joined.is_joined=1)) tickets_count,
              CASE WHEN l.creator=? THEN 1 ELSE 0 END is_creator,
              CASE WHEN p.player IS NOT NULL THEN 1 ELSE 0 END is_player,
              COALESCE(p.is_joined, 0) is_joined

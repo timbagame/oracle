@@ -5,6 +5,12 @@ import { ensureAddress, type PublicKeyLike } from "../solana-utils.ts";
 import { IndexerDatabase } from "./database.ts";
 import { findStaleActiveGames, getEventsSince, getProgramHead } from "./solana.ts";
 
+/** Waits until the next reconciliation, or sooner when a cache flush is pending. */
+export function nextWaitMs(untilReconcileMs: number, cacheFlushInMs: number | null): number {
+  const reconcile = Math.max(0, untilReconcileMs);
+  return cacheFlushInMs == null ? reconcile : Math.min(reconcile, Math.max(0, cacheFlushInMs));
+}
+
 export class PublicIndexer {
   private running = false;
   private wakeRequested = false;
@@ -25,7 +31,7 @@ export class PublicIndexer {
 
   async runOnce(
     options: { reconcileActiveGames?: boolean } = {},
-  ): Promise<{ indexed: number; transactions: number }> {
+  ): Promise<{ indexed: number; transactions: number; cacheFlushInMs?: number | null }> {
     const shouldReconcile = options.reconcileActiveGames ?? true;
     const cursor = this.database.getCursor();
     if (!cursor) {
@@ -41,7 +47,14 @@ export class PublicIndexer {
     const result = await getEventsSince(this.connection, this.programId, cursor);
     const indexed = result.cursor ? this.database.apply(result.events, result.cursor) : 0;
     if (shouldReconcile) await this.safelyReconcileActiveGames();
-    return { indexed, transactions: result.transactions };
+    // Cache rebuilds are throttled; flush any rebuild that became due while idle
+    // so stats never lag the indexed data by more than the throttle window.
+    this.database.flushCaches();
+    return {
+      indexed,
+      transactions: result.transactions,
+      cacheFlushInMs: this.database.msUntilCacheFlush(),
+    };
   }
 
   async run(signal: AbortSignal): Promise<void> {
@@ -52,9 +65,11 @@ export class PublicIndexer {
       while (!signal.aborted) {
         const shouldReconcile = this.now() >= nextReconciliationAt;
         let cycleCompleted = false;
+        let cacheFlushInMs: number | null = null;
         try {
           const result = await this.runOnce({ reconcileActiveGames: shouldReconcile });
           cycleCompleted = true;
+          cacheFlushInMs = result.cacheFlushInMs ?? null;
           if (shouldReconcile) nextReconciliationAt = this.now() + this.pollIntervalMs;
           if (result.transactions > 0) {
             logger.info(
@@ -65,7 +80,7 @@ export class PublicIndexer {
           logger.failure("Public indexer cycle failed; cursor was not advanced:", error);
         }
         const waitMs = cycleCompleted
-          ? Math.max(0, nextReconciliationAt - this.now())
+          ? nextWaitMs(nextReconciliationAt - this.now(), cacheFlushInMs)
           : this.pollIntervalMs;
         await this.waitForNextCycle(signal, waitMs);
       }
