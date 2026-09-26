@@ -1875,6 +1875,9 @@ describe("OracleService internals", () => {
   it("holds transient bursts in cooldown and recovers once after the deadline", async () => {
     const service = await OracleService.createWith(OracleDatabase.getInstance());
     const db = OracleDatabase.getInstance();
+    // The scans below walk every pending game in the shared database; drop games
+    // left behind by earlier tests so they cannot be scanned (and hit the RPC).
+    resetPendingGames(db, { service });
     const gameAddress = Keypair.generate().publicKey.toBase58();
     const playerAddress = Keypair.generate().publicKey.toBase58();
     seedTrackedGame(db, {
@@ -1919,6 +1922,9 @@ describe("OracleService internals", () => {
       return timer;
     }) as unknown as typeof setTimeout);
     const clearTimeoutSpy = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => {
+      throw new Error("unexpected network request in test");
+    }) as unknown as typeof fetch);
 
     try {
       const initial = await service.completeGameNow(gameAddress);
@@ -1979,10 +1985,12 @@ describe("OracleService internals", () => {
       expect(executeCalls).toBe(5);
       expect(db.getGameStatus(gameAddress)).toBe("completed");
       expect(db.getCompletionAttemptState(gameAddress)?.completionRetryAfter).toBeNull();
+      expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       (service as any).cancelCompletionRetry(gameAddress);
       completion.resolveContextAndReadiness = originalResolve;
       completion.executeGameCompletion = originalExecute;
+      fetchSpy.mockRestore();
       nowSpy.mockRestore();
       clearTimeoutSpy.mockRestore();
       setTimeoutSpy.mockRestore();

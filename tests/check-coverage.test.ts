@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkCoverage } from "./check-coverage";
+import { checkCoverage } from "../scripts/check-coverage.ts";
 
 async function git(root: string, ...args: string[]): Promise<void> {
   const result = Bun.spawnSync(["git", ...args], { cwd: root, stderr: "pipe" });

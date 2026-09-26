@@ -924,13 +924,16 @@ describe("OracleService event handling", () => {
     const programStub = createProgramStub();
     // Mock syncPlayerRegistry to hang on the first call
     let callCount = 0;
+    let releaseHangingSync: (() => void) | undefined;
 
     const syncFn = async (_options: any) => {
       callCount++;
       if (callCount === 1) {
-        // Exceed the scheduler timeout once, but eventually resolve so we don't
-        // leak a never-ending promise into the test runner.
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        // Hang past the scheduler timeout; released explicitly at the end of the
+        // test so no never-ending promise leaks into the test runner.
+        await new Promise<void>((resolve) => {
+          releaseHangingSync = resolve;
+        });
         return false;
       }
       return true;
@@ -961,19 +964,17 @@ describe("OracleService event handling", () => {
       ticketIndex: 2,
     });
 
-    // If the scheduler doesn't timeout the hanging task, the second task will never run.
-    // We wait a bit (simulating the timeout period we EXPECT to exist, e.g. 100ms for test)
-    // But the current code has NO timeout.
+    // If the scheduler doesn't time out the hanging task (100ms here), the second
+    // task never runs. Poll for recovery with a bounded deadline instead of a fixed sleep.
+    const deadline = Date.now() + 2_000;
+    while (callCount < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
 
-    // To make this test fail fast instead of timing out the whole suite, we can race against a timeout.
-    // But we want to assert that it DOES recover.
-
-    // We'll wait for a short duration. If callCount is still 1, it failed to recover.
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    // Expect callCount to be 2 (implying the first one was aborted/timed out and second one ran)
+    // callCount >= 2 means the first sync timed out and the second one ran.
     expect(callCount).toBeGreaterThanOrEqual(2);
     service.events.clearRegistrySyncs();
+    releaseHangingSync?.();
   });
 });
 
