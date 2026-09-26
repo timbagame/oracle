@@ -65,3 +65,36 @@ test("enforces the threshold and validates merged LCOV reports", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("rejects unusable scopes, repositories and LCOV data", async () => {
+  const root = await mkdtemp(join(tmpdir(), "timba-coverage-errors-"));
+  try {
+    const config: Parameters<typeof checkCoverage>[0] = { roots: ["src"], extensions: [".ts"] };
+    await expect(checkCoverage(config, [], root)).rejects.toThrow(
+      "Unable to list tracked source files",
+    );
+
+    await mkdir(join(root, "src"));
+    await writeFile(join(root, "src/a.ts"), "synthetic\n");
+    await git(root, "init", "-q");
+    await git(root, "add", ".");
+    await expect(checkCoverage({ ...config, roots: ["lib"] }, [], root)).rejects.toThrow(
+      "No source files matched the coverage scope",
+    );
+    await expect(checkCoverage(config, [], root)).rejects.toThrow(
+      "No instrumented source lines in coverage reports",
+    );
+
+    const malformed = join(root, "malformed.info");
+    await writeFile(malformed, "SF:src/a.ts\nDA:x,1\nend_of_record\n");
+    await expect(checkCoverage(config, [malformed], root)).rejects.toThrow(
+      "Invalid LCOV line data",
+    );
+    await writeFile(malformed, "SF:src/a.ts\nDA:0,1\nend_of_record\n");
+    await expect(checkCoverage(config, [malformed], root)).rejects.toThrow(
+      "Invalid LCOV line data",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

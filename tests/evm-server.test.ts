@@ -73,6 +73,20 @@ describe("createEvmRouter", () => {
     });
   });
 
+  test("reports a failed cycle as degraded with retained work", async () => {
+    const { call, service } = setup();
+    service.lastCycleAt = Date.now();
+    service.lastCycleFailed = true;
+
+    const response = await call("/evm/health");
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      status: "degraded",
+      error: "EVM oracle cycle failed; durable work retained for retry",
+    });
+  });
+
   test("reports the journaled settlement transaction in health", async () => {
     const { call, service, store } = setup();
     service.lastCycleAt = Date.now();
