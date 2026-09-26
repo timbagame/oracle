@@ -133,3 +133,21 @@ describe("game token onboarding", () => {
     ).rejects.toThrow("initialized legacy SPL Token mint");
   });
 });
+
+describe("game token onboarding validation", () => {
+  test("rejects an operator ATA that belongs to another owner", async () => {
+    const operatorKeypair = Keypair.generate();
+    const mint = Keypair.generate().publicKey;
+    const operatorAta = await deriveAssociatedTokenAddress(mint, operatorKeypair.publicKey);
+    const connection = {
+      getAccountInfo: async (accountAddress: string) =>
+        accountAddress === mint.address
+          ? mintAccount(6)
+          : tokenAccount(mint, Keypair.generate().publicKey),
+    };
+
+    await expect(
+      prepareGameToken({ connection: connection as any, operatorKeypair, mint }),
+    ).rejects.toThrow(`Operator token account is invalid: ${operatorAta}`);
+  });
+});

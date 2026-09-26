@@ -620,3 +620,77 @@ describe("PlayerRegistrySync", () => {
     expect(perSignatureCalls).toHaveLength(players.length);
   });
 });
+
+describe("PlayerRegistrySync default event parsing", () => {
+  it("rebuilds the registry from real program logs, including moved participants", async () => {
+    const { programLogs, playerJoinedEvent, playerUnjoinedEvent } =
+      await import("./helpers/program-events.ts");
+    const programId = Keypair.generate().publicKey;
+    const gamePda = Keypair.generate().publicKey;
+    const first = Keypair.generate().publicKey.toBase58();
+    const second = Keypair.generate().publicKey.toBase58();
+    const third = Keypair.generate().publicKey.toBase58();
+    const logsBySignature: Record<string, string[]> = {
+      "sig-3": programLogs(programId.toBase58(), [
+        playerJoinedEvent({ gameKey: gamePda.address, player: first as never, ticketIndex: 0 }),
+        playerJoinedEvent({
+          gameKey: gamePda.address,
+          player: second as never,
+          ticketIndex: 1,
+          ticketsCount: 2,
+        }),
+      ]),
+      "sig-2": programLogs(programId.toBase58(), [
+        playerJoinedEvent({
+          gameKey: gamePda.address,
+          player: third as never,
+          ticketIndex: 2,
+          ticketsCount: 3,
+        }),
+      ]),
+      "sig-1": programLogs(programId.toBase58(), [
+        playerUnjoinedEvent({
+          gameKey: gamePda.address,
+          player: first as never,
+          ticketIndex: 0,
+          ticketsCount: 2,
+          movedParticipant: third as never,
+        }),
+      ]),
+    };
+    let pages = 0;
+    const connection = {
+      async getSignaturesForAddress() {
+        return pages++ === 0
+          ? [{ signature: "sig-1" }, { signature: "sig-2" }, { signature: "sig-3" }]
+          : [];
+      },
+      async getTransaction(signature: string) {
+        return { meta: { logMessages: logsBySignature[signature] ?? null } };
+      },
+    };
+    const sync = new PlayerRegistrySync({ connection: connection as any, programId });
+
+    const players = await sync.fetchPlayersFromChain({ gamePda, expectedTickets: 2 });
+
+    expect(players).toEqual([third, second]);
+  });
+
+  it("treats transactions without logs as carrying no registry events", async () => {
+    const programId = Keypair.generate().publicKey;
+    let pages = 0;
+    const connection = {
+      async getSignaturesForAddress() {
+        return pages++ === 0 ? [{ signature: "sig-empty" }] : [];
+      },
+      async getTransaction() {
+        return { meta: { logMessages: [] } };
+      },
+    };
+    const sync = new PlayerRegistrySync({ connection: connection as any, programId });
+
+    await expect(
+      sync.fetchPlayersFromChain({ gamePda: Keypair.generate().publicKey, expectedTickets: 1 }),
+    ).resolves.toBeNull();
+  });
+});

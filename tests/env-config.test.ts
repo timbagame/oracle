@@ -67,6 +67,15 @@ describe("environment helpers", () => {
     expect(shouldUseEphemeralKeypair()).toBe(true);
   });
 
+  it("ignores unrecognized USE_FAKE_KEYPAIR values", () => {
+    process.env.NODE_ENV = "production";
+    process.env["USE_FAKE_KEYPAIR"] = "maybe";
+    expect(shouldUseEphemeralKeypair()).toBe(false);
+
+    process.env.NODE_ENV = "test";
+    expect(shouldUseEphemeralKeypair()).toBe(true);
+  });
+
   it("allows opting into ephemeral keypairs via USE_FAKE_KEYPAIR", () => {
     process.env.NODE_ENV = "production";
     process.env["USE_FAKE_KEYPAIR"] = "true";
@@ -103,6 +112,21 @@ describe("runtime config", () => {
 
   it("throws when SOLANA_NETWORK is missing", () => {
     expect(() => getConfig()).toThrow("SOLANA_NETWORK is required");
+  });
+
+  it("falls back to defaults for fractional integer settings", () => {
+    process.env["SOLANA_NETWORK"] = "https://rpc";
+    process.env["ORACLE_PORT"] = "3000.5";
+    const warnSpy = spyOn(console, "warn");
+
+    try {
+      expect(getConfig().oraclePort).toBe(3001);
+      expect(warnSpy).toHaveBeenCalledWith(
+        "⚠️  ORACLE_PORT must be an integer, received 3000.5; using 3001.",
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("normalizes numeric inputs and enforces bounds", () => {

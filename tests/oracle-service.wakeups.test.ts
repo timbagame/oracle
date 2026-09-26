@@ -434,3 +434,18 @@ describe("OracleService completion retry timers", () => {
     (service as any).cancelCompletionRetry(gameAddress);
   });
 });
+
+describe("OracleService automatic completion tracking", () => {
+  test("forgets a tracked run once it rejects and surfaces the rejection", async () => {
+    const service = await createService();
+    const active = (service as any).activeAutomaticCompletionRuns as Set<Promise<unknown>>;
+    const failure = new Error("attempt crashed");
+
+    const tracked = (service as any).trackAutomaticCompletionRun(Promise.reject(failure));
+    expect(active.size).toBe(1);
+
+    await expect(tracked).rejects.toBe(failure);
+    await flush();
+    expect(active.size).toBe(0);
+  });
+});
