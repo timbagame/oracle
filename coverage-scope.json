@@ -11,7 +11,22 @@
     "database.ts",
     "player-registry-sync.ts",
     "solana-utils.ts",
-    "game-transaction-signer.ts"
+    "game-transaction-signer.ts",
+    "api-security.ts",
+    "config.ts",
+    "delay.ts",
+    "env.ts",
+    "game-completion-transaction-builder.ts",
+    "metrics.ts",
+    "oracle-accounts.ts",
+    "stats-formatter.ts",
+    "token-onboarding.ts",
+    "token-policy.ts",
+    "token-program.ts",
+    "web-api/cache.ts",
+    "web-api/create-game-request.ts",
+    "web-api/token-utils.ts",
+    "web-api/verification.ts"
   ],
   "extensions": [".ts"],
   "exclude": [
