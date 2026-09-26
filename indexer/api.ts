@@ -21,6 +21,12 @@ import type { ActiveGameRow, LifecycleRow, PlayerHistoryRow } from "./types.ts";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
+// Backward-compatible extension of the protocol leaderboard query: older
+// clients omit `period` and keep receiving the all-time ranking.
+export const LeaderboardQuerySchema = indexerContract.leaderboard.query.extend({
+  period: z.enum(["24h", "7d", "all"]).default("all"),
+});
+
 function json(
   schema: { parse(value: unknown): unknown },
   value: unknown,
@@ -189,10 +195,14 @@ export function createIndexerApi(database: IndexerDatabase, jupiterApiKey: strin
         return json(IndexerGameSchema, priced, "public, max-age=2, stale-while-revalidate=2");
       }
       if (path === "/api/leaderboard") {
-        const query = parseQuery(indexerContract.leaderboard.query, request);
+        const query = parseQuery(LeaderboardQuerySchema, request);
         if (query instanceof Response) return query;
-        const players = database.getLeaderboard(query.limit, query.tokenMint);
-        return json(IndexerLeaderboardResponseSchema, { players, count: players.length });
+        const players = database.getLeaderboard(query.limit, query.tokenMint, query.period);
+        return json(
+          IndexerLeaderboardResponseSchema,
+          { players, count: players.length },
+          "public, max-age=30",
+        );
       }
       if (path === "/api/tokens") {
         const tokens = database.getTokens().map((token) => ({
