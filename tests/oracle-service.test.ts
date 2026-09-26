@@ -22,6 +22,7 @@ const GAME_VAULT_SEED = Buffer.from("game_vault");
 
 type OracleServiceClass = typeof import("../oracle-service.ts").OracleService;
 type OracleDatabaseClass = typeof import("../database.ts").OracleDatabase;
+type OracleDatabaseInstance = import("../database.ts").OracleDatabase;
 type OracleServiceInstance = Awaited<ReturnType<OracleServiceClass["getInstance"]>>;
 
 function createGameAccountStub(overrides: Partial<TimbaGameAccount> = {}): TimbaGameAccount {
@@ -857,9 +858,16 @@ describe("OracleService", () => {
   });
 });
 
+// Shutdown tests close the database they are given, so each one gets its own
+// connection instead of closing the singleton shared by the other suites.
+function openIsolatedDatabase(): OracleDatabaseInstance {
+  const Isolated = OracleDatabase as unknown as new () => OracleDatabaseInstance;
+  return new Isolated();
+}
+
 describe("OracleService shutdown", () => {
   it("waits for an active automatic completion before closing the database", async () => {
-    const db = OracleDatabase.getInstance();
+    const db = openIsolatedDatabase();
     const service = await OracleService.createWith(db);
     const gameAddress = Keypair.generate().publicKey.toBase58();
     let resolveAttempt!: (result: { success: true }) => void;
@@ -895,7 +903,7 @@ describe("OracleService shutdown", () => {
   });
 
   it("close() stops event listeners, scanner, and closes database", async () => {
-    const db = OracleDatabase.getInstance();
+    const db = openIsolatedDatabase();
     const service = await OracleService.createWith(db);
 
     // Track initial state
@@ -911,7 +919,7 @@ describe("OracleService shutdown", () => {
   });
 
   it("close() closes database even after stopping event listeners", async () => {
-    const db = OracleDatabase.getInstance();
+    const db = openIsolatedDatabase();
     const service = await OracleService.createWith(db);
 
     const closeOrder: string[] = [];
@@ -936,7 +944,7 @@ describe("OracleService shutdown", () => {
   });
 
   it("close() ensures database flush after game secrets generation", async () => {
-    const db = OracleDatabase.getInstance();
+    const db = openIsolatedDatabase();
     const service = await OracleService.createWith(db);
     service.cleanupOldRecords(-1);
 
