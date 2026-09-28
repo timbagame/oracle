@@ -204,6 +204,15 @@ function startHarness(
   };
 }
 
+/** Makes the verification worker crash outside its per-job error handling. */
+function crashVerificationWorker() {
+  track(
+    spyOn(IndexerDatabase.prototype, "nextVerificationJob").mockImplementation(() => {
+      throw new Error("database is locked");
+    }),
+  );
+}
+
 describe("oracle start", () => {
   test("serves the API, runs background work and shuts down on SIGTERM", async () => {
     const harness = startHarness();
@@ -283,20 +292,49 @@ describe("oracle start", () => {
 });
 
 describe("oracle background supervision", () => {
-  test("logs a crashed background worker and still shuts down", async () => {
+  test("a crashed worker stops its siblings before the oracle shuts down", async () => {
     const harness = startHarness({ scans: [] });
-    spyOn(IndexerDatabase.prototype, "nextVerificationJob").mockImplementation(() => {
-      throw new Error("database is locked");
+    let closedWhenIndexerStopped: number | undefined;
+    harness.indexerRun.mockImplementation(async (signal: AbortSignal) => {
+      await waitForAbort(signal);
+      // Stopping takes a moment; shutdown must not close the oracle underneath it.
+      await tick();
+      closedWhenIndexerStopped = harness.closed;
+    });
+    crashVerificationWorker();
+
+    await start();
+    await until(() => harness.closed === 1);
+
+    const indexerSignal = harness.indexerRun.mock.calls[0]![0] as AbortSignal;
+    expect(indexerSignal.aborted).toBe(true);
+    expect(harness.scanSignals.every((signal) => signal.aborted)).toBe(true);
+    expect(closedWhenIndexerStopped).toBe(0);
+    expect(harness.logs).toContain(
+      "Background worker crashed; stopping the oracle so it restarts cleanly:",
+    );
+    expect(harness.serverStops).toBe(1);
+    expect(harness.closeIndexer).toHaveBeenCalledTimes(1);
+    expect(harness.exit).not.toHaveBeenCalled();
+  });
+
+  test("errors raised while workers stop for shutdown are not treated as crashes", async () => {
+    const harness = startHarness({ scans: [] });
+    harness.indexerRun.mockImplementation(async (signal: AbortSignal) => {
+      await waitForAbort(signal);
+      throw new DOMException("The operation was aborted.", "AbortError");
     });
 
     await start();
-    await until(() => harness.logs.includes("Unhandled error in background scan supervisor:"));
+    await until(() => harness.scanSignals.length === 1);
     await harness.signals.get("SIGTERM")!();
 
+    expect(harness.logs).toContain("Shutdown complete");
+    expect(harness.logs).not.toContain(
+      "Background worker crashed; stopping the oracle so it restarts cleanly:",
+    );
     expect(harness.serverStops).toBe(1);
     expect(harness.closed).toBe(1);
-    expect(harness.logs).toContain("Shutdown complete");
-    expect(harness.exit).not.toHaveBeenCalled();
   });
 
   test("does not launch a second set of background workers when started again", async () => {
@@ -380,6 +418,30 @@ describe("oracle process exits outside the test runner", () => {
     await until(() => harness.exit.mock.calls.length > 0);
 
     expect(harness.logs).toContain("Failed to stop server after init error:");
+    expect(harness.closed).toBe(0);
+    expect(harness.exit.mock.calls).toEqual([[1]]);
+  });
+
+  test("exits with code 1 after a background worker crashes", async () => {
+    const harness = productionHarness({ scans: [] });
+    crashVerificationWorker();
+
+    await start();
+    await until(() => harness.exit.mock.calls.length > 0);
+
+    expect(harness.scanSignals.every((signal) => signal.aborted)).toBe(true);
+    expect(harness.closed).toBe(1);
+    expect(harness.exit.mock.calls).toEqual([[1]]);
+  });
+
+  test("exits with code 1 when the server cannot be stopped after a worker crash", async () => {
+    const harness = productionHarness({ scans: [], stopFails: true });
+    crashVerificationWorker();
+
+    await start();
+    await until(() => harness.exit.mock.calls.length > 0);
+
+    expect(harness.logs).toContain("Failed to stop server after background worker failure:");
     expect(harness.closed).toBe(0);
     expect(harness.exit.mock.calls).toEqual([[1]]);
   });

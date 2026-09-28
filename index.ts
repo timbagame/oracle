@@ -139,7 +139,7 @@ async function abortBackgroundLoop(): Promise<void> {
   const loopPromise = backgroundLoop;
   backgroundLoop = undefined;
 
-  // The loop never rejects: start() attaches its own supervisor error handler.
+  // The loop never rejects: start() supervises each worker and handles its failures.
   const timeoutResult = await Promise.race<"completed" | "timeout">([
     loopPromise.then(() => "completed" as const),
     delay(shutdownTimeoutMs()).then(() => "timeout" as const),
@@ -191,6 +191,20 @@ async function stopServer(oracle: OracleApi, exitCode?: number): Promise<void> {
 
   if (exitCode !== undefined && !isTestRun()) {
     process.exit(exitCode);
+  }
+}
+
+/** Stops the oracle after a fatal error, exiting with code 1 outside the test runner. */
+async function stopAfterFailure(oracle: OracleApi, stopFailureMessage: string): Promise<void> {
+  const exitCode = !isTestRun() ? 1 : undefined;
+
+  try {
+    await stopServer(oracle, exitCode);
+  } catch (shutdownError) {
+    logger.failure(stopFailureMessage, shutdownError);
+    if (exitCode !== undefined && !isTestRun()) {
+      process.exit(exitCode);
+    }
   }
 }
 
@@ -887,8 +901,9 @@ export async function start(): Promise<void> {
       return;
     }
 
-    backgroundAbortController = new AbortController();
-    const { signal } = backgroundAbortController;
+    const controller = new AbortController();
+    backgroundAbortController = controller;
+    const { signal } = controller;
 
     const runBackgroundLoop = async () => {
       while (!signal.aborted) {
@@ -941,20 +956,32 @@ export async function start(): Promise<void> {
         await delay(10_000, { signal });
       }
     };
-    backgroundLoop = Promise.all([
-      runBackgroundLoop(),
-      publicIndexer.run(signal),
-      runVerificationJobs(),
-    ])
-      .then(() => undefined)
-      .catch((error) => {
-        if (!signal.aborted) {
-          logger.failure("Unhandled error in background scan supervisor:", error);
-        }
-      })
-      .finally(() => {
-        backgroundAbortController = undefined;
+    // Each worker handles its own cycle errors, so a rejection here is a crash. The oracle must
+    // not keep serving with only part of its background work, so a crash stops the sibling
+    // workers and, once all of them have exited, shuts the process down for the supervisor to
+    // restart. Rejections after the abort are workers stopping and are not crashes.
+    let crash: { error: unknown } | undefined;
+    const supervise = (worker: Promise<void>) =>
+      worker.catch((error) => {
+        if (signal.aborted) return;
+        crash = { error };
+        controller.abort();
       });
+    backgroundLoop = Promise.all([
+      supervise(runBackgroundLoop()),
+      supervise(publicIndexer.run(signal)),
+      supervise(runVerificationJobs()),
+    ]).then(() => {
+      if (backgroundAbortController === controller) backgroundAbortController = undefined;
+    });
+    void backgroundLoop.then(async () => {
+      if (!crash) return;
+      logger.failure(
+        "Background worker crashed; stopping the oracle so it restarts cleanly:",
+        crash.error,
+      );
+      await stopAfterFailure(oracleApi, "Failed to stop server after background worker failure:");
+    });
   };
 
   initialize(oracleApi)
@@ -963,16 +990,7 @@ export async function start(): Promise<void> {
     })
     .catch(async (error) => {
       logger.failure("Oracle initialization failed. Stopping server.", error);
-      const exitCode = !isTestRun() ? 1 : undefined;
-
-      try {
-        await stopServer(oracleApi, exitCode);
-      } catch (shutdownError) {
-        logger.failure("Failed to stop server after init error:", shutdownError);
-        if (exitCode !== undefined && !isTestRun()) {
-          process.exit(exitCode);
-        }
-      }
+      await stopAfterFailure(oracleApi, "Failed to stop server after init error:");
     });
 
   process.once("SIGINT", () => shutdown(oracleApi, "SIGINT"));
