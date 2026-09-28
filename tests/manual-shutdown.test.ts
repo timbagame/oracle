@@ -1,6 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { OracleService } from "../oracle-service.ts";
-import { main } from "../scripts/manual-shutdown.ts";
+import { main, runCli } from "../scripts/manual-shutdown.ts";
 import { captureConsole, createRestorer } from "./helpers/cli.ts";
 
 const restorer = createRestorer();
@@ -51,4 +51,27 @@ test("drains pending games, cleans every record and prints a summary", async () 
   expect(text).toContain("Deleted secrets: 3, deleted games: 2, deleted players: 5");
   expect(text).toContain("Total completions: 2, total errors: 1");
   expect(output.error).toEqual([]);
+});
+
+test("the CLI reports a failed shutdown scan and exits with code 1", async () => {
+  const output = captureConsole(restorer);
+  const exits: Array<number | undefined> = [];
+  restorer.track(
+    spyOn(process, "exit").mockImplementation(((code?: number) => {
+      exits.push(code);
+    }) as never),
+  );
+  const failure = new Error("listener stuck");
+  restorer.track(
+    spyOn(OracleService, "getInstance").mockResolvedValue({
+      stopEventListening: async () => {
+        throw failure;
+      },
+    } as never),
+  );
+
+  await runCli([]);
+
+  expect(exits).toEqual([1]);
+  expect(output.error).toEqual([["❌ Manual shutdown failed:", failure]]);
 });

@@ -44,9 +44,9 @@ import { createWebGameApi } from "./web-api/api.ts";
 import { createIndexerApi } from "./indexer/api.ts";
 
 const FALLBACK_SCAN_INTERVAL = 300000; // 5 minutes
-const IS_TEST_ENV = process.env["TIMBA_ORACLE_TEST_RUNNER"] === "true" || isTestEnvironment();
-const BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS = IS_TEST_ENV ? 50 : 5000;
-const EVENT_LISTENER_SHUTDOWN_TIMEOUT_MS = IS_TEST_ENV ? 50 : 5000;
+// Read at call time so tests can exercise the production exit paths with a stubbed process.exit.
+const isTestRun = () => process.env["TIMBA_ORACLE_TEST_RUNNER"] === "true" || isTestEnvironment();
+const shutdownTimeoutMs = () => (isTestRun() ? 50 : 5000);
 const PUBLIC_ERROR_MESSAGES = {
   autoCompleteAlreadySet: "Auto-complete is already set to the requested value",
   autoCompleteBooleanRequired: "autoCompleteDisabled must be a boolean",
@@ -139,23 +139,16 @@ async function abortBackgroundLoop(): Promise<void> {
   const loopPromise = backgroundLoop;
   backgroundLoop = undefined;
 
+  // The loop never rejects: start() attaches its own supervisor error handler.
   const timeoutResult = await Promise.race<"completed" | "timeout">([
-    loopPromise
-      .then(() => "completed" as const)
-      .catch((error) => {
-        logger.warning("Background loop terminated with error:", error);
-        return "completed" as const;
-      }),
-    delay(BACKGROUND_LOOP_SHUTDOWN_TIMEOUT_MS).then(() => "timeout" as const),
+    loopPromise.then(() => "completed" as const),
+    delay(shutdownTimeoutMs()).then(() => "timeout" as const),
   ]);
 
   if (timeoutResult === "timeout") {
     logger.warning(
       "Background loop did not exit within the shutdown timeout; proceeding with shutdown.",
     );
-    loopPromise.catch((error) => {
-      logger.warning("Background loop terminated with error:", error);
-    });
   }
 
   backgroundAbortController = undefined;
@@ -177,7 +170,7 @@ async function closeOracle(oracle: OracleApi): Promise<void> {
         logger.warning("Failed to close oracle:", error);
         return "completed" as const;
       }),
-    delay(EVENT_LISTENER_SHUTDOWN_TIMEOUT_MS).then(() => "timeout" as const),
+    delay(shutdownTimeoutMs()).then(() => "timeout" as const),
   ]);
 
   if (timeoutResult === "timeout") {
@@ -196,17 +189,13 @@ async function stopServer(oracle: OracleApi, exitCode?: number): Promise<void> {
   indexerDatabase?.close();
   indexerDatabase = undefined;
 
-  if (exitCode !== undefined && !IS_TEST_ENV) {
+  if (exitCode !== undefined && !isTestRun()) {
     process.exit(exitCode);
   }
 }
 
 // Response helpers
 function createResponse(data: unknown, status: number = 200): Response {
-  if (data === null || data === undefined) {
-    return new Response(null, { status, headers: JSON_HEADERS });
-  }
-
   const body = typeof data === "string" ? data : JSON.stringify(data);
   return new Response(body, { status, headers: JSON_HEADERS });
 }
@@ -974,13 +963,13 @@ export async function start(): Promise<void> {
     })
     .catch(async (error) => {
       logger.failure("Oracle initialization failed. Stopping server.", error);
-      const exitCode = !IS_TEST_ENV ? 1 : undefined;
+      const exitCode = !isTestRun() ? 1 : undefined;
 
       try {
         await stopServer(oracleApi, exitCode);
       } catch (shutdownError) {
         logger.failure("Failed to stop server after init error:", shutdownError);
-        if (exitCode !== undefined && !IS_TEST_ENV) {
+        if (exitCode !== undefined && !isTestRun()) {
           process.exit(exitCode);
         }
       }
@@ -990,9 +979,7 @@ export async function start(): Promise<void> {
   process.once("SIGTERM", () => shutdown(oracleApi, "SIGTERM"));
 }
 
-if (!IS_TEST_ENV) {
-  await start();
-}
+if (!isTestRun()) await start();
 
 // Initialize and start services
 export async function initialize(oracle: OracleApi): Promise<void> {
@@ -1003,14 +990,14 @@ export async function initialize(oracle: OracleApi): Promise<void> {
 // Graceful shutdown
 export async function shutdown(oracle: OracleApi, signal: string): Promise<void> {
   logger.info(`\n🛑 Shutting down (${signal})...`);
-  const exitCode = !IS_TEST_ENV ? 0 : undefined;
+  const exitCode = !isTestRun() ? 0 : undefined;
 
   try {
     await stopServer(oracle, exitCode);
     logger.success("Shutdown complete");
   } catch (error) {
     logger.failure("Shutdown error:", error);
-    if (exitCode !== undefined && !IS_TEST_ENV) {
+    if (exitCode !== undefined && !isTestRun()) {
       process.exit(exitCode);
     }
   }

@@ -49,6 +49,12 @@ describe("audit-random helpers", () => {
     });
   });
 
+  it("parseArgs lets the last database refresh flag win and prefers --game over positionals", () => {
+    expect(parseArgs(["--db-refresh", "--no-db-refresh"]).refreshFromDbEachTick).toBe(false);
+    expect(parseArgs(["--no-db-refresh", "--db-refresh"]).refreshFromDbEachTick).toBe(true);
+    expect(parseArgs(["Positional", "--game", "Flagged"]).gameAddress).toBe("Flagged");
+  });
+
   it("parseArgs validates values", () => {
     expect(() => parseArgs(["--interval"])).toThrow("Missing value for --interval");
     expect(() => parseArgs(["--slots"])).toThrow("Missing value for --slots");
@@ -79,6 +85,44 @@ describe("audit-random helpers", () => {
       gameAddress: "game-1",
       mutation: { action: "unjoined", ticketIndex: 3 },
     });
+  });
+
+  it("extractPlayerMutation reads legacy snake_case payloads", () => {
+    expect(
+      extractPlayerMutation("joined", {
+        game_key: "game-1",
+        player_address: "player-1",
+        ticket_index: 0,
+      } as never),
+    ).toEqual({
+      gameAddress: "game-1",
+      mutation: { action: "joined", playerAddress: "player-1", ticketIndex: 0 },
+    });
+    expect(
+      extractPlayerMutation("unjoined", {
+        game: "game-1",
+        ticket_index: 1,
+        moved_participant: "player-2",
+      }),
+    ).toEqual({
+      gameAddress: "game-1",
+      mutation: { action: "unjoined", ticketIndex: 1, movedParticipant: "player-2" },
+    });
+  });
+
+  it("extractPlayerMutation ignores payloads without a game, ticket or player", () => {
+    expect(extractPlayerMutation("joined", { playerAddress: "player-1", ticketIndex: 0 })).toBe(
+      null,
+    );
+    expect(extractPlayerMutation("unjoined", { gameAddress: "game-1" })).toBeNull();
+    expect(
+      extractPlayerMutation("joined", {
+        gameAddress: "game-1",
+        playerAddress: "player-1",
+        ticketIndex: -1,
+      }),
+    ).toBeNull();
+    expect(extractPlayerMutation("joined", { gameAddress: "game-1", ticketIndex: 2 })).toBeNull();
   });
 
   it("extractGameAddressFromEventPayload supports legacy keys", () => {

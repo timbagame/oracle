@@ -50,7 +50,7 @@ jobs:
         run: bun x tsc -p tsconfig.json --noEmit
       - name: Tests
         run: bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage
-      - name: Enforce 95% line coverage
+      - name: Enforce 100% line coverage
         run: bun run scripts/check-coverage.ts coverage-scope.json coverage/lcov.info
       - name: Upload coverage
         if: always()

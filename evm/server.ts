@@ -34,6 +34,7 @@ export function createEvmRouter(service: EvmService, apiToken: string) {
       const healthy =
         !service.lastCycleFailed &&
         Date.now() - service.lastCycleAt < Math.max(30_000, service.config.pollMs * 3);
+      const httpStatus = healthy ? 200 : 503;
       return reply(
         {
           status: healthy ? "healthy" : "degraded",
@@ -43,7 +44,7 @@ export function createEvmRouter(service: EvmService, apiToken: string) {
             : null,
           pendingTransaction: service.store.pending()?.hash ?? null,
         },
-        healthy ? 200 : 503,
+        httpStatus,
       );
     }
     if (request.method === "GET" && path === "/evm/events")

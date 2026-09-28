@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve } from "path";
 
-const THRESHOLD = 95;
+const THRESHOLD = 100;
 
 type CoverageConfig = {
   roots: string[];
@@ -136,6 +136,4 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
   }
 }
 
-if (import.meta.main) {
-  process.exitCode = await main(process.argv.slice(2));
-}
+if (import.meta.main) process.exitCode = await main(process.argv.slice(2));

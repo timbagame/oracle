@@ -28,10 +28,17 @@ test("enforces the threshold and validates merged LCOV reports", async () => {
     const low = join(root, "low.info");
     const exact = join(root, "exact.info");
     const extra = join(root, "extra.info");
-    await writeFile(low, report(Array.from({ length: 94 }, (_, index) => index + 1)));
-    await writeFile(exact, report(Array.from({ length: 95 }, (_, index) => index + 1)));
-    await writeFile(extra, report([95]));
-    expect((await checkCoverage(config, [low], root)).passed).toBe(false);
+    await writeFile(low, report(Array.from({ length: 99 }, (_, index) => index + 1)));
+    await writeFile(exact, report(Array.from({ length: 100 }, (_, index) => index + 1)));
+    await writeFile(extra, report([100]));
+    expect(await checkCoverage(config, [low], root)).toEqual({
+      threshold: 100,
+      covered: 99,
+      total: 100,
+      percent: 99,
+      missing: [],
+      passed: false,
+    });
     expect((await checkCoverage(config, [exact], root)).passed).toBe(true);
     expect((await checkCoverage(config, [low, extra], root)).passed).toBe(true);
 

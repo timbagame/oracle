@@ -11,49 +11,53 @@ function usage(): never {
   process.exit(2);
 }
 
-const [, , command, ...args] = Bun.argv;
-if (!command) usage();
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const [command, ...args] = argv;
+  if (!command) usage();
 
-const oracle = await OracleService.getInstance();
+  const oracle = await OracleService.getInstance();
 
-try {
-  if (command === "requeue") {
-    const [gameAddress] = args;
-    if (!gameAddress) usage();
-    const result = oracle.requeueGame(gameAddress);
-    if (!result.success) {
-      throw new Error(`Unable to requeue game: ${result.reason}`);
-    }
-    console.log(`Requeued ${gameAddress}`);
-  } else if (command === "auto-complete") {
-    const [gameAddress, value] = args;
-    if (!gameAddress) usage();
-    if (value !== "on" && value !== "off") usage();
-    const result = oracle.setAutoCompleteDisabled(gameAddress, value === "off");
-    if (!result.success) {
-      throw new Error(`Unable to update auto-complete: ${result.reason}`);
-    }
-    console.log(
-      `Auto-complete ${result.autoCompleteDisabled ? "disabled" : "enabled"} for ${gameAddress}`,
-    );
-  } else if (command === "token-policy") {
-    const [action, mint, enabledValue] = args;
-    if (action === "list" && args.length === 1) {
-      console.log(JSON.stringify(await oracle.getTokenPolicies(), null, 2));
-    } else if (
-      action === "set" &&
-      mint &&
-      (enabledValue === "on" || enabledValue === "off") &&
-      args.length === 3
-    ) {
-      const policy = await oracle.setTokenPolicy(mint, enabledValue === "on");
-      console.log(JSON.stringify(policy, null, 2));
+  try {
+    if (command === "requeue") {
+      const [gameAddress] = args;
+      if (!gameAddress) usage();
+      const result = oracle.requeueGame(gameAddress);
+      if (!result.success) {
+        throw new Error(`Unable to requeue game: ${result.reason}`);
+      }
+      console.log(`Requeued ${gameAddress}`);
+    } else if (command === "auto-complete") {
+      const [gameAddress, value] = args;
+      if (!gameAddress) usage();
+      if (value !== "on" && value !== "off") usage();
+      const result = oracle.setAutoCompleteDisabled(gameAddress, value === "off");
+      if (!result.success) {
+        throw new Error(`Unable to update auto-complete: ${result.reason}`);
+      }
+      console.log(
+        `Auto-complete ${result.autoCompleteDisabled ? "disabled" : "enabled"} for ${gameAddress}`,
+      );
+    } else if (command === "token-policy") {
+      const [action, mint, enabledValue] = args;
+      if (action === "list" && args.length === 1) {
+        console.log(JSON.stringify(await oracle.getTokenPolicies(), null, 2));
+      } else if (
+        action === "set" &&
+        mint &&
+        (enabledValue === "on" || enabledValue === "off") &&
+        args.length === 3
+      ) {
+        const policy = await oracle.setTokenPolicy(mint, enabledValue === "on");
+        console.log(JSON.stringify(policy, null, 2));
+      } else {
+        usage();
+      }
     } else {
       usage();
     }
-  } else {
-    usage();
+  } finally {
+    await oracle.close();
   }
-} finally {
-  await oracle.close();
 }
+
+if (import.meta.main) await main();

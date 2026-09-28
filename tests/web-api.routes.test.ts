@@ -180,9 +180,13 @@ function useOracleTokenPolicies() {
   });
 }
 
-/** Lets background work (PDA hashing, RPC doubles) settle without a timed sleep. */
-async function settle(done: () => boolean = () => false, ticks = 50): Promise<void> {
-  for (let index = 0; index < ticks && !done(); index++) {
+/**
+ * Lets background work (PDA hashing, RPC doubles) settle without a timed sleep. With a `done`
+ * condition it keeps yielding until the condition holds, bounded generously so a loaded CI runner
+ * still gets there; without one it yields a fixed number of turns.
+ */
+async function settle(done?: () => boolean, ticks = done ? 10_000 : 50): Promise<void> {
+  for (let index = 0; index < ticks && !done?.(); index++) {
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
 }
