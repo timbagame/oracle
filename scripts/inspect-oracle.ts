@@ -29,6 +29,4 @@ export async function main(_argv: string[] = process.argv.slice(2)): Promise<voi
   }
 }
 
-if (import.meta.main) {
-  main();
-}
+if (import.meta.main) await main();

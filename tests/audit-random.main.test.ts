@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as readline from "node:readline/promises";
 import { OracleDatabase } from "../database.ts";
 import { OracleService } from "../oracle-service.ts";
-import { main } from "../scripts/audit-random.ts";
+import { main, runCli } from "../scripts/audit-random.ts";
 import { captureConsole, createRestorer } from "./helpers/cli.ts";
 
 const GAME = "32Jr4JnXWvqq9GqPQynkooHsszaucUUvZfNLh2hdX2L5";
@@ -269,6 +269,23 @@ describe("audit-random CLI", () => {
     expect(frame).toContain("Tickets: 3 | Players(DB): 0");
   });
 
+  test("reports a failure to compute the current winner and keeps the join preview", async () => {
+    const audit = fakeAuditEnvironment({ polls: [{ slot: 300 }] });
+    const oracle = await OracleService.getInstance();
+    oracle.completionManager.calculateWinnerIndex = ((_secret: Buffer, slot: number, n: number) => {
+      if (n === 2) throw new Error("entropy unavailable");
+      return slot % n;
+    }) as never;
+
+    await main([GAME, "--once", "--no-listen", "--slots", "1"]);
+
+    const frame = audit.frames[0]!;
+    expect(frame).toContain("- Compute winner: entropy unavailable");
+    expect(frame).toContain("If 1 new ticket joins at future slot (n=3):");
+    expect(frame).toContain("Winner if completes now: n/a");
+    expect(frame).toContain(`301 -> index=   1 pos=   2 winner=${PLAYER_B}`);
+  });
+
   test("reports account fetch failures and treats the game as gone", async () => {
     const audit = fakeAuditEnvironment({
       polls: [{ slot: 300, account: new Error("429 from RPC") }],
@@ -331,6 +348,83 @@ describe("audit-random CLI", () => {
 
     expect(audit.questions).toEqual(["Game address (base58): "]);
     expect(audit.frames.at(-1)).toContain(`Game: ${GAME}`);
+  });
+
+  test("treats an out-of-range selection as a pasted address", async () => {
+    const output = captureConsole(restorer);
+    const audit = fakeAuditEnvironment({
+      pending: [{ game_address: GAME, completion_attempts: 0 }],
+      answers: ["9", "1"],
+      polls: [{ slot: 200 }],
+    });
+
+    await main(["--once", "--no-listen"]);
+
+    expect(String(output.error[0]?.[0])).toContain(
+      "No secret key found in this oracle DB for 9 (not tracked).",
+    );
+    expect(audit.questions).toHaveLength(2);
+    expect(audit.frames.at(-1)).toContain(`Game: ${GAME}`);
+  });
+
+  test("fails when the secret disappears before the audit starts", async () => {
+    const audit = fakeAuditEnvironment({ polls: [] });
+    const db = OracleDatabase.getInstance();
+    let lookups = 0;
+    db.getSecretKeyInfo = (() => {
+      lookups += 1;
+      return lookups === 1 ? { secretKey: SECRET, used: false } : null;
+    }) as never;
+
+    await expect(main([GAME, "--once", "--no-listen"])).rejects.toThrow(
+      `No secret key found in local DB for ${GAME}`,
+    );
+    expect(lookups).toBe(2);
+    expect(audit.frames).toEqual([]);
+  });
+
+  test("the CLI reports failures and exits with code 1", async () => {
+    const output = captureConsole(restorer);
+    const exits: Array<number | undefined> = [];
+    restorer.track(
+      spyOn(process, "exit").mockImplementation(((code?: number) => {
+        exits.push(code);
+      }) as never),
+    );
+    const getInstance = restorer.track(spyOn(OracleService, "getInstance"));
+
+    await runCli(["--bogus"]);
+
+    expect(exits).toEqual([1]);
+    expect(output.error).toEqual([["audit-random failed: Unknown argument: --bogus"]]);
+    expect(getInstance).not.toHaveBeenCalled();
+  });
+
+  test("the CLI reports non-Error failures verbatim", async () => {
+    const output = captureConsole(restorer);
+    const exits: Array<number | undefined> = [];
+    restorer.track(
+      spyOn(process, "exit").mockImplementation(((code?: number) => {
+        exits.push(code);
+      }) as never),
+    );
+    restorer.track(spyOn(OracleService, "getInstance").mockRejectedValue("rpc offline"));
+
+    await runCli([GAME, "--once"]);
+
+    expect(exits).toEqual([1]);
+    expect(output.error).toEqual([["audit-random failed: rpc offline"]]);
+  });
+
+  test("the CLI completes without exiting when the audit succeeds", async () => {
+    const audit = fakeAuditEnvironment({ polls: [{ slot: 200 }] });
+    const exit = restorer.track(spyOn(process, "exit"));
+
+    await runCli([GAME, "--once", "--no-listen"]);
+
+    expect(exit).not.toHaveBeenCalled();
+    expect(audit.frames).toHaveLength(1);
+    expect(audit.stopped).toBe(1);
   });
 
   test("rejects an empty answer at the prompt", async () => {

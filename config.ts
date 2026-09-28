@@ -53,11 +53,7 @@ function parseNonNegative(
   value: string | undefined,
   { defaultValue, key }: { defaultValue: number; key: string },
 ): number {
-  const parsed = parseInteger(value, { defaultValue, min: 0, key });
-  if (parsed < 0) {
-    return defaultValue;
-  }
-  return parsed;
+  return parseInteger(value, { defaultValue, min: 0, key });
 }
 
 function resolvePath(relativeOrAbsolute: string): string {

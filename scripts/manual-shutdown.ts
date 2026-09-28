@@ -41,9 +41,12 @@ export async function main(_argv: string[] = process.argv.slice(2)): Promise<voi
   );
 }
 
-if (import.meta.main) {
-  main().catch((error) => {
+/** Runs the shutdown scan as a CLI, exiting with code 1 when it fails. */
+export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
+  await main(argv).catch((error) => {
     console.error("❌ Manual shutdown failed:", error);
     process.exit(1);
   });
 }
+
+if (import.meta.main) await runCli();

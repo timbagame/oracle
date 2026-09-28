@@ -31,7 +31,13 @@ type ScanOutcome = "throw" | "return";
 
 /** Replaces the chain, HTTP listener, signals and timers that start() wires together. */
 function startHarness(
-  options: { apiToken?: string; startFails?: boolean; scans?: ScanOutcome[] } = {},
+  options: {
+    apiToken?: string;
+    startFails?: boolean;
+    stopFails?: boolean;
+    scans?: ScanOutcome[];
+    env?: Record<string, string | undefined>;
+  } = {},
 ) {
   const env = setupTestEnvironment({
     prefix: "index-start",
@@ -39,6 +45,7 @@ function startHarness(
       ORACLE_API_TOKEN: options.apiToken ?? "start-token",
       ORACLE_API_TOKEN_FILE: undefined,
       INDEXER_DATABASE_FILE: ":memory:",
+      ...options.env,
     },
   });
   restores.push(() => env.cleanup());
@@ -80,6 +87,8 @@ function startHarness(
       return {
         stop: async () => {
           serverStops += 1;
+          // Only the first stop fails, so a later signal can still shut the harness down.
+          if (options.stopFails && serverStops === 1) throw new Error("listener stuck");
         },
       };
     }) as never),
@@ -91,6 +100,7 @@ function startHarness(
   let observer: (() => void) | undefined;
   let observerRemoved = 0;
   let closed = 0;
+  let listenStarts = 0;
   const oracle = {
     getConnection: () => ({}),
     getProgramId: () => PROGRAM_ID,
@@ -102,6 +112,7 @@ function startHarness(
     },
     getStats: () => ({}),
     startEventListening: async () => {
+      listenStarts += 1;
       if (options.startFails) throw new Error("listener refused");
     },
     close: async () => {
@@ -178,6 +189,9 @@ function startHarness(
     wake: () => observer?.(),
     get closed() {
       return closed;
+    },
+    get listenStarts() {
+      return listenStarts;
     },
     get serverStops() {
       return serverStops;
@@ -265,5 +279,108 @@ describe("oracle start", () => {
 
     expect(harness.getInstance).not.toHaveBeenCalled();
     expect(harness.serve).not.toHaveBeenCalled();
+  });
+});
+
+describe("oracle background supervision", () => {
+  test("logs a crashed background worker and still shuts down", async () => {
+    const harness = startHarness({ scans: [] });
+    spyOn(IndexerDatabase.prototype, "nextVerificationJob").mockImplementation(() => {
+      throw new Error("database is locked");
+    });
+
+    await start();
+    await until(() => harness.logs.includes("Unhandled error in background scan supervisor:"));
+    await harness.signals.get("SIGTERM")!();
+
+    expect(harness.serverStops).toBe(1);
+    expect(harness.closed).toBe(1);
+    expect(harness.logs).toContain("Shutdown complete");
+    expect(harness.exit).not.toHaveBeenCalled();
+  });
+
+  test("does not launch a second set of background workers when started again", async () => {
+    const harness = startHarness({ scans: [] });
+
+    await start();
+    await until(() => harness.scanSignals.length === 1);
+    await start();
+    await until(() => harness.listenStarts === 2);
+    for (let index = 0; index < 5; index++) await tick();
+
+    expect(harness.serve).toHaveBeenCalledTimes(2);
+    expect(harness.indexerRun).toHaveBeenCalledTimes(1);
+    expect(harness.scanSignals).toHaveLength(1);
+
+    await harness.signals.get("SIGTERM")!();
+    expect(harness.scanSignals[0]!.aborted).toBe(true);
+  });
+});
+
+describe("oracle process exits outside the test runner", () => {
+  const production = {
+    NODE_ENV: "production",
+    BUN_ENV: undefined,
+    TIMBA_ORACLE_TEST_RUNNER: undefined,
+  };
+
+  function productionHarness(options: Parameters<typeof startHarness>[0] = {}) {
+    const harness = startHarness({ ...options, env: production });
+    harness.exit.mockImplementation((() => undefined) as never);
+    return harness;
+  }
+
+  test("exits with code 0 after a graceful shutdown", async () => {
+    const harness = productionHarness({ scans: [] });
+
+    await start();
+    expect(harness.serve).toHaveBeenCalledTimes(1);
+    await until(() => harness.scanSignals.length === 1);
+    await harness.signals.get("SIGTERM")!();
+
+    expect(harness.scanSignals[0]!.aborted).toBe(true);
+    expect(harness.closed).toBe(1);
+    expect(harness.logs).toContain("Shutdown complete");
+    expect(harness.exit.mock.calls).toEqual([[0]]);
+  });
+
+  test("exits with code 0 even when stopping the server fails", async () => {
+    const harness = productionHarness({ scans: [], stopFails: true });
+
+    await start();
+    await until(() => harness.scanSignals.length === 1);
+    await harness.signals.get("SIGINT")!();
+
+    expect(harness.logs).toContain("Shutdown error:");
+    expect(harness.logs).not.toContain("Shutdown complete");
+    expect(harness.closed).toBe(0);
+    expect(harness.exit.mock.calls).toEqual([[0]]);
+
+    await harness.signals.get("SIGTERM")!();
+    expect(harness.closed).toBe(1);
+    expect(harness.scanSignals[0]!.aborted).toBe(true);
+  });
+
+  test("exits with code 1 when initialization fails", async () => {
+    const harness = productionHarness({ startFails: true });
+
+    await start();
+    await until(() => harness.exit.mock.calls.length > 0);
+
+    expect(harness.logs).toContain("Oracle initialization failed. Stopping server.");
+    expect(harness.closed).toBe(1);
+    expect(harness.scanSignals).toEqual([]);
+    expect(harness.exit.mock.calls).toEqual([[1]]);
+  });
+
+  test("exits with code 1 when the server cannot be stopped after initialization fails", async () => {
+    const harness = productionHarness({ startFails: true, stopFails: true });
+
+    await start();
+    await until(() => harness.exit.mock.calls.length > 0);
+
+    expect(harness.logs).toContain("Failed to stop server after init error:");
+    expect(harness.closed).toBe(0);
+    expect(harness.exit.mock.calls).toEqual([[1]]);
   });
 });

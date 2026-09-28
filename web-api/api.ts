@@ -233,10 +233,9 @@ export function createWebGameApi(
         if (!account.exists) return Response.json({ error: "Game not found" }, { status: 404 });
         if (account.programAddress !== oracle.getProgramId())
           throw new CreateGameValidationError("Invalid game account");
-        return json(
-          serializeGame(adapter.decodeGame(gameAddress, account.data)),
-          url.searchParams.get("fresh") === "1" ? "no-store" : "public, max-age=2, s-maxage=2",
-        );
+        const cacheControl =
+          url.searchParams.get("fresh") === "1" ? "no-store" : "public, max-age=2, s-maxage=2";
+        return json(serializeGame(adapter.decodeGame(gameAddress, account.data)), cacheControl);
       }
       return Response.json({ error: "Not found" }, { status: 404 });
     } catch (error) {

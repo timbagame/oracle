@@ -143,16 +143,8 @@ async function promptSelectGame(db: OracleDatabase): Promise<string> {
     const response = (await rl.question("Select # or paste address: ")).trim();
 
     const numeric = Number(response);
-    if (
-      Number.isFinite(numeric) &&
-      Number.isInteger(numeric) &&
-      numeric >= 1 &&
-      numeric <= pending.length
-    ) {
-      const picked = pending[numeric - 1];
-      if (!picked) throw new Error("Invalid selection");
-      return picked.game_address;
-    }
+    const picked = Number.isInteger(numeric) && numeric >= 1 ? pending[numeric - 1] : undefined;
+    if (picked) return picked.game_address;
 
     if (!response) throw new Error("No game address provided");
     return response;
@@ -655,10 +647,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   }
 }
 
-if (import.meta.main) {
-  main().catch((error) => {
+/** Runs the audit as a CLI, exiting with code 1 when it fails. */
+export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
+  await main(argv).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`audit-random failed: ${message}`);
     process.exit(1);
   });
 }
+
+if (import.meta.main) await runCli();
