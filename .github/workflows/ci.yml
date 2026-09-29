@@ -22,6 +22,7 @@ concurrency:
 
 jobs:
   validate:
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     name: Validate
     runs-on: ubuntu-26.04
     steps:
@@ -62,7 +63,9 @@ jobs:
 
   publish:
     name: Publish OCI image
-    if: github.event_name != 'pull_request'
+    if: >-
+      !cancelled() && github.event_name != 'pull_request' &&
+      (needs.validate.result == 'success' || ((github.event_name == 'push' && github.ref == 'refs/heads/main') && needs.validate.result == 'skipped'))
     needs: validate
     runs-on: ubuntu-26.04
     permissions:
