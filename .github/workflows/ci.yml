@@ -21,10 +21,39 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  reviewed:
+    name: Verify tested source tree
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      tested: ${{ steps.proof.outputs.tested }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test proof verification and fallback
+        run: python3 scripts/test-reviewed-pr.py
+      - name: Verify main matches successful PR CI
+        id: proof
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]] &&
+            scripts/reviewed-pr.sh "$GITHUB_SHA" ci.yml; then
+            echo "tested=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tested=false" >> "$GITHUB_OUTPUT"
+          fi
+
   validate:
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    needs: reviewed
+    if: ${{ !cancelled() && needs.reviewed.outputs.tested != 'true' }}
     name: Validate
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -61,13 +90,28 @@ jobs:
           path: coverage/
           if-no-files-found: error
 
+      - name: Record the tree that passed validation
+        if: github.event_name == 'pull_request'
+        run: |
+          mkdir -p tested-source-tree
+          git rev-parse 'HEAD^{tree}' > tested-source-tree/tree
+      - name: Upload tested source tree
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tested-source-tree
+          path: tested-source-tree/tree
+          if-no-files-found: error
+          retention-days: 90
+
   publish:
     name: Publish OCI image
     if: >-
-      !cancelled() && github.event_name != 'pull_request' &&
-      (needs.validate.result == 'success' || ((github.event_name == 'push' && github.ref == 'refs/heads/main') && needs.validate.result == 'skipped'))
-    needs: validate
+      !cancelled() && needs.reviewed.result == 'success' && github.event_name != 'pull_request' &&
+      (needs.validate.result == 'success' || (needs.reviewed.outputs.tested == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.validate.result == 'skipped'))
+    needs: [reviewed, validate]
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
