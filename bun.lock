@@ -10,7 +10,7 @@
         "@solana/kit": "8.4.0",
         "@timbagame/protocol": "0.14.1",
         "viem": "2.57.4",
-        "zod": "4.6.5",
+        "zod": "4.6.6",
       },
       "devDependencies": {
         "@eslint/js": "^10.0.1",
@@ -392,7 +392,7 @@
 
     "yocto-queue": ["yocto-queue@0.1.0", "", {}, "sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q=="],
 
-    "zod": ["zod@4.6.5", "", {}, "sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q=="],
+    "zod": ["zod@4.6.6", "", {}, "sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA=="],
 
     "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
 
@@ -403,6 +403,8 @@
     "@timbagame/protocol/@solana/kit": ["@solana/kit@8.3.0", "", { "dependencies": { "@solana/accounts": "8.3.0", "@solana/addresses": "8.3.0", "@solana/codecs": "8.3.0", "@solana/errors": "8.3.0", "@solana/functional": "8.3.0", "@solana/instruction-plans": "8.3.0", "@solana/instructions": "8.3.0", "@solana/keys": "8.3.0", "@solana/offchain-messages": "8.3.0", "@solana/plugin-core": "8.3.0", "@solana/plugin-interfaces": "8.3.0", "@solana/program-client-core": "8.3.0", "@solana/programs": "8.3.0", "@solana/promises": "8.3.0", "@solana/rpc": "8.3.0", "@solana/rpc-api": "8.3.0", "@solana/rpc-parsed-types": "8.3.0", "@solana/rpc-spec-types": "8.3.0", "@solana/rpc-subscriptions": "8.3.0", "@solana/rpc-types": "8.3.0", "@solana/signers": "8.3.0", "@solana/subscribable": "8.3.0", "@solana/sysvars": "8.3.0", "@solana/transaction-confirmation": "8.3.0", "@solana/transaction-introspection": "8.3.0", "@solana/transaction-messages": "8.3.0", "@solana/transactions": "8.3.0" }, "peerDependencies": { "typescript": ">=5.4.0" }, "optionalPeers": ["typescript"] }, "sha512-2T2QaO+0/CeZnPMsjv/bGhBSEiBCMY6V/Qi0xhFF/+8yCH8tkzM/kgE7fX5JlrR3gZpl9Bu+C62KTqnvk/bcjw=="],
 
     "@timbagame/protocol/viem": ["viem@2.56.9", "", { "dependencies": { "@noble/curves": "1.9.1", "@noble/hashes": "1.8.0", "@scure/bip32": "1.7.0", "@scure/bip39": "1.6.0", "abitype": "1.2.3", "isows": "1.0.7", "ox": "0.14.45", "ws": "8.21.0" }, "peerDependencies": { "typescript": ">=5.0.4" }, "optionalPeers": ["typescript"] }, "sha512-UC1G0Qz+RbPKqwl6yRrp3dH6ltrOmUcFJMTcOyE1Mg0nO5lxrEBTONh/8OFWPnALGuN/O7LkNcz/IsSj83Svqw=="],
+
+    "@timbagame/protocol/zod": ["zod@4.6.5", "", {}, "sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q=="],
 
     "@typescript-eslint/eslint-plugin/ignore": ["ignore@7.0.9", "", {}, "sha512-brTTsvFRt5C1gGHtPst/281UjPD5t9fBqbgoMPlVWy11ZLTPfu7HxK4ZYqO9H7o/yC9rSTCI85EaQ4OoY12qYw=="],
 

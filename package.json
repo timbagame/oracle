@@ -18,7 +18,7 @@
     "@solana/kit": "8.4.0",
     "@timbagame/protocol": "0.14.1",
     "viem": "2.57.4",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
