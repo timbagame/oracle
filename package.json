@@ -15,7 +15,7 @@
   "dependencies": {
     "@solana-program/system": "0.15.0",
     "@solana-program/token": "0.17.0",
-    "@solana/kit": "8.4.0",
+    "@solana/kit": "8.5.0",
     "@timbagame/protocol": "0.14.1",
     "viem": "2.57.5",
     "zod": "4.6.7"
