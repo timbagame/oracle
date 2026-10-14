@@ -121,6 +121,17 @@ describe("indexer API", () => {
     ]);
   });
 
+  test("uses parsed query defaults and coerces paging numbers", async () => {
+    const { get } = seededApi();
+    const defaults = await get("/api/games");
+    const emptyPage = await get("/api/games?limit=1&offset=1");
+
+    expect(defaults.response.status).toBe(200);
+    expect(defaults.body).toMatchObject({ total: 1, page: 1, limit: 50 });
+    expect(emptyPage.response.status).toBe(200);
+    expect(emptyPage.body).toMatchObject({ total: 1, page: 2, limit: 1, games: [] });
+  });
+
   test("lists latest completed games in the compact format", async () => {
     const { get, completed } = seededApi();
 

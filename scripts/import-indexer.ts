@@ -33,11 +33,18 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     } finally {
       indexer.close();
     }
+    const exported = new Database(temporary, { strict: true });
+    try {
+      exported.exec("PRAGMA journal_mode = DELETE");
+    } finally {
+      exported.close();
+    }
     renameSync(temporary, target);
     console.log(`Imported D1 history into ${target}`);
-  } catch (error) {
-    rmSync(temporary, { force: true });
-    throw error;
+  } finally {
+    for (const suffix of ["", "-wal", "-shm"]) {
+      rmSync(`${temporary}${suffix}`, { force: true });
+    }
   }
 }
 

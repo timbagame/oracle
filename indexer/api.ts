@@ -41,7 +41,10 @@ function error(message: string, status: number): Response {
   return new Response(JSON.stringify({ error: message }), { status, headers: JSON_HEADERS });
 }
 
-function parseQuery<T>(schema: z.ZodType<T>, request: Request): T | Response {
+function parseQuery<T>(
+  schema: { safeParse(value: unknown): { success: true; data: T } | { success: false } },
+  request: Request,
+): T | Response {
   const parsed = schema.safeParse(Object.fromEntries(new URL(request.url).searchParams));
   return parsed.success ? parsed.data : error("Invalid query parameters", 400);
 }

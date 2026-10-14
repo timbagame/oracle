@@ -87,6 +87,20 @@ test("removes the partial database when the export cannot be applied", async () 
   expect(readdirSync(directory)).toEqual(["export.sql"]);
 });
 
+test("removes journal sidecars when a WAL export fails", async () => {
+  const directory = tempDirectory();
+  const source = join(directory, "export.sql");
+  writeFileSync(
+    source,
+    "PRAGMA journal_mode = WAL; CREATE TABLE marker (id INTEGER); THIS IS NOT SQL;",
+  );
+
+  await expect(runImport([source, join(directory, "indexer.sqlite")])).rejects.toThrow(
+    "syntax error",
+  );
+  expect(readdirSync(directory)).toEqual(["export.sql"]);
+});
+
 test("rejects an export whose historical backfill is incomplete", async () => {
   const directory = tempDirectory();
   const source = join(directory, "export.sql");
