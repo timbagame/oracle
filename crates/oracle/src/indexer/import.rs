@@ -8,7 +8,7 @@ use rusqlite::Connection;
 
 use super::database::IndexerDatabase;
 
-pub const USAGE: &str = "Usage: bun run indexer:import <d1-export.sql> [indexer.sqlite]";
+pub const USAGE: &str = "Usage: timba-oracle import-indexer <d1-export.sql> [indexer.sqlite]";
 pub const DEFAULT_TARGET: &str = "indexer.sqlite";
 
 fn absolute(path: &Path) -> Result<PathBuf> {
@@ -21,6 +21,9 @@ fn absolute(path: &Path) -> Result<PathBuf> {
 
 fn exec_file(path: &Path, sql: &str) -> Result<()> {
     let conn = Connection::open(path)?;
+    // bun:sqlite leaves foreign keys off; the bundled SQLite turns them on, which
+    // would reject exports that list child rows before their parents.
+    conn.execute_batch("PRAGMA foreign_keys = OFF")?;
     let result = conn.execute_batch(sql).and_then(|()| conn.query_row("PRAGMA journal_mode = DELETE", [], |_| Ok(())));
     drop(conn);
     Ok(result?)
@@ -60,7 +63,7 @@ pub fn import_d1_export(source: impl AsRef<Path>, target: impl AsRef<Path>) -> R
     Ok(target)
 }
 
-/// `bun run indexer:import <d1-export.sql> [indexer.sqlite]`.
+/// `timba-oracle import-indexer <d1-export.sql> [indexer.sqlite]`.
 pub fn main(args: &[String]) -> Result<()> {
     let Some(source) = args.first() else {
         bail!(USAGE);
@@ -127,6 +130,24 @@ CREATE TABLE historical_backfill (
         assert_eq!(stats.financials.len(), 1);
         assert!(db.get_backfill_state().unwrap().complete);
         db.close();
+    }
+
+    #[test]
+    fn imports_exports_that_list_child_rows_before_their_parents() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("export.sql");
+        let target = dir.path().join("indexer.sqlite");
+        let schema = include_str!("schema.sql");
+        let rows = "INSERT INTO active_game_players VALUES ('game-2', 'player-1', 0, 1000, 1, 5);
+INSERT INTO active_games (game_key, creator, ticket_amount, total_amount, max_tickets, min_tickets,
+  token_mint, created_at, timeout, signature, slot, indexed_at)
+  VALUES ('game-2', 'creator-1', 100, 100, 2, 2, 'mint-1', 1000, 60, 'sig-2', 5, 1000);";
+        std::fs::write(&source, format!("{}\n{schema}\n{rows}", complete_backfill())).unwrap();
+
+        import_d1_export(&source, &target).unwrap();
+        let conn = Connection::open(&target).unwrap();
+        let players: i64 = conn.query_row("SELECT COUNT(*) FROM active_game_players", [], |row| row.get(0)).unwrap();
+        assert_eq!(players, 1);
     }
 
     #[test]
