@@ -1368,3 +1368,18 @@ fn fails_a_player_profile_whose_winnings_overflow() {
     let error = f.db.get_player_profile(&f.player).unwrap_err();
     assert!(error.to_string().contains("integer overflow"), "{error:#}");
 }
+
+#[tokio::test]
+async fn hides_stored_rows_that_fail_the_response_schema_behind_a_500() {
+    let s = seeded();
+    // A token whose mint is not an address makes the rebuilt token list invalid.
+    s.db.import_sql(
+        "INSERT INTO gameplay_events (signature, game_key, token_mint, timestamp, slot, indexed_at)
+         VALUES ('sig', 'game', 'not-an-address', 1, 1, 1)",
+    )
+    .unwrap();
+    let (status, headers, body) = api(&s).get("/api/tokens").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(headers["content-type"], "application/json");
+    assert_eq!(body, json!({ "error": "Internal server error" }));
+}

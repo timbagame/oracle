@@ -614,3 +614,32 @@ impl IndexerApi {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adds_like_javascript() {
+        assert_eq!(add(&json!(1_000), &json!(3_600)), json!(4_600));
+        // Past the 64-bit range the sum is a float, like in JavaScript.
+        assert_eq!(add(&json!(i64::MAX), &json!(1)), json!(9_223_372_036_854_775_808u64 as f64));
+        // Any non-integer operand makes it a float addition.
+        assert_eq!(add(&json!(1.5), &json!(2)), json!(3.5));
+        assert_eq!(add(&json!(2), &json!(0.25)), json!(2.25));
+        assert_eq!(add(&json!(0.5), &json!(0.5)), json!(1));
+        // Anything else is NaN, which JSON writes as null.
+        assert_eq!(add(&json!("text"), &json!(1)), Value::Null);
+    }
+
+    #[test]
+    fn keys_prices_by_the_mint_as_javascript_would_print_it() {
+        assert_eq!(
+            mint_key(&json!("So11111111111111111111111111111111111111112")),
+            "So11111111111111111111111111111111111111112"
+        );
+        assert_eq!(mint_key(&json!(42)), "42");
+        assert_eq!(mint_key(&Value::Null), "null");
+        assert_eq!(mint_key(&json!([1, 2])), "[1,2]");
+    }
+}
