@@ -9,3 +9,4 @@ pub mod program_client;
 pub mod solana;
 pub mod token;
 pub mod types;
+pub mod web_api;
