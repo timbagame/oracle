@@ -209,10 +209,7 @@ pub async fn manual_shutdown() -> anyhow::Result<()> {
 /// Container health probe: exits non-zero unless `GET /health` on the local
 /// API port succeeds. Replaces the `bun -e fetch(...)` quadlet HealthCmd.
 pub async fn healthcheck() -> anyhow::Result<()> {
-    let port = std::env::var("ORACLE_PORT")
-        .ok()
-        .and_then(|value| value.trim().parse::<u16>().ok())
-        .unwrap_or(crate::config::DEFAULT_ORACLE_PORT);
+    let port = crate::config::oracle_port_from_env();
     let response = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(4))
         .build()?
@@ -221,4 +218,37 @@ pub async fn healthcheck() -> anyhow::Result<()> {
         .await?;
     anyhow::ensure!(response.status().is_success(), "Health check failed with status {}", response.status());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+    use axum::routing::get;
+
+    async fn health_server(status: StatusCode) -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let app = axum::Router::new().route("/health", get(move || async move { status }));
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        port
+    }
+
+    #[tokio::test]
+    async fn healthcheck_probes_the_configured_port() {
+        let healthy = health_server(StatusCode::OK).await;
+        let degraded = health_server(StatusCode::SERVICE_UNAVAILABLE).await;
+        let _env = crate::env_test_lock();
+        let saved = std::env::var("ORACLE_PORT").ok();
+        // Parsed like `serve` does (JavaScript `Number`), so "3001.0" is port 3001.
+        std::env::set_var("ORACLE_PORT", format!(" {healthy}.0 "));
+        let ok = super::healthcheck().await;
+        std::env::set_var("ORACLE_PORT", degraded.to_string());
+        let failed = super::healthcheck().await;
+        match saved {
+            Some(value) => std::env::set_var("ORACLE_PORT", value),
+            None => std::env::remove_var("ORACLE_PORT"),
+        }
+        ok.unwrap();
+        assert_eq!(failed.unwrap_err().to_string(), "Health check failed with status 503 Service Unavailable");
+    }
 }

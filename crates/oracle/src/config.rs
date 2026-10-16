@@ -10,6 +10,12 @@ use timba_protocol::ContractVersion;
 use crate::solana::pool::parse_rpc_endpoint_list;
 
 pub const DEFAULT_ORACLE_PORT: u16 = 3001;
+
+/// `ORACLE_PORT` as `serve` reads it (shared with the health probe).
+pub fn oracle_port_from_env() -> u16 {
+    parse_integer(read_env("ORACLE_PORT").as_deref(), DEFAULT_ORACLE_PORT as i64, Some(0), Some(65535), "ORACLE_PORT")
+        as u16
+}
 const DEFAULT_DATABASE_FILE: &str = "oracle.sqlite";
 const DEFAULT_INDEXER_DATABASE_FILE: &str = "indexer.sqlite";
 const DEFAULT_KEYPAIR_FILE: &str = "operator-keypair.json";
@@ -64,13 +70,7 @@ impl OracleConfig {
                 }
             });
         let operator_keypair_path = resolve_path(&operator_keypair_source).to_string_lossy().into_owned();
-        let oracle_port = parse_integer(
-            read_env("ORACLE_PORT").as_deref(),
-            DEFAULT_ORACLE_PORT as i64,
-            Some(0),
-            Some(65535),
-            "ORACLE_PORT",
-        ) as u16;
+        let oracle_port = oracle_port_from_env();
         Ok(Self {
             contract_version: ContractVersion::parse_env(read_env("CONTRACT_VERSION").as_deref(), "CONTRACT_VERSION")?,
             solana_network,
