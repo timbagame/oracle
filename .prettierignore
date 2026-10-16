@@ -1,8 +1,0 @@
-node_modules
-coverage
-idl
-bun.lock
-*.sqlite
-*.db
-admin-keypair.json
-secrets
