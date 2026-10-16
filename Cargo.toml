@@ -11,7 +11,7 @@ publish = false
 
 [workspace.dependencies]
 # Shared with the TypeScript package; Cargo.lock pins the commit.
-timba-protocol = { git = "https://github.com/timbagame/protocol", branch = "rust-protocol-crate" }
+timba-protocol = { git = "https://github.com/timbagame/protocol", branch = "main" }
 timba-common = { path = "crates/common" }
 anyhow = "1"
 axum = "0.8"

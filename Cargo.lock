@@ -3988,7 +3988,7 @@ dependencies = [
 [[package]]
 name = "timba-protocol"
 version = "0.15.0"
-source = "git+https://github.com/timbagame/protocol?branch=rust-protocol-crate#8bdcc5b0128edafab6580f795b0621565c71640f"
+source = "git+https://github.com/timbagame/protocol?branch=main#3e36b3dc8d9a685ef0c633159842cc63c1422b17"
 dependencies = [
  "base64",
  "bs58",
