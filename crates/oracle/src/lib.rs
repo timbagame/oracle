@@ -1,5 +1,6 @@
 //! Timba Solana oracle.
 
+pub mod cli;
 pub mod config;
 pub mod core;
 pub mod db;
