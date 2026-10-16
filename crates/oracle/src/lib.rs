@@ -7,3 +7,4 @@ pub mod metrics;
 pub mod program_client;
 pub mod solana;
 pub mod token;
+pub mod types;
