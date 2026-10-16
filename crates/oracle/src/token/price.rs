@@ -355,4 +355,95 @@ mod tests {
         let r = resolver(calls, Arc::new(AtomicI64::new(0)), json!({"data": {"A": {"usdPrice": 3}}}));
         assert_eq!(r.prices(&["A".into()], false).await.unwrap()["A"], 3.0);
     }
+
+    #[test]
+    fn reads_prices_like_javascript_numbers() {
+        let price = |value: Value| read_positive_price(Some(&json!({ "usdPrice": value })));
+        assert_eq!(price(json!(2.5)), Some(2.5));
+        assert_eq!(price(json!(" 3 ")), Some(3.0));
+        assert_eq!(price(json!(true)), Some(1.0));
+        // Zero and non-prices are skipped rather than trusted.
+        assert_eq!(price(json!("")), None);
+        assert_eq!(price(json!(false)), None);
+        assert_eq!(price(json!(null)), None);
+        assert_eq!(price(json!("Infinity")), None);
+        assert_eq!(price(json!("NaN")), None);
+        assert_eq!(price(json!("cheap")), None);
+        assert_eq!(price(json!(-1)), None);
+        assert_eq!(price(json!([1])), None);
+        assert_eq!(read_positive_price(Some(&json!({}))), None);
+        assert_eq!(read_positive_price(Some(&json!("1"))), None);
+        assert_eq!(read_positive_price(None), None);
+    }
+
+    #[tokio::test]
+    async fn reports_unusable_api_responses() {
+        let failing = |status, body: Value| {
+            let fetcher: PriceFetcher = Arc::new(move |_, _| {
+                let body = body.clone();
+                async move { Ok((status, body)) }.boxed()
+            });
+            JupiterTokenPriceResolver::with_fetcher(Some("k".into()), "", fetcher, Arc::new(|| 0))
+        };
+        let error = failing(503, Value::Null).prices(&["A".into()], false).await.unwrap_err().to_string();
+        assert!(error.contains("Jupiter Price API returned HTTP 503"), "{error}");
+        let error = failing(200, json!([1, 2])).prices(&["A".into()], false).await.unwrap_err().to_string();
+        assert!(error.contains("Jupiter Price API returned invalid JSON"), "{error}");
+    }
+
+    /// Answers each connection with the next canned response and records the requests.
+    async fn http_server(responses: Vec<String>) -> (String, Arc<Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/price", listener.local_addr().unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        tokio::spawn(async move {
+            for response in responses {
+                let Ok((mut stream, _)) = listener.accept().await else { return };
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match stream.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => request.extend_from_slice(&chunk[..read]),
+                    }
+                }
+                seen.lock().unwrap().push(String::from_utf8_lossy(&request).to_string());
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        (url, requests)
+    }
+
+    fn http_response(status: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[tokio::test]
+    async fn http_fetcher_returns_status_and_json() {
+        let (url, requests) = http_server(vec![
+            http_response("200 OK", r#"{"A":{"usdPrice":1.5}}"#),
+            http_response("429 Too Many Requests", "slow down"),
+            http_response("200 OK", "not json"),
+        ])
+        .await;
+        let fetch = http_price_fetcher();
+        let (status, body) = fetch(url.clone(), "secret".into()).await.unwrap();
+        assert_eq!((status, body), (200, json!({"A": {"usdPrice": 1.5}})));
+        {
+            let request = requests.lock().unwrap()[0].to_lowercase();
+            assert!(request.contains("x-api-key: secret") && request.contains("accept: application/json"), "{request}");
+        }
+        // Failures keep their status and drop the body.
+        assert_eq!(fetch(url.clone(), "secret".into()).await.unwrap(), (429, Value::Null));
+        let error = fetch(url, "secret".into()).await.unwrap_err();
+        assert_eq!(error, "Jupiter Price API returned invalid JSON");
+        let error = fetch("http://127.0.0.1:1/price".into(), "secret".into()).await.unwrap_err();
+        assert!(!error.is_empty());
+    }
 }

@@ -155,14 +155,14 @@ mod tests {
                     .unwrap_or(json!({"value": null})))
             })
         });
-        transport.on(|_, method, _| match method {
-            "getLatestBlockhash" => Some(Ok(json!({"value": {"blockhash": BLOCKHASH, "lastValidBlockHeight": 100}}))),
-            "sendTransaction" => Some(Ok(json!("ata-sig"))),
-            "getSignatureStatuses" => {
-                Some(Ok(json!({"value": [{"slot": 1, "confirmationStatus": "confirmed", "err": null}]})))
-            }
-            "getBlockHeight" => Some(Ok(json!(1))),
-            _ => None,
+        let answers = [
+            ("getLatestBlockhash", json!({"value": {"blockhash": BLOCKHASH, "lastValidBlockHeight": 100}})),
+            ("sendTransaction", json!("ata-sig")),
+            ("getSignatureStatuses", json!({"value": [{"slot": 1, "confirmationStatus": "confirmed", "err": null}]})),
+            ("getBlockHeight", json!(1)),
+        ];
+        transport.on(move |_, method, _| {
+            answers.iter().find(|(name, _)| *name == method).map(|(_, answer)| Ok(answer.clone()))
         });
         let pool = RpcPool::with_transport(&["https://a".into()], transport.clone()).unwrap();
         (transport, pool)

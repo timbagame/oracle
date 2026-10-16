@@ -94,11 +94,8 @@ pub fn compute_minimum_amount_raw(price_usd: f64, decimals: u32) -> Result<u64, 
         BigUint::from(MINIMUM_GAME_USD_NUMERATOR) * denominator * BigUint::from(10u32).pow(decimals),
         &(BigUint::from(MINIMUM_GAME_USD_DENOMINATOR) * numerator),
     );
-    let raw: u64 = raw.try_into().map_err(|_| "dynamic minimum amount exceeds u64".to_string())?;
-    if raw == 0 {
-        return Err("dynamic minimum amount exceeds u64".into());
-    }
-    Ok(raw)
+    // The numerator is positive and the quotient rounds up, so `raw` is at least 1.
+    raw.try_into().map_err(|_| "dynamic minimum amount exceeds u64".to_string())
 }
 
 pub fn accepted_minimum_amount_raw(recommended: u64) -> Result<u64, String> {
@@ -215,5 +212,34 @@ mod tests {
             RejectionCode::AmountBelowMinimum
         );
         assert_eq!(evaluate_token_policy(&policies, "X", None).unwrap_err().0, RejectionCode::UnsupportedMint);
+        // Without an amount only the token itself is checked.
+        assert_eq!(evaluate_token_policy(&policies, "M", None).unwrap().mint, "M");
+        let disabled = StoredTokenPolicy { enabled: false, ..stored };
+        let policies = vec![to_api_token_policy(&disabled, 100_000)];
+        let (code, policy) = evaluate_token_policy(&policies, "M", Some(u64::MAX)).unwrap_err();
+        assert_eq!((code, policy.map(|p| p.revision)), (RejectionCode::TokenDisabled, Some(2)));
+    }
+
+    #[test]
+    fn rejects_unusable_prices_and_minimums() {
+        let err = compute_minimum_amount_raw(1e200, 6).unwrap_err();
+        assert_eq!(err, "token USD price exponent is invalid");
+        assert_eq!(compute_minimum_amount_raw(1e-200, 6).unwrap_err(), "token USD price exponent is invalid");
+        assert_eq!(compute_minimum_amount_raw(1e-30, 15).unwrap_err(), "dynamic minimum amount exceeds u64");
+        assert_eq!(accepted_minimum_amount_raw(0).unwrap_err(), "recommended minimum must be positive");
+    }
+
+    #[test]
+    fn names_rejection_codes() {
+        let names: Vec<_> = [
+            RejectionCode::UnsupportedMint,
+            RejectionCode::TokenDisabled,
+            RejectionCode::AmountBelowMinimum,
+            RejectionCode::PolicyUnavailable,
+        ]
+        .into_iter()
+        .map(RejectionCode::as_str)
+        .collect();
+        assert_eq!(names, ["unsupported_mint", "token_disabled", "amount_below_minimum", "policy_unavailable"]);
     }
 }
