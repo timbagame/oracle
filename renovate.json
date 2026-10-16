@@ -40,9 +40,5 @@
       ],
       "pinDigests": false
     }
-  ],
-  "lockFileMaintenance": {
-    "enabled": true,
-    "description": "Also advances the timba-protocol git dependency pinned in Cargo.lock"
-  }
+  ]
 }
