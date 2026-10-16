@@ -253,7 +253,7 @@ pub async fn healthcheck() -> anyhow::Result<()> {
 }
 
 async fn probe(port: u16) -> anyhow::Result<()> {
-    let response = reqwest::Client::builder()
+    let response = timba_common::http_client::client_builder()
         .timeout(std::time::Duration::from_secs(4))
         .build()?
         .get(format!("http://127.0.0.1:{port}/health"))

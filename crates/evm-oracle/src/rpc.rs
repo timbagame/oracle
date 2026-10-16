@@ -114,8 +114,10 @@ pub struct HttpTransport {
 
 impl HttpTransport {
     pub fn new(url: impl Into<String>) -> Self {
-        let client =
-            reqwest::Client::builder().timeout(RPC_TIMEOUT).build().expect("HTTP client configuration is valid");
+        let client = timba_common::http_client::client_builder()
+            .timeout(RPC_TIMEOUT)
+            .build()
+            .expect("HTTP client configuration is valid");
         Self { client, url: url.into(), id: Arc::new(AtomicU64::new(0)) }
     }
 }
