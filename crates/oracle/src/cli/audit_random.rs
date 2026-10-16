@@ -10,6 +10,7 @@ use futures::future::FutureExt;
 use timba_protocol::contracts::GameAccount;
 use timba_protocol::Address;
 
+use super::Out;
 use crate::core::service::OracleService;
 use crate::db::{OracleDatabase, PlayerMutation};
 use crate::indexed_events::MembershipKind;
@@ -26,6 +27,8 @@ pub struct CliOptions {
     pub write_db: bool,
     pub with_block_time: bool,
 }
+
+type Input<'a> = &'a mut (dyn BufRead + Send);
 
 pub fn parse_args(argv: &[String]) -> anyhow::Result<CliOptions> {
     let mut options = CliOptions {
@@ -151,27 +154,26 @@ fn compute_winner_display(tickets_count: u32, players: &[String], winner_index: 
     }
 }
 
-fn prompt_select_game(db: &OracleDatabase) -> anyhow::Result<String> {
+fn prompt_select_game(db: &OracleDatabase, input: Input<'_>, out: Out<'_>) -> anyhow::Result<String> {
     let pending = db.get_pending_games(None);
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
-    let mut read = |question: &str| -> anyhow::Result<String> {
-        write!(stdout, "{question}")?;
-        stdout.flush()?;
+    let mut read = |out: &mut Out<'_>, question: &str| -> anyhow::Result<String> {
+        write!(out, "{question}")?;
+        out.flush()?;
         let mut line = String::new();
-        stdin.lock().read_line(&mut line)?;
+        input.read_line(&mut line)?;
         Ok(line.trim().to_string())
     };
+    let mut out = out;
     if pending.is_empty() {
-        let address = read("Game address (base58): ")?;
+        let address = read(&mut out, "Game address (base58): ")?;
         anyhow::ensure!(!address.is_empty(), "No game address provided");
         return Ok(address);
     }
-    println!("Pending games:");
+    writeln!(out, "Pending games:")?;
     for (index, row) in pending.iter().enumerate() {
-        println!("{:>2}. {} (attempts={})", index + 1, row.game_address, row.completion_attempts);
+        writeln!(out, "{:>2}. {} (attempts={})", index + 1, row.game_address, row.completion_attempts)?;
     }
-    let response = read("Select # or paste address: ")?;
+    let response = read(&mut out, "Select # or paste address: ")?;
     if let Some(picked) = response.parse::<usize>().ok().filter(|n| *n >= 1).and_then(|n| pending.get(n - 1)) {
         return Ok(picked.game_address.clone());
     }
@@ -202,19 +204,19 @@ pub async fn run(argv: &[String]) -> anyhow::Result<()> {
     let options = parse_args(argv)?;
     let config = crate::config::OracleConfig::global().map_err(anyhow::Error::msg)?.clone();
     let oracle = OracleService::create(config)?;
-    let result = audit(&oracle, options).await;
+    let result = audit(&oracle, options, &mut std::io::BufReader::new(std::io::stdin()), &mut std::io::stdout()).await;
     oracle.close().await;
     result
 }
 
-async fn audit(oracle: &Arc<OracleService>, options: CliOptions) -> anyhow::Result<()> {
+async fn audit(oracle: &Arc<OracleService>, options: CliOptions, input: Input<'_>, out: Out<'_>) -> anyhow::Result<()> {
     let db = oracle.db().clone();
     let completion = oracle.completion_manager().clone();
     let interactive = options.game_address.is_none();
     let mut game_address = options.game_address.clone().unwrap_or_default().trim().to_string();
     loop {
         if game_address.is_empty() {
-            game_address = prompt_select_game(&db)?;
+            game_address = prompt_select_game(&db, &mut *input, &mut *out)?;
         }
         if db.get_secret_key_info(&game_address).is_some() {
             break;
@@ -378,20 +380,24 @@ async fn audit(oracle: &Arc<OracleService>, options: CliOptions) -> anyhow::Resu
             lookahead_slots: options.lookahead_slots,
             winner_for: &|slot, n| completion.calculate_winner_index(&secret_key, slot, n).unwrap_or(0),
         });
-        println!("\x1Bc{screen}");
-        let _ = std::io::stdout().flush();
-        (saw_rate_limit, state.completion_status.is_some())
+        (screen, saw_rate_limit, state.completion_status.is_some())
+    };
+    let mut show = |screen: String| -> anyhow::Result<()> {
+        writeln!(out, "\x1Bc{screen}")?;
+        Ok(out.flush()?)
     };
 
     let result: anyhow::Result<()> = async {
-        let (_, finished) = poll().await;
+        let (screen, _, finished) = poll().await;
+        show(screen)?;
         if options.once || finished {
             return Ok(());
         }
         let mut delay = options.interval_ms;
         loop {
             tokio::time::sleep(Duration::from_millis(delay)).await;
-            let (rate_limited, finished) = poll().await;
+            let (screen, rate_limited, finished) = poll().await;
+            show(screen)?;
             delay = if rate_limited { (delay * 2).clamp(2_000, 30_000) } else { options.interval_ms };
             if finished {
                 return Ok(());
@@ -516,10 +522,269 @@ fn render(input: &RenderInput<'_>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use futures::{SinkExt, StreamExt};
+    use serde_json::json;
+    use tokio_tungstenite::tungstenite::Message;
+
     use super::*;
+    use crate::config::OracleConfig;
+    use crate::core::testing::{account_value, game_account, harness, harness_with, Harness};
+    use crate::indexed_events::{GameClosedEvent, GameCompletedEvent, PlayerMembershipEvent};
+    use crate::solana::rpc::RpcError;
+    use crate::solana::Keypair;
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn options(game: Option<&str>) -> CliOptions {
+        CliOptions {
+            game_address: game.map(str::to_string),
+            interval_ms: 100,
+            lookahead_slots: 5,
+            once: true,
+            listen: false,
+            refresh_from_db_each_tick: false,
+            write_db: false,
+            with_block_time: false,
+        }
+    }
+
+    /// Runs the audit with `typed` as stdin and returns what it printed.
+    async fn audit_output(h: &Harness, options: CliOptions, typed: &str) -> anyhow::Result<String> {
+        let mut input = std::io::Cursor::new(typed.as_bytes().to_vec());
+        let mut out = Vec::new();
+        audit(&h.service, options, &mut input, &mut out).await?;
+        Ok(String::from_utf8(out).unwrap())
+    }
+
+    fn join(h: &Harness, game: &str, players: &[String]) {
+        let joins: Vec<_> = players
+            .iter()
+            .enumerate()
+            .map(|(i, p)| PlayerMutation::Joined { player_address: p.clone(), ticket_index: i as i64 })
+            .collect();
+        h.service.db().apply_player_mutations(game, &joins).unwrap();
+    }
+
+    fn participants(game: &GameAccount) -> Vec<String> {
+        game.participants.iter().map(Address::to_base58).collect()
+    }
+
+    #[tokio::test]
+    async fn prompts_for_a_game_by_number_or_address() {
+        let h = harness();
+        let ask = |typed: &str| {
+            let mut out = Vec::new();
+            let picked = prompt_select_game(h.service.db(), &mut std::io::Cursor::new(typed.to_string()), &mut out);
+            (picked.map_err(|e| e.to_string()), String::from_utf8(out).unwrap())
+        };
+        assert_eq!(ask(" typed \n"), (Ok("typed".into()), "Game address (base58): ".into()));
+        assert_eq!(ask("\n").0, Err("No game address provided".into()));
+
+        h.service.db().track_game("first", None, false).unwrap();
+        let (picked, shown) = ask("1\n");
+        assert_eq!(picked, Ok("first".into()));
+        assert_eq!(shown, "Pending games:\n 1. first (attempts=0)\nSelect # or paste address: ");
+        assert_eq!(ask("0\n").0, Ok("0".into()), "out-of-range numbers are addresses");
+        assert_eq!(ask("pasted\n").0, Ok("pasted".into()));
+        assert_eq!(ask("").0, Err("No game address provided".into()));
+    }
+
+    #[tokio::test]
+    async fn only_games_with_a_local_secret_can_be_audited() {
+        let h = harness();
+        let err = audit_output(&h, options(Some("unknown")), "").await.unwrap_err().to_string();
+        assert!(err.starts_with("No secret key found in this oracle DB for unknown (not tracked)."), "{err}");
+        h.service.db().track_game("tracked", None, false).unwrap();
+        let err = audit_output(&h, options(Some("tracked")), "").await.unwrap_err().to_string();
+        assert!(err.contains("(tracked(status=pending))"), "{err}");
+
+        // Interactively, it asks again until the game has a secret.
+        let game = h.service.generate_game_secrets(None).unwrap().game_address;
+        h.transport.on(|_, method, _| match method {
+            "getSlot" => Some(Ok(json!(100))),
+            "getAccountInfo" => Some(Ok(json!({ "value": null }))),
+            _ => None,
+        });
+        let output = audit_output(&h, options(None), &format!("unknown\n{game}\n")).await.unwrap();
+        assert!(output.contains(&format!("\x1BcGame: {game}\nStatus: completed (account missing) | CompletedAt: ")));
+        assert!(output.contains("Completed. Exiting..."), "{output}");
+    }
+
+    #[tokio::test]
+    async fn renders_the_live_view_with_lookahead_and_mismatches() {
+        let h = harness();
+        let game = h.service.generate_game_secrets(None).unwrap().game_address;
+        let account = game_account(3, 10, 2, 1_700_000_000, 600);
+        join(&h, &game, &participants(&account)[..2]);
+        let value = account_value(&account);
+        h.transport.on(move |_, method, _| match method {
+            "getSlot" => Some(Ok(json!(100))),
+            "getBlockTime" => Some(Ok(json!(1_700_000_050))),
+            "getAccountInfo" => Some(Ok(value.clone())),
+            _ => None,
+        });
+        let output = audit_output(&h, CliOptions { with_block_time: true, ..options(Some(&game)) }, "").await.unwrap();
+        assert!(output.contains("Status: active\nLast joiner: n/a\n"), "{output}");
+        assert!(output.contains("Slot: 100 | BlockTime: 2023-11-14T22:14:10.000Z\n"), "{output}");
+        assert!(output.contains("Tickets: 3 | Players(DB): 2 | lastSlot(entropy): 99\n"), "{output}");
+        assert!(output.contains("CreatedAt: 2023-11-14T22:13:20.000Z | ExpiresAt: 2023-11-14T22:23:20.000Z"));
+        assert!(output.contains("Winner if completes now: "), "{output}");
+        assert!(output.contains("If 1 new ticket joins at future slot (n=3):\n         101 -> index="), "{output}");
+        assert!(output.contains("Win probability (next 5 slots):\n  pos= 1 |"), "{output}");
+        assert!(output.contains("- Player registry mismatch: on-chain ticketsCount=3, DB players=2"), "{output}");
+        assert!(output.ends_with("Ctrl+C to exit.\n"), "{output}");
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_secret_is_reported_instead_of_a_winner() {
+        let h = harness();
+        let account = game_account(2, 10, 2, 1_700_000_000, 600);
+        let game = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin";
+        h.service.db().save_secret_key(game, "abcd", &"00".repeat(32)).unwrap();
+        join(&h, game, &participants(&account));
+        let value = account_value(&account);
+        h.transport.on(move |_, method, _| match method {
+            "getSlot" => Some(Ok(json!(100))),
+            "getAccountInfo" => Some(Ok(value.clone())),
+            _ => None,
+        });
+        let output = audit_output(&h, options(Some(game)), "").await.unwrap();
+        assert!(output.contains("- Compute winner: Secret key buffer must be at least"), "{output}");
+        assert!(output.contains("Winner if completes now: n/a\n"), "{output}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn backs_off_when_rate_limited_and_stops_once_the_game_is_gone() {
+        let h = harness();
+        let game = h.service.generate_game_secrets(None).unwrap().game_address;
+        join(&h, &game, &["p".to_string()]);
+        // The first poll (before any wait) is rate limited; the next one finds the game gone.
+        let start = tokio::time::Instant::now();
+        h.transport.on(move |_, method, _| {
+            let first = start.elapsed() < Duration::from_millis(1_000);
+            match (method, first) {
+                ("getSlot", true) => Some(Err(RpcError::http(429, "Too Many Requests", None))),
+                ("getSlot", false) => Some(Ok(json!(101))),
+                ("getBlockTime", _) => Some(Err(RpcError::transport("RPC request failed: timeout"))),
+                ("getAccountInfo", true) => Some(Err(RpcError::transport("RPC request failed: connection reset"))),
+                ("getAccountInfo", false) => Some(Ok(json!({ "value": null }))),
+                _ => None,
+            }
+        });
+        let options =
+            CliOptions { once: false, with_block_time: true, refresh_from_db_each_tick: true, ..options(Some(&game)) };
+        let started = tokio::time::Instant::now();
+        let output = audit_output(&h, options, "").await.unwrap();
+        // The first poll's result never sets the delay; the second doubles it and clamps to 2s.
+        assert_eq!(started.elapsed(), Duration::from_millis(100 + 2_000));
+        let screens: Vec<&str> = output.split("\x1Bc").filter(|s| !s.is_empty()).collect();
+        assert_eq!(screens.len(), 3, "{output}");
+        assert!(screens[0].contains("- RPC slot/time: ") && screens[0].contains("429"), "{}", screens[0]);
+        assert!(screens[0].contains("- Fetch game account: ") && screens[0].contains("Status: active"));
+        assert!(screens[0].contains("n/a (slot unavailable)"), "{}", screens[0]);
+        assert!(screens[2].contains("- RPC slot/time: ") && screens[2].contains("Status: completed (account missing)"));
+        assert!(screens[2].contains("Tickets: 0 | Players(DB): 1"), "{}", screens[2]);
+    }
+
+    /// Acknowledges every `logsSubscribe` and keeps the sockets open.
+    async fn ws_node() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else { return };
+                    while let Some(Ok(message)) = socket.next().await {
+                        if let Message::Text(text) = message {
+                            let request: serde_json::Value = serde_json::from_str(&text).unwrap();
+                            let ack = json!({ "jsonrpc": "2.0", "id": request["id"], "result": 1 });
+                            let _ = socket.send(Message::Text(ack.to_string().into())).await;
+                        }
+                    }
+                });
+            }
+        });
+        url
+    }
+
+    fn membership(kind: MembershipKind, game: &str, player: &str, ticket_index: u32) -> ProgramDispatch {
+        ProgramDispatch::PlayerMembership(PlayerMembershipEvent {
+            kind,
+            game_key: game.into(),
+            player: player.into(),
+            tickets_count: 1,
+            ticket_index,
+            moved_participant: None,
+            timestamp: 1,
+            signature: "s".into(),
+            slot: 120,
+        })
+    }
+
+    #[tokio::test]
+    async fn follows_membership_and_completion_events_while_listening() {
+        let config = OracleConfig { solana_ws_endpoint: Some(ws_node().await), ..OracleConfig::for_tests() };
+        let h = harness_with(config, Keypair::generate(), &["https://a"]);
+        let game = h.service.generate_game_secrets(None).unwrap().game_address;
+        let value = account_value(&game_account(0, 10, 2, 1_700_000_000, 600));
+        h.transport.on(move |_, method, _| match method {
+            "getSlot" => Some(Ok(json!(100))),
+            "getAccountInfo" => Some(Ok(value.clone())),
+            _ => None,
+        });
+
+        let program = h.service.program().clone();
+        let db = h.service.db().clone();
+        let events = {
+            let game = game.clone();
+            async move {
+                while program.listener_count() < 4 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                program.dispatch(membership(MembershipKind::Joined, &game, "alice", 0)).await;
+                program.dispatch(membership(MembershipKind::Joined, "other-game", "bob", 0)).await;
+                assert_eq!(db.get_game_players(&game), vec!["alice".to_string()], "written with --write-db");
+                // A failed write is reported and the audit keeps going.
+                db.close();
+                program.dispatch(membership(MembershipKind::Unjoined, &game, "alice", 0)).await;
+                program.dispatch(membership(MembershipKind::Joined, &game, "carol", 0)).await;
+                let closed = GameClosedEvent {
+                    game_key: game.clone(),
+                    timestamp: 2,
+                    operator: false,
+                    signature: "c".into(),
+                    slot: 130,
+                };
+                program.dispatch(ProgramDispatch::GameClosed(closed)).await;
+                let completed = GameCompletedEvent {
+                    game_key: game.clone(),
+                    winner: "carol".into(),
+                    tickets_count: 1,
+                    winner_amount: 1,
+                    fee_amount: 0,
+                    timestamp: 3,
+                    signature: "d".into(),
+                    slot: 140,
+                };
+                program.dispatch(ProgramDispatch::GameCompleted(completed)).await;
+            }
+        };
+        let options = CliOptions { once: false, listen: true, write_db: true, ..options(Some(&game)) };
+        let (output, ()) = tokio::join!(audit_output(&h, options, ""), events);
+        let output = output.unwrap();
+        let last = output.rsplit("\x1Bc").next().unwrap();
+        assert!(
+            last.contains("Status: completed | CompletedAt: ") && last.contains(" | CompletedSlot: 140\n"),
+            "{last}"
+        );
+        assert!(
+            last.contains("Last joiner: carol (ticketIndex=0, joinedSlot=120, gameLastSlotAtJoin=99, at="),
+            "{last}"
+        );
+        assert!(last.contains("Players(DB): 1"), "{last}");
+        assert_eq!(h.service.program().listener_count(), 0, "listeners are removed on exit");
     }
 
     #[test]

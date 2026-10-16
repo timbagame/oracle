@@ -567,6 +567,7 @@ pub fn is_game_ready(game: &GameAccount, evaluated_at: i64) -> bool {
 mod tests {
     use super::*;
     use crate::core::registry::{RecoverPlayerRegistry, RecoverRequest};
+    use crate::core::testing::{account_value, game_account};
     use crate::db::SecretKeyData;
     use crate::metrics::CompletionOutcome;
     use crate::solana::pool::testing::FakeTransport;
@@ -575,7 +576,7 @@ mod tests {
     use futures::FutureExt;
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use timba_protocol::contracts::{GameType, PROGRAM_ID};
+    use timba_protocol::contracts::PROGRAM_ID;
 
     const SECRET: [u8; 32] = [0x11; 32];
     const BLOCK_TIME: i64 = 1_700_000_000;
@@ -627,33 +628,6 @@ mod tests {
             let outcome = result(n);
             async move { outcome }.boxed()
         })
-    }
-
-    fn game_account(tickets: u32, max: u32, min: u32, created_at: u64, timeout: u64) -> GameAccount {
-        GameAccount {
-            creator: Keypair::generate().address(),
-            game_type: GameType::Coinflip,
-            ticket_amount: 10,
-            max_tickets: max,
-            min_tickets: min,
-            tickets_count: tickets,
-            token_mint: Address([2; 32]),
-            created_at,
-            timeout,
-            last_slot: 99,
-            is_private: false,
-            total_amount: 12_345,
-            participants: (0..tickets).map(|i| Address([i as u8 + 10; 32])).collect(),
-        }
-    }
-
-    fn account_value(game: &GameAccount) -> Value {
-        json!({"value": {
-            "data": [base64::engine::general_purpose::STANDARD.encode(game.encode()), "base64"],
-            "owner": PROGRAM_ID.to_base58(),
-            "lamports": 1,
-            "executable": false
-        }})
     }
 
     /// Stores a commitment and returns `(game_address, game_pda, random_hash)`.

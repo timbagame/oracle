@@ -1442,60 +1442,8 @@ impl WebGameOracle for OracleService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::solana::pool::testing::FakeTransport;
+    use crate::core::testing::{harness, harness_with, Harness, MINT_A, MINT_B};
     use crate::solana::rpc::RpcError;
-
-    struct FixedPrices(HashMap<String, f64>);
-
-    impl TokenPriceResolver for FixedPrices {
-        fn get_token_usd_prices<'a>(
-            &'a self,
-            mints: &'a [String],
-            allow_partial: bool,
-        ) -> BoxFuture<'a, anyhow::Result<HashMap<String, f64>>> {
-            let found: HashMap<_, _> = mints.iter().filter_map(|m| self.0.get(m).map(|p| (m.clone(), *p))).collect();
-            let result = if !allow_partial && found.len() != mints.len() {
-                Err(anyhow::anyhow!("missing price"))
-            } else {
-                Ok(found)
-            };
-            futures::future::ready(result).boxed()
-        }
-    }
-
-    struct Harness {
-        _dir: tempfile::TempDir,
-        transport: Arc<FakeTransport>,
-        service: Arc<OracleService>,
-    }
-
-    const MINT_A: &str = "So11111111111111111111111111111111111111112";
-    const MINT_B: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-
-    fn harness() -> Harness {
-        harness_with(OracleConfig::for_tests(), Keypair::generate(), &["https://a"])
-    }
-
-    fn harness_with(config: OracleConfig, operator: Keypair, endpoints: &[&str]) -> Harness {
-        let dir = tempfile::tempdir().unwrap();
-        let db = Arc::new(OracleDatabase::open(dir.path().join("o.sqlite").to_str().unwrap()).unwrap());
-        let transport = FakeTransport::new();
-        let endpoints: Vec<String> = endpoints.iter().map(|e| e.to_string()).collect();
-        let rpc = Arc::new(
-            RpcPool::with_transport(&endpoints, transport.clone())
-                .unwrap()
-                .with_delay(|_| futures::future::ready(()).boxed()),
-        );
-        let service = OracleService::new(OracleServiceOptions {
-            config,
-            db,
-            metrics: Arc::new(OracleMetrics::new(10)),
-            rpc,
-            operator,
-            price_resolver: Arc::new(FixedPrices(HashMap::from([(MINT_A.to_string(), 150.0)]))),
-        });
-        Harness { _dir: dir, transport, service }
-    }
 
     fn tracked_game(h: &Harness) -> String {
         h.service.generate_game_secrets(None).unwrap().game_address
