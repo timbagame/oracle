@@ -85,6 +85,16 @@ impl RequeueFailure {
     }
 }
 
+impl From<ResetFailure> for RequeueFailure {
+    fn from(failure: ResetFailure) -> Self {
+        match failure {
+            ResetFailure::NotFound => Self::NotFound,
+            ResetFailure::Finalized => Self::Finalized,
+            ResetFailure::Unchanged => Self::Unchanged,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceStats {
@@ -570,10 +580,8 @@ impl OracleService {
 
     // -- token policies ------------------------------------------------------
 
+    /// Prices an enabled policy; callers handle disabled ones themselves.
     async fn resolve_token_policy(&self, policy: &StoredTokenPolicy) -> anyhow::Result<TokenPolicy> {
-        if !policy.enabled {
-            return Ok(to_api_token_policy(policy, 0));
-        }
         let prices = self.prices.get_token_usd_prices(std::slice::from_ref(&policy.mint), false).await?;
         let price = prices
             .get(&policy.mint)
@@ -766,11 +774,7 @@ impl OracleService {
             if reactivated {
                 log_db_error(self.db.mark_secret_key_used(normalized), "Failed to restore secret key state");
             }
-            return Err(match failure {
-                ResetFailure::NotFound => RequeueFailure::NotFound,
-                ResetFailure::Finalized => RequeueFailure::Finalized,
-                ResetFailure::Unchanged => RequeueFailure::Unchanged,
-            });
+            return Err(failure.into());
         }
         self.readiness_cache.lock().unwrap().remove(normalized);
         self.cancel_completion_retry(normalized);
@@ -1294,14 +1298,13 @@ impl OracleService {
         options: AttemptOptions,
     ) -> anyhow::Result<Option<CompletionResult>> {
         let game_address = options.game_address.clone();
-        let weak = Arc::downgrade(self);
+        // The hook only lives as long as this attempt, which borrows the service.
+        let service = self.clone();
         let on_result: super::types::ResultHook = Arc::new(move |result: &CompletionResult| {
             if !result.success || result.winner_address.is_none() {
                 return;
             }
-            let (Some(service), result, address) = (weak.upgrade(), result.clone(), game_address.clone()) else {
-                return;
-            };
+            let (service, result, address) = (service.clone(), result.clone(), game_address.clone());
             // Counted as a run so `close()` waits for it: CLI commands exit right
             // after closing, and Bun likewise let pending notifications finish.
             service.active_runs.send_modify(|n| *n += 1);
@@ -1383,10 +1386,15 @@ impl EventHooks for OracleService {
     }
 
     fn sync_player_registry(&self, request: RegistrySyncRequest) -> BoxFuture<'static, bool> {
-        let Some(service) = self.weak_self.upgrade() else {
-            return futures::future::ready(false).boxed();
-        };
-        async move { service.sync_player_registry(request).await }.boxed()
+        // The future may run after the service is gone, so it upgrades when polled.
+        let weak = self.weak_self.clone();
+        async move {
+            match weak.upgrade() {
+                Some(service) => service.sync_player_registry(request).await,
+                None => false,
+            }
+        }
+        .boxed()
     }
 
     fn on_game_finalized(&self, game_address: &str) {
@@ -1442,7 +1450,7 @@ impl WebGameOracle for OracleService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::testing::{harness, harness_with, Harness, MINT_A, MINT_B};
+    use crate::core::testing::{count_rows, exec_sql, harness, harness_with, Harness, MINT_A, MINT_B};
     use crate::solana::rpc::RpcError;
 
     fn tracked_game(h: &Harness) -> String {
@@ -2631,6 +2639,240 @@ mod tests {
         h.transport.on(|_, method, _| (method == "getSlot").then(|| Ok(json!(1))));
         assert_eq!(h.service.connection().get_slot().await.unwrap(), 1);
         tokio::task::yield_now().await;
+        assert!(!h.service.get_stats().event_listening);
+    }
+
+    #[test]
+    fn reset_failures_map_onto_requeue_failures() {
+        assert_eq!(RequeueFailure::from(ResetFailure::NotFound), RequeueFailure::NotFound);
+        assert_eq!(RequeueFailure::from(ResetFailure::Finalized), RequeueFailure::Finalized);
+        assert_eq!(RequeueFailure::from(ResetFailure::Unchanged), RequeueFailure::Unchanged);
+    }
+
+    #[tokio::test]
+    async fn requeue_failures_are_reported_and_undone() {
+        let h = harness();
+        let dir = h._dir.path();
+
+        // A status outside the known lifecycle cannot be requeued.
+        let odd = tracked_game(&h);
+        exec_sql(dir, &format!("UPDATE game_tracking SET status = 'archived' WHERE game_address = '{odd}'"));
+        assert_eq!(h.service.requeue_game(&odd), Err(RequeueFailure::Finalized));
+
+        // A storage failure while resetting leaves the counters alone.
+        let busy = tracked_game(&h);
+        h.service.db.increment_completion_attempts(&busy).unwrap();
+        let reset = "BEFORE UPDATE ON game_tracking WHEN NEW.completion_attempts = 0 AND OLD.completion_attempts > 0";
+        exec_sql(dir, &format!("CREATE TRIGGER no_reset {reset} BEGIN SELECT RAISE(ABORT, 'disk full'); END;"));
+        assert_eq!(h.service.requeue_game(&busy), Err(RequeueFailure::Unchanged));
+        assert_eq!(h.service.db.get_completion_attempt_state(&busy).unwrap().completion_attempts, 1);
+
+        // So does an update that silently matches nothing.
+        exec_sql(dir, "DROP TRIGGER no_reset");
+        exec_sql(dir, &format!("CREATE TRIGGER skip_reset {reset} BEGIN SELECT RAISE(IGNORE); END;"));
+        assert_eq!(h.service.requeue_game(&busy), Err(RequeueFailure::Unchanged));
+        assert_eq!(h.service.db.get_completion_attempt_state(&busy).unwrap().completion_attempts, 1);
+        exec_sql(dir, "DROP TRIGGER skip_reset");
+        assert_eq!(h.service.requeue_game(&busy), Ok(()));
+
+        // A secret reactivated for a finalized game is put back when the reset fails.
+        let done = tracked_game(&h);
+        h.service.db.finalize_completed_game(&done).unwrap();
+        exec_sql(
+            dir,
+            "CREATE TRIGGER keep_done BEFORE UPDATE ON game_tracking \
+             WHEN NEW.status = 'pending' AND OLD.status = 'completed' \
+             BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+        );
+        assert_eq!(h.service.requeue_game(&done), Err(RequeueFailure::Unchanged));
+        assert_eq!(h.service.db.get_secret_key(&done), None, "secret is used up again");
+        assert_eq!(h.service.db.get_game_status(&done).as_deref(), Some("completed"));
+    }
+
+    #[tokio::test]
+    async fn failed_tracking_rolls_back_the_new_secret() {
+        let h = harness();
+        let dir = h._dir.path();
+        exec_sql(
+            dir,
+            "CREATE TRIGGER no_tracking BEFORE INSERT ON game_tracking BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+        );
+        let err = h.service.generate_game_secrets(None).unwrap_err();
+        assert!(format!("{err:#}").contains("disk full"), "{err:#}");
+        assert_eq!(count_rows(dir, "secret_keys"), 0, "the unusable commitment is removed");
+
+        // When the rollback fails too, the original error still surfaces.
+        exec_sql(
+            dir,
+            "CREATE TRIGGER keep_secrets BEFORE DELETE ON secret_keys BEGIN SELECT RAISE(ABORT, 'read-only'); END;",
+        );
+        let err = h.service.generate_game_secrets(None).unwrap_err();
+        assert!(format!("{err:#}").contains("disk full"), "{err:#}");
+        assert_eq!(count_rows(dir, "secret_keys"), 1);
+    }
+
+    #[tokio::test]
+    async fn complete_game_resolves_readiness_itself() {
+        let h = harness();
+        let (game, roster) = ready_game(&h);
+        let result = h.service.complete_game(&game, None, None).await;
+        assert!(result.success, "{result:?}");
+        assert!(roster.contains(&result.winner_address.unwrap()));
+        assert_eq!(h.service.db.get_game_status(&game).as_deref(), Some("completed"));
+    }
+
+    #[tokio::test]
+    async fn missing_registries_are_recovered_from_chain_history() {
+        let h = harness();
+        let (game, roster) = ready_game(&h);
+        h.service.db.replace_game_players(&game, &[]).unwrap();
+        let pda = Address::parse(&game).unwrap();
+        let program = PROGRAM_ID.to_base58();
+        let logs = vec![
+            format!("Program {program} invoke [1]"),
+            joined_log(&pda, &roster[0], 0),
+            joined_log(&pda, &roster[1], 1),
+            format!("Program {program} success"),
+        ];
+        h.transport.push("getSignaturesForAddress", Ok(json!([{"signature": "s1", "slot": 10}])));
+        h.transport.push("getTransaction", Ok(json!({"slot": 10, "meta": {"err": null, "logMessages": logs}})));
+
+        let result = h.service.complete_game_now(&game).await.unwrap();
+        assert!(result.success, "{result:?}");
+        assert!(roster.contains(&result.winner_address.unwrap()), "the winner comes from the recovered roster");
+        assert_eq!(h.transport.calls_for("getSignaturesForAddress").len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn transient_submission_failures_schedule_the_next_retry() {
+        let h = harness();
+        // Registered first, so it wins over the chain fixtures.
+        h.transport.on(|_, method, _| {
+            (method == "sendTransaction").then(|| Err(RpcError::transport("RPC request failed: connection reset")))
+        });
+        let (game, _) = ready_game(&h);
+        let parked = tokio::spawn(futures::future::pending::<()>());
+        h.service
+            .retries
+            .lock()
+            .unwrap()
+            .insert(game.clone(), active_entry(RetryMode::Transient, 1, Some((7, parked))));
+
+        h.service.clone().fire_retry(7, game.clone(), None, "player joined".into(), 1, RetryMode::Transient).await;
+        assert!(!h.transport.calls_for("sendTransaction").is_empty());
+        retry_entry(&h, &game, |entry| {
+            assert_eq!(entry.transient_attempt, 2);
+            assert_eq!(entry.trigger, "player joined retry 1");
+            assert!(entry.timer.is_some());
+        });
+        let state = h.service.db.get_completion_attempt_state(&game).unwrap();
+        assert_eq!(state.completion_failure_kind, Some(CompletionFailureKind::Transient));
+        assert_eq!(h.service.db.get_game_status(&game).as_deref(), Some("pending"));
+    }
+
+    #[tokio::test]
+    async fn retry_counters_continue_from_the_attempt_in_flight() {
+        let h = harness();
+        // Without an entry the counter follows the retry that is running.
+        assert_eq!(h.service.next_transient_attempt("g", RetryMode::Transient, 3), 4);
+        assert_eq!(h.service.next_transient_attempt("g", RetryMode::Readiness, 3), 1);
+        assert_eq!(h.service.next_readiness_attempt("g", RetryMode::Readiness, 3), 4);
+        assert_eq!(h.service.next_readiness_attempt("g", RetryMode::Transient, 3), 1);
+        // An active entry's own counter wins.
+        h.service.retries.lock().unwrap().insert("g".into(), active_entry(RetryMode::Transient, 2, None));
+        assert_eq!(h.service.next_transient_attempt("g", RetryMode::Transient, 9), 3);
+        assert_eq!(h.service.next_readiness_attempt("g", RetryMode::Transient, 9), 1);
+    }
+
+    #[tokio::test]
+    async fn offline_bots_do_not_undo_completions() {
+        let mut config = OracleConfig::for_tests();
+        config.bot_internal_url = Some("http://127.0.0.1:1".into());
+        let h = harness_with(config, Keypair::generate(), &["https://a"]);
+        let (game, _) = ready_game(&h);
+        let result = h.service.complete_game_now(&game).await.unwrap();
+        assert!(result.success, "{result:?}");
+        // `close()` waits for the failed notification instead of hanging on it.
+        h.service.close().await;
+        assert_eq!(*h.service.active_runs.borrow(), 0);
+    }
+
+    #[tokio::test]
+    async fn registry_syncs_outliving_the_service_do_nothing() {
+        let h = harness();
+        let hooks: &dyn EventHooks = h.service.as_ref();
+        let sync = hooks.sync_player_registry(RegistrySyncRequest {
+            game_address: "g".into(),
+            expected_tickets: Some(2),
+            trigger: "test".into(),
+            game_key: None,
+        });
+        let service = Arc::downgrade(&h.service);
+        drop(h);
+        assert!(service.upgrade().is_none(), "the pending sync does not keep the service alive");
+        assert!(!sync.await);
+    }
+
+    #[tokio::test]
+    async fn lagging_behind_failovers_keeps_the_listener_alive() {
+        let (url, subscriptions) = ws_server().await;
+        let mut config = OracleConfig::for_tests();
+        config.solana_ws_endpoint = Some(url);
+        let h = harness_with(config, Keypair::generate(), &["https://a", "https://b"]);
+        h.service.start_event_listening().await.unwrap();
+        assert_eq!(subscriptions.load(Ordering::SeqCst), 1);
+
+        // More switches than the channel holds, before the listener task runs again.
+        let failing = Arc::new(Mutex::new(String::new()));
+        let current = failing.clone();
+        h.transport.on(move |endpoint, method, _| {
+            (method == "getSlot").then(|| {
+                if endpoint == *current.lock().unwrap() {
+                    Err(RpcError::http(503, "unavailable", None))
+                } else {
+                    Ok(json!(1))
+                }
+            })
+        });
+        for _ in 0..20 {
+            *failing.lock().unwrap() = h.service.connection().active_endpoint().to_string();
+            h.service.connection().get_slot().await.unwrap();
+        }
+        eventually(|| subscriptions.load(Ordering::SeqCst) > 1).await;
+        eventually(|| h.service.get_stats().event_listening).await;
+    }
+
+    #[tokio::test]
+    async fn failed_failover_restarts_leave_the_listeners_stopped() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else { return };
+                    while let Some(Ok(Message::Text(text))) = socket.next().await {
+                        let request: Value = serde_json::from_str(&text).unwrap();
+                        let ack = json!({ "jsonrpc": "2.0", "id": request["id"], "result": 1 });
+                        let _ = socket.send(Message::Text(ack.to_string().into())).await;
+                    }
+                });
+            }
+        });
+        let mut config = OracleConfig::for_tests();
+        config.solana_ws_endpoint = Some(url);
+        let h = harness_with(config, Keypair::generate(), &["https://a", "https://b"]);
+        h.service.start_event_listening().await.unwrap();
+        // The websocket node goes away before the failover.
+        server.abort();
+        let _ = server.await;
+
+        h.transport.on(|endpoint, method, _| {
+            (endpoint == "https://a" && method == "getSlot").then(|| Err(RpcError::http(503, "unavailable", None)))
+        });
+        h.transport.on(|_, method, _| (method == "getSlot").then(|| Ok(json!(1))));
+        assert_eq!(h.service.connection().get_slot().await.unwrap(), 1);
+        // Three restart attempts with 250 ms and 500 ms pauses in between.
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
         assert!(!h.service.get_stats().event_listening);
     }
 }

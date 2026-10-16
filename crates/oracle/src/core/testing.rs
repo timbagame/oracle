@@ -138,3 +138,15 @@ pub fn fail_updates(dir: &std::path::Path, trigger: &str, table: &str, when: &st
 /// status and completion failure bookkeeping alone (pure `last_checked` touches).
 pub const TOUCH_ONLY: &str = "NEW.status = OLD.status AND NEW.completion_attempts = OLD.completion_attempts \
      AND NEW.completion_failure_kind IS OLD.completion_failure_kind";
+
+/// Runs raw SQL against the database stored in `dir`, for states the service
+/// API cannot produce (odd statuses, failure triggers).
+pub fn exec_sql(dir: &std::path::Path, sql: &str) {
+    rusqlite::Connection::open(dir.join("o.sqlite")).unwrap().execute_batch(sql).unwrap();
+}
+
+/// Number of rows stored in `table` of the database in `dir`.
+pub fn count_rows(dir: &std::path::Path, table: &str) -> i64 {
+    let conn = rusqlite::Connection::open(dir.join("o.sqlite")).unwrap();
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0)).unwrap()
+}
