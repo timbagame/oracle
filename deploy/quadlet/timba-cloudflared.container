@@ -5,7 +5,7 @@ After=network-online.target timba-oracle.service
 Requires=timba-oracle.service
 
 [Container]
-Image=docker.io/cloudflare/cloudflared:latest
+Image=docker.io/cloudflare/cloudflared:latest@sha256:a15a3b50b8dabd57ac2090e9484c0247dba9dfa1f0df4d298d4317f9d69eb2d5
 ContainerName=cloudflared
 AutoUpdate=registry
 Network=timba.network
