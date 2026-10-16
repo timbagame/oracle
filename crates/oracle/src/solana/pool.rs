@@ -39,19 +39,16 @@ pub fn parse_rpc_endpoint_list(value: Option<&str>) -> Result<Vec<String>, Strin
         _ => return Err("SOLANA_NETWORK is required".into()),
     };
     let endpoints: Vec<String> = if trimmed.starts_with('[') && trimmed.ends_with(']') {
-        let parsed: Value = serde_json::from_str(trimmed)
+        let items: Vec<Value> = serde_json::from_str(trimmed)
             .map_err(|e| format!("Failed to parse SOLANA_NETWORK JSON array: SyntaxError: {e}"))?;
-        match parsed {
-            Value::Array(items) => items
-                .into_iter()
-                .map(|item| match item {
-                    Value::String(s) => s,
-                    Value::Null => String::new(),
-                    other => other.to_string(),
-                })
-                .collect(),
-            other => vec![other.to_string()],
-        }
+        items
+            .into_iter()
+            .map(|item| match item {
+                Value::String(s) => s,
+                Value::Null => String::new(),
+                other => other.to_string(),
+            })
+            .collect()
     } else {
         trimmed.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect()
     };
@@ -405,9 +402,33 @@ mod tests {
             parse_rpc_endpoint_list(Some(r#"["https://x//", "", "https://y"]"#)).unwrap(),
             vec!["https://x", "https://y"]
         );
+        // Non-string items are kept as their JSON text; nulls are dropped.
+        assert_eq!(
+            parse_rpc_endpoint_list(Some(r#"["https://x", null, 8899, {"a": 1}]"#)).unwrap(),
+            vec!["https://x", "8899", r#"{"a":1}"#]
+        );
         assert!(parse_rpc_endpoint_list(None).unwrap_err().contains("required"));
         assert!(parse_rpc_endpoint_list(Some("[nope]")).unwrap_err().contains("JSON array"));
         assert!(parse_rpc_endpoint_list(Some(" , ")).unwrap_err().contains("empty list"));
+    }
+
+    #[test]
+    fn needs_at_least_one_usable_endpoint() {
+        let transport = FakeTransport::new();
+        let none = RpcPool::with_transport(&[], transport.clone()).err().unwrap();
+        assert_eq!(none, "At least one RPC endpoint is required");
+        let blank = RpcPool::with_transport(&[" ".into(), "/".into()], transport.clone()).err().unwrap();
+        assert_eq!(blank, "SOLANA_NETWORK did not resolve to any RPC endpoints");
+        let pool = RpcPool::with_transport(&["https://a/".into(), "https://a".into(), "https://b".into()], transport);
+        assert_eq!(pool.unwrap().endpoints(), ["https://a", "https://b"]);
+    }
+
+    #[tokio::test]
+    async fn empty_account_batches_skip_the_network() {
+        let transport = FakeTransport::new();
+        let pool = RpcPool::with_transport(&["https://a".into()], transport.clone()).unwrap();
+        assert!(pool.get_multiple_accounts(&[]).await.unwrap().is_empty());
+        assert!(transport.calls_for("getMultipleAccounts").is_empty());
     }
 
     #[tokio::test]

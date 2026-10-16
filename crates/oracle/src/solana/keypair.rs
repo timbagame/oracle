@@ -178,4 +178,37 @@ mod tests {
         std::fs::write(&path, "{}").unwrap();
         assert!(load_operator_keypair(p, "k.json", false).unwrap_err().contains("array of numbers"));
     }
+
+    #[test]
+    fn debug_output_hides_the_secret() {
+        let keypair = Keypair::generate();
+        let printed = format!("{keypair:?}");
+        assert!(printed.contains(&keypair.address().to_base58()), "{printed}");
+        assert!(!printed.contains("signing"), "{printed}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_locations_are_described() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("plain");
+        std::fs::write(&file, "x").unwrap();
+        // A file where a directory is expected is neither missing nor forbidden.
+        let behind_file = file.join("k.json");
+        let err = load_operator_keypair(behind_file.to_str().unwrap(), "k.json", false).unwrap_err();
+        assert!(err.starts_with("k.json could not be loaded: "), "{err}");
+
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let path = locked.join("k.json");
+        std::fs::write(&path, "[]").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let strict = load_operator_keypair(path.to_str().unwrap(), "k.json", false);
+        let ephemeral = load_operator_keypair(path.to_str().unwrap(), "k.json", true);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let err = strict.unwrap_err();
+        assert!(err.starts_with("k.json could not be read: EACCES: permission denied, "), "{err}");
+        assert!(ephemeral.is_ok(), "an ephemeral key stands in for the unreadable one");
+    }
 }

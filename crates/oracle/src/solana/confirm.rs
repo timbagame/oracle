@@ -2,10 +2,11 @@
 //! `confirmTransaction` and `TransactionSubmitter`).
 
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use regex::Regex;
 use timba_common::warn;
+use tokio::time::Instant;
 
 use super::pool::RpcPool;
 use super::rpc::LatestBlockhash;
@@ -172,5 +173,73 @@ mod tests {
         assert_eq!(signature, "sig2");
         assert_eq!(signed.load(std::sync::atomic::Ordering::SeqCst), 2);
         assert_eq!(transport.calls_for("getLatestBlockhash").len(), 2);
+    }
+
+    fn expired_pool(transport: &Arc<FakeTransport>) -> RpcPool {
+        transport.on(|_, m, _| (m == "getLatestBlockhash").then(|| Ok(blockhash())));
+        transport.on(|_, m, _| (m == "sendTransaction").then(|| Ok(json!("sig"))));
+        // The first confirmation poll sees the chain past the blockhash, later ones do not.
+        transport.push("getBlockHeight", Ok(json!(200)));
+        transport.on(|_, m, _| (m == "getBlockHeight").then(|| Ok(json!(1))));
+        RpcPool::with_transport(&["https://a".into()], transport.clone()).unwrap()
+    }
+
+    fn confirmed() -> serde_json::Value {
+        json!({"value": [{"slot": 1, "confirmationStatus": "confirmed", "err": null}]})
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn gives_up_when_the_transaction_never_confirms() {
+        let transport = FakeTransport::new();
+        transport.on(|_, m, _| (m == "getBlockHeight").then(|| Ok(json!(10))));
+        transport.on(|_, m, _| {
+            (m == "getSignatureStatuses")
+                .then(|| Ok(json!({"value": [{"slot": 1, "confirmationStatus": "processed", "err": null}]})))
+        });
+        let pool = RpcPool::with_transport(&["https://a".into()], transport.clone()).unwrap();
+        let latest = LatestBlockhash { blockhash: timba_protocol::Address([1; 32]), last_valid_block_height: 100 };
+        let started = Instant::now();
+        let err = confirm_transaction(&pool, "sig", &latest).await.unwrap_err();
+        assert_eq!(err.to_string(), "Transaction sig confirmation timed out");
+        assert!(started.elapsed() >= CONFIRMATION_TIMEOUT);
+        let polls = transport.calls_for("getSignatureStatuses").len();
+        assert!((60..=61).contains(&polls), "one poll per second: {polls}");
+    }
+
+    #[tokio::test]
+    async fn expired_transactions_are_resent_when_they_did_not_land() {
+        let transport = FakeTransport::new();
+        let pool = expired_pool(&transport);
+        // Unknown at first, still unknown when checked after the expiry, then confirmed.
+        transport.push("getSignatureStatuses", Ok(json!({"value": [null]})));
+        transport.push("getSignatureStatuses", Ok(json!({"value": [{"slot": 1, "confirmationStatus": "processed"}]})));
+        transport.on(|_, m, _| (m == "getSignatureStatuses").then(|| Ok(confirmed())));
+        let retries = std::sync::Mutex::new(Vec::new());
+        let on_retry = |error: &anyhow::Error| retries.lock().unwrap().push(error.to_string());
+        let signature = submit_transaction(&pool, |_| Ok("wire".into()), Some(&on_retry)).await.unwrap();
+        assert_eq!(signature, "sig");
+        assert_eq!(*retries.lock().unwrap(), vec!["Transaction sig expired before confirmation"]);
+        assert_eq!(transport.calls_for("sendTransaction").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn expired_transactions_are_resent_when_their_status_is_unavailable() {
+        let transport = FakeTransport::new();
+        let pool = expired_pool(&transport);
+        transport.push("getSignatureStatuses", Ok(json!({"value": [null]})));
+        transport.push("getSignatureStatuses", Err(RpcError::json_rpc(-32602, "status lookup rejected")));
+        transport.on(|_, m, _| (m == "getSignatureStatuses").then(|| Ok(confirmed())));
+        assert_eq!(submit_transaction(&pool, |_| Ok("wire".into()), None).await.unwrap(), "sig");
+        assert_eq!(transport.calls_for("sendTransaction").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn expired_transactions_that_landed_are_not_resent() {
+        let transport = FakeTransport::new();
+        let pool = expired_pool(&transport);
+        transport.push("getSignatureStatuses", Ok(json!({"value": [null]})));
+        transport.on(|_, m, _| (m == "getSignatureStatuses").then(|| Ok(confirmed())));
+        assert_eq!(submit_transaction(&pool, |_| Ok("wire".into()), None).await.unwrap(), "sig");
+        assert_eq!(transport.calls_for("sendTransaction").len(), 1);
     }
 }
