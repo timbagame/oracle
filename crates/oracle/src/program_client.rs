@@ -6,7 +6,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use std::panic::AssertUnwindSafe;
+
 use futures::future::BoxFuture;
+use futures::FutureExt;
 use timba_common::warn;
 use timba_protocol::contracts::{GameAccount, PROGRAM_ID};
 use timba_protocol::{Address, ContractVersion};
@@ -152,8 +155,12 @@ impl ProgramClient {
         let generation = state.generation;
         let client = self.clone();
         state.task = Some(tokio::spawn(async move {
-            if let Err(error) = client.consume_notifications(subscription).await {
-                warn!("Timba program log subscription failed: {error}");
+            // A panicking listener must not leave the program without a subscription:
+            // always fall through to the reconnect logic.
+            match AssertUnwindSafe(client.consume_notifications(subscription)).catch_unwind().await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => warn!("Timba program log subscription failed: {error}"),
+                Err(_) => warn!("Timba program log subscription stopped after a listener panicked"),
             }
             client.on_subscription_ended(generation).await;
         }));
@@ -211,12 +218,20 @@ impl ProgramClient {
             if notification.err.is_some() || notification.slot > (1 << 53) - 1 {
                 continue;
             }
-            let parsed = parse_transaction_events(
+            // One undecodable event (say an amount above 2^53) must not drop the
+            // subscription and every event behind it; the fallback scan covers it.
+            let parsed = match parse_transaction_events(
                 &notification.signature,
                 notification.slot,
                 &notification.logs,
                 &self.program_id.to_base58(),
-            )?;
+            ) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    warn!("Skipping undecodable program events in {}: {error}", notification.signature);
+                    continue;
+                }
+            };
             let dispatches = parsed
                 .initialized
                 .into_iter()
@@ -322,9 +337,10 @@ mod tests {
         Message::Text(note.to_string().into())
     }
 
-    /// Serves logs subscriptions. The first connection delivers a join,
-    /// two notifications the client must skip, and then a malformed event that
-    /// ends the subscription; later connections deliver one join and stay open.
+    /// Serves logs subscriptions. The first connection delivers a join, three
+    /// notifications the client must skip (failed, out of range, malformed), a
+    /// second join and then hangs up; later connections deliver one join and
+    /// stay open.
     async fn scripted_server() -> (String, Arc<AtomicU64>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -352,6 +368,8 @@ mod tests {
                                 .encode([39u8, 144, 49, 106, 108, 210, 183, 38, 1])
                         );
                         ws.send(notification(12, Value::Null, broken)).await.unwrap();
+                        ws.send(notification(13, Value::Null, joined_logs(5))).await.unwrap();
+                        return;
                     } else {
                         ws.send(notification(20 + connection, Value::Null, joined_logs(4))).await.unwrap();
                     }
@@ -387,10 +405,14 @@ mod tests {
         }
         let ProgramDispatch::PlayerMembership(first) = next(&mut rx).await else { panic!("membership expected") };
         assert_eq!((first.slot, first.ticket_index, first.signature.as_str()), (10, 0, "sig-10"));
-        // Failed and out-of-range notifications are skipped; the malformed one
-        // ends the subscription, which is restored after the reconnect delay.
+        // Failed, out-of-range and malformed notifications are skipped without
+        // dropping the subscription.
         let ProgramDispatch::PlayerMembership(second) = next(&mut rx).await else { panic!("membership expected") };
-        assert_eq!((second.slot, second.ticket_index), (21, 4));
+        assert_eq!((second.slot, second.ticket_index), (13, 5));
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+        // The server then hangs up; the subscription is restored after the reconnect delay.
+        let ProgramDispatch::PlayerMembership(third) = next(&mut rx).await else { panic!("membership expected") };
+        assert_eq!((third.slot, third.ticket_index), (21, 4));
         assert_eq!(connections.load(Ordering::SeqCst), 2);
 
         client.remove_event_listener(ignored).await;
@@ -398,6 +420,31 @@ mod tests {
         client.remove_event_listener(id).await;
         assert_eq!(client.listener_count(), 0);
         assert!(client.state.lock().await.task.is_none());
+        client.close().await;
+    }
+
+    #[tokio::test]
+    async fn reconnects_after_a_listener_panics() {
+        let (url, connections) = scripted_server().await;
+        let rpc = Arc::new(RpcPool::new(&["http://127.0.0.1:1".into()]).unwrap());
+        let client = ProgramClient::new(rpc, ContractVersion::V0_3_0, Some(url));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        client
+            .add_event_listener(
+                EventName::PlayerJoined,
+                Arc::new(move |event| {
+                    let ProgramDispatch::PlayerMembership(ref membership) = event else { unreachable!() };
+                    assert_ne!(membership.slot, 10, "listener bug");
+                    tx.send(event).unwrap();
+                    async {}.boxed()
+                }),
+            )
+            .await
+            .unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.unwrap().unwrap();
+        let ProgramDispatch::PlayerMembership(membership) = event else { panic!("membership expected") };
+        assert_eq!(membership.slot, 21, "delivered over the restored subscription");
+        assert_eq!(connections.load(Ordering::SeqCst), 2);
         client.close().await;
     }
 
