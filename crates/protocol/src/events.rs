@@ -410,4 +410,201 @@ mod tests {
         assert_eq!(data.len(), 2);
         assert!(data.iter().all(|d| d == &[5u8; 12]));
     }
+
+    fn with_disc(disc: [u8; 8], parts: &[&[u8]]) -> Vec<u8> {
+        let mut data = disc.to_vec();
+        for part in parts {
+            data.extend_from_slice(part);
+        }
+        data
+    }
+
+    fn initialized(game_type: u8, is_private: u8) -> Vec<u8> {
+        with_disc(
+            discriminators::GAME_INITIALIZED,
+            &[
+                &[1; 32],
+                &[2; 32],
+                &[game_type],
+                &10u64.to_le_bytes(),
+                &20u64.to_le_bytes(),
+                &5u32.to_le_bytes(),
+                &2u32.to_le_bytes(),
+                &[3; 32],
+                &[is_private],
+                &1_700u64.to_le_bytes(),
+                &600u64.to_le_bytes(),
+            ],
+        )
+    }
+
+    #[test]
+    fn decodes_fixed_size_events() {
+        let Some(ProgramEvent::GameInitialized(event)) = decode_program_event(&initialized(0, 1)).unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            event,
+            GameInitialized {
+                game_key: Address([1; 32]),
+                creator: Address([2; 32]),
+                game_type: GameType::Coinflip,
+                ticket_amount: 10,
+                total_amount: 20,
+                max_tickets: 5,
+                min_tickets: 2,
+                token_mint: Address([3; 32]),
+                is_private: true,
+                created_at: 1_700,
+                timeout: 600,
+            }
+        );
+        let Some(ProgramEvent::GameInitialized(event)) = decode_program_event(&initialized(1, 0)).unwrap() else {
+            panic!()
+        };
+        assert_eq!((event.game_type, event.is_private), (GameType::Giveaway, false));
+        for bad in [initialized(2, 0), initialized(0, 2)] {
+            assert_eq!(decode_program_event(&bad).unwrap_err().to_string(), "Invalid Timba event enum or boolean");
+        }
+
+        let completed = with_disc(
+            discriminators::GAME_COMPLETED,
+            &[&[1; 32], &[4; 32], &3u32.to_le_bytes(), &90u64.to_le_bytes(), &10u64.to_le_bytes(), &7u64.to_le_bytes()],
+        );
+        assert_eq!(
+            decode_program_event(&completed).unwrap(),
+            Some(ProgramEvent::GameCompleted(GameCompleted {
+                game_key: Address([1; 32]),
+                winner: Address([4; 32]),
+                tickets_count: 3,
+                winner_amount: 90,
+                fee_amount: 10,
+                timestamp: 7,
+            }))
+        );
+
+        let closed = with_disc(discriminators::GAME_CLOSED, &[&[1; 32], &8u64.to_le_bytes()]);
+        assert_eq!(
+            decode_program_event(&closed).unwrap(),
+            Some(ProgramEvent::GameClosed(GameClosed { game_key: Address([1; 32]), timestamp: 8 }))
+        );
+
+        let withdrawn = with_disc(discriminators::TOKEN_FEE_WITHDRAWN, &[&[5; 32], &[3; 32], &42u64.to_le_bytes()]);
+        assert_eq!(
+            decode_program_event(&withdrawn).unwrap(),
+            Some(ProgramEvent::TokenFeeWithdrawn(TokenFeeWithdrawn {
+                operator: Address([5; 32]),
+                token_mint: Address([3; 32]),
+                amount: 42,
+            }))
+        );
+
+        let operator_closed = with_disc(
+            discriminators::OPERATOR_GAME_CLOSED,
+            &[&[1; 32], &[2; 32], &[5; 32], &30u64.to_le_bytes(), &40u64.to_le_bytes(), &9u64.to_le_bytes()],
+        );
+        assert_eq!(
+            decode_program_event(&operator_closed).unwrap(),
+            Some(ProgramEvent::OperatorGameClosed(OperatorGameClosed {
+                game_key: Address([1; 32]),
+                creator: Address([2; 32]),
+                operator: Address([5; 32]),
+                refunded_amount: 30,
+                recovered_lamports: 40,
+                timestamp: 9,
+            }))
+        );
+
+        // Lengths are exact for every fixed-size event.
+        for data in [&completed, &closed, &withdrawn, &operator_closed, &initialized(0, 0)] {
+            assert_eq!(
+                decode_program_event(&data[..data.len() - 1]).unwrap_err().to_string(),
+                "Invalid Timba event length"
+            );
+        }
+        assert_eq!(decode_program_event(&[1, 2, 3]).unwrap(), None);
+    }
+
+    #[test]
+    fn names_and_game_keys() {
+        let membership = PlayerMembership {
+            game_key: Address([1; 32]),
+            player: Address([2; 32]),
+            total_amount: 0,
+            tickets_count: 1,
+            ticket_index: 0,
+            moved_participant: None,
+            last_slot: 0,
+            timestamp: 0,
+        };
+        let Some(initialized) = decode_program_event(&initialized(0, 0)).unwrap() else { panic!() };
+        let events = [
+            (initialized, "GameInitialized", Some(Address([1; 32]))),
+            (
+                ProgramEvent::GameCompleted(GameCompleted {
+                    game_key: Address([1; 32]),
+                    winner: Address([2; 32]),
+                    tickets_count: 1,
+                    winner_amount: 0,
+                    fee_amount: 0,
+                    timestamp: 0,
+                }),
+                "GameCompleted",
+                Some(Address([1; 32])),
+            ),
+            (
+                ProgramEvent::GameClosed(GameClosed { game_key: Address([1; 32]), timestamp: 0 }),
+                "GameClosed",
+                Some(Address([1; 32])),
+            ),
+            (ProgramEvent::PlayerJoined(membership.clone()), "PlayerJoined", Some(Address([1; 32]))),
+            (ProgramEvent::PlayerUnjoined(membership), "PlayerUnjoined", Some(Address([1; 32]))),
+            (
+                ProgramEvent::TokenFeeWithdrawn(TokenFeeWithdrawn {
+                    operator: Address([5; 32]),
+                    token_mint: Address([3; 32]),
+                    amount: 1,
+                }),
+                "TokenFeeWithdrawn",
+                None,
+            ),
+            (
+                ProgramEvent::OperatorGameClosed(OperatorGameClosed {
+                    game_key: Address([1; 32]),
+                    creator: Address([2; 32]),
+                    operator: Address([5; 32]),
+                    refunded_amount: 0,
+                    recovered_lamports: 0,
+                    timestamp: 0,
+                }),
+                "OperatorGameClosed",
+                Some(Address([1; 32])),
+            ),
+        ];
+        for (event, name, key) in events {
+            assert_eq!(event.name(), name);
+            assert_eq!(event.game_key().copied(), key, "{name}");
+        }
+    }
+
+    #[test]
+    fn trusted_program_data_ignores_invalid_frames_and_payloads() {
+        let program = "32Jr4JnXWvqq9GqPQynkooHsszaucUUvZfNLh2hdX2L5";
+        let payload = base64::engine::general_purpose::STANDARD.encode([5u8; 12]);
+        let logs = vec![
+            // Depths outside 1..=64 are not invocation frames.
+            format!("Program {program} invoke [0]"),
+            format!("Program data: {payload}"),
+            format!("Program {program} invoke [65]"),
+            format!("Program data: {payload}"),
+            format!("Program {program} invoke [1]"),
+            "Program data: ".to_string(),
+            "Program data: not base64!".to_string(),
+            "Program log: hello".to_string(),
+            format!("Program data: {payload}"),
+            format!("Program {program} failed: custom error"),
+            format!("Program data: {payload}"),
+        ];
+        assert_eq!(get_trusted_program_data(&logs, program), vec![vec![5u8; 12]]);
+    }
 }

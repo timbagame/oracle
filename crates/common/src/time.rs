@@ -43,4 +43,22 @@ mod tests {
         assert_eq!(super::iso_from_ms(0), "1970-01-01T00:00:00.000Z");
         assert_eq!(super::iso_from_ms(1_700_000_000_123), "2023-11-14T22:13:20.123Z");
     }
+
+    #[test]
+    fn clocks_agree() {
+        super::mark_process_start();
+        super::mark_process_start();
+        let uptime = super::uptime_secs();
+        assert!(uptime >= 0.0);
+        assert!(super::uptime_secs() >= uptime);
+        let ms = super::now_ms();
+        let secs = super::now_secs();
+        assert!((secs - ms / 1000).abs() <= 1);
+        let iso = super::now_iso();
+        assert_eq!(iso.len(), "1970-01-01T00:00:00.000Z".len());
+        assert!(iso.ends_with('Z'));
+        assert!(iso >= super::iso_from_ms(ms - 1000));
+        // Out-of-range timestamps fall back to the epoch like an invalid Date.
+        assert_eq!(super::iso_from_ms(i64::MAX), "1970-01-01T00:00:00.000Z");
+    }
 }

@@ -500,4 +500,569 @@ mod tests {
         let assignments = replay_registry_events(&events);
         assert_eq!(assignments.into_iter().collect::<Vec<_>>(), vec![(0, "c".to_string())]);
     }
+
+    use crate::db::SecretKeyData;
+    use crate::solana::pool::testing::FakeTransport;
+    use crate::solana::rpc::RpcError;
+    use crate::solana::Keypair;
+    use base64::Engine;
+    use serde_json::{json, Value};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use timba_protocol::contracts::{GameAccount, GameType, PROGRAM_ID};
+    use timba_protocol::events::discriminators;
+
+    // -- PlayerRegistrySync ----------------------------------------------------
+
+    fn key() -> String {
+        Keypair::generate().address().to_base58()
+    }
+
+    fn membership_bytes(
+        join: bool,
+        game: &Address,
+        player: &str,
+        ticket_index: u32,
+        tickets_count: u32,
+        moved: Option<&str>,
+    ) -> Vec<u8> {
+        let disc = if join { discriminators::PLAYER_JOINED } else { discriminators::PLAYER_UNJOINED };
+        let mut data = disc.to_vec();
+        data.extend_from_slice(&game.0);
+        data.extend_from_slice(&Address::parse(player).unwrap().0);
+        data.extend_from_slice(&10u64.to_le_bytes());
+        data.extend_from_slice(&tickets_count.to_le_bytes());
+        data.extend_from_slice(&ticket_index.to_le_bytes());
+        if !join {
+            match moved {
+                Some(moved) => {
+                    data.push(1);
+                    data.extend_from_slice(&Address::parse(moved).unwrap().0);
+                }
+                None => data.push(0),
+            }
+        }
+        data.extend_from_slice(&5u64.to_le_bytes());
+        data.extend_from_slice(&6u64.to_le_bytes());
+        data
+    }
+
+    fn joined(game: &Address, player: &str, ticket_index: u32) -> Vec<u8> {
+        membership_bytes(true, game, player, ticket_index, ticket_index + 1, None)
+    }
+
+    fn unjoined(game: &Address, player: &str, ticket_index: u32, moved: Option<&str>) -> Vec<u8> {
+        membership_bytes(false, game, player, ticket_index, 1, moved)
+    }
+
+    fn program_logs(payloads: &[Vec<u8>]) -> Vec<String> {
+        let program = PROGRAM_ID.to_base58();
+        let mut logs = vec![format!("Program {program} invoke [1]")];
+        for payload in payloads {
+            logs.push(format!("Program data: {}", base64::engine::general_purpose::STANDARD.encode(payload)));
+        }
+        logs.push(format!("Program {program} success"));
+        logs
+    }
+
+    /// Serves `history` (newest first, like the RPC) with `before`/`limit`
+    /// paging and per-signature transaction logs.
+    fn chain(history: Vec<(&'static str, Option<Vec<String>>)>) -> (Arc<FakeTransport>, Arc<RpcPool>) {
+        let transport = FakeTransport::new();
+        let signatures: Vec<&'static str> = history.iter().map(|(s, _)| *s).collect();
+        transport.on(move |_, method, params| {
+            (method == "getSignaturesForAddress").then(|| {
+                let config = &params[1];
+                let start = config["before"]
+                    .as_str()
+                    .map(|before| signatures.iter().position(|s| *s == before).unwrap() + 1)
+                    .unwrap_or(0);
+                let limit = config["limit"].as_u64().unwrap() as usize;
+                let page: Vec<Value> = signatures
+                    .iter()
+                    .enumerate()
+                    .skip(start)
+                    .take(limit)
+                    .map(|(i, s)| json!({"signature": s, "slot": 100 - i}))
+                    .collect();
+                Ok(Value::Array(page))
+            })
+        });
+        let logs: HashMap<&'static str, Option<Vec<String>>> = history.into_iter().collect();
+        transport.on(move |_, method, params| {
+            (method == "getTransaction").then(|| {
+                let signature = params[0].as_str().unwrap();
+                Ok(match logs.get(signature).cloned().flatten() {
+                    Some(logs) => json!({"slot": 1, "meta": {"err": null, "logMessages": logs}}),
+                    None => Value::Null,
+                })
+            })
+        });
+        let rpc = Arc::new(RpcPool::with_transport(&["https://a".into()], transport.clone()).unwrap());
+        (transport, rpc)
+    }
+
+    fn signature_limits(transport: &FakeTransport) -> Vec<u64> {
+        transport.calls_for("getSignaturesForAddress").iter().map(|(_, p)| p[1]["limit"].as_u64().unwrap()).collect()
+    }
+
+    #[tokio::test]
+    async fn recovers_players_when_ticket_indexes_start_at_one() {
+        let game = Address([7; 32]);
+        let (one, two) = (key(), key());
+        let (_, rpc) = chain(vec![("sig-1", Some(program_logs(&[joined(&game, &one, 1), joined(&game, &two, 2)])))]);
+        let sync = PlayerRegistrySync::new(rpc, PROGRAM_ID);
+        assert_eq!(sync.fetch_players_from_chain(&game, Some(2), None).await.unwrap(), Some(vec![one, two]));
+    }
+
+    #[tokio::test]
+    async fn rejects_gaps_duplicates_and_partial_registries() {
+        let game = Address([7; 32]);
+        let (one, two) = (key(), key());
+        let gap = program_logs(&[joined(&game, &one, 1), joined(&game, &two, 3)]);
+        let (_, rpc) = chain(vec![("sig-1", Some(gap))]);
+        let sync = PlayerRegistrySync::new(rpc, PROGRAM_ID);
+        assert_eq!(sync.fetch_players_from_chain(&game, Some(2), None).await.unwrap(), None);
+        // Without an expected count, gaps are still rejected.
+        assert_eq!(sync.fetch_players_from_chain(&game, None, None).await.unwrap(), None);
+
+        let duplicate = program_logs(&[joined(&game, &one, 0), joined(&game, &two, 0)]);
+        let (_, rpc) = chain(vec![("sig-1", Some(duplicate))]);
+        let sync = PlayerRegistrySync::new(rpc, PROGRAM_ID);
+        assert_eq!(sync.fetch_players_from_chain(&game, Some(2), None).await.unwrap(), None);
+
+        // Newest first: the unjoin happened after both joins.
+        let (_, rpc) = chain(vec![
+            ("sig-2", Some(program_logs(&[unjoined(&game, &one, 0, None)]))),
+            ("sig-1", Some(program_logs(&[joined(&game, &one, 0), joined(&game, &two, 1)]))),
+        ]);
+        let sync = PlayerRegistrySync::new(rpc, PROGRAM_ID);
+        assert_eq!(sync.fetch_players_from_chain(&game, Some(2), None).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn honors_signature_limits() {
+        let game = Address([7; 32]);
+        let player = key();
+        let (transport, rpc) = chain(vec![("sig-1", Some(program_logs(&[joined(&game, &player, 0)])))]);
+        let sync = PlayerRegistrySync::new(rpc.clone(), PROGRAM_ID);
+        assert_eq!(sync.fetch_players_from_chain(&game, Some(1), Some(1)).await.unwrap(), Some(vec![player.clone()]));
+        assert_eq!(signature_limits(&transport), vec![1]);
+
+        // Without a cap, requests never ask for zero signatures.
+        let sync = PlayerRegistrySync::new(rpc, PROGRAM_ID);
+        assert_eq!(sync.fetch_players_from_chain(&game, Some(1), None).await.unwrap(), Some(vec![player]));
+        assert!(signature_limits(&transport).iter().all(|limit| *limit > 0));
+        // Versioned transactions are requested.
+        let (_, params) = &transport.calls_for("getTransaction")[0];
+        assert_eq!(params[1]["maxSupportedTransactionVersion"], 0);
+    }
+
+    #[tokio::test]
+    async fn pages_beyond_the_ticket_count_to_find_earlier_joins() {
+        let game = Address([7; 32]);
+        let (survivor, replacement) = (key(), key());
+        const NAMES: [&str; 10] = [
+            "history-9",
+            "history-8",
+            "history-7",
+            "history-6",
+            "history-5",
+            "history-4",
+            "history-3",
+            "history-2",
+            "history-1",
+            "history-0",
+        ];
+        let history = NAMES
+            .iter()
+            .map(|name| {
+                let logs = match *name {
+                    "history-0" => program_logs(&[joined(&game, &survivor, 0)]),
+                    "history-9" => program_logs(&[joined(&game, &replacement, 1)]),
+                    _ => Vec::new(),
+                };
+                (*name, Some(logs))
+            })
+            .collect();
+        let (transport, rpc) = chain(history);
+        let sync = PlayerRegistrySync::with_limits(rpc, PROGRAM_ID, 10, 6, 4);
+        assert_eq!(
+            sync.fetch_players_from_chain(&game, Some(2), None).await.unwrap(),
+            Some(vec![survivor, replacement])
+        );
+        assert_eq!(signature_limits(&transport), vec![10, 10]);
+        // The second page continues before the oldest signature seen.
+        assert_eq!(transport.calls_for("getSignaturesForAddress")[1].1[1]["before"], "history-0");
+    }
+
+    #[tokio::test]
+    async fn applies_events_in_chronological_order() {
+        let game = Address([7; 32]);
+        let (one, two) = (key(), key());
+        let (_, rpc) = chain(vec![
+            ("sig-2", Some(program_logs(&[joined(&game, &two, 0)]))),
+            ("sig-1", Some(program_logs(&[unjoined(&game, &one, 0, None)]))),
+            ("sig-0", Some(program_logs(&[joined(&game, &one, 0)]))),
+        ]);
+        let sync = PlayerRegistrySync::with_limits(rpc, PROGRAM_ID, 10, 1, 2);
+        assert_eq!(sync.fetch_players_from_chain(&game, Some(1), None).await.unwrap(), Some(vec![two]));
+    }
+
+    #[tokio::test]
+    async fn rebuilds_registries_with_moved_participants() {
+        let game = Address([7; 32]);
+        let (first, second, third) = (key(), key(), key());
+        let (_, rpc) = chain(vec![
+            ("sig-1", Some(program_logs(&[unjoined(&game, &first, 0, Some(&third))]))),
+            ("sig-2", Some(program_logs(&[membership_bytes(true, &game, &third, 2, 3, None)]))),
+            ("sig-3", Some(program_logs(&[joined(&game, &first, 0), joined(&game, &second, 1)]))),
+        ]);
+        let sync = PlayerRegistrySync::new(rpc, PROGRAM_ID);
+        assert_eq!(sync.fetch_players_from_chain(&game, Some(2), None).await.unwrap(), Some(vec![third, second]));
+    }
+
+    #[tokio::test]
+    async fn tolerates_missing_logs_and_failed_fetches() {
+        let game = Address([7; 32]);
+        let player = key();
+        // No signatures at all.
+        let (_, rpc) = chain(vec![]);
+        let sync = PlayerRegistrySync::new(rpc, PROGRAM_ID);
+        assert_eq!(sync.fetch_players_from_chain(&game, Some(1), None).await.unwrap(), None);
+
+        // Empty logs and missing transactions carry no events.
+        let (_, rpc) = chain(vec![("sig-empty", Some(Vec::new())), ("sig-null", None)]);
+        let sync = PlayerRegistrySync::new(rpc, PROGRAM_ID);
+        assert_eq!(sync.fetch_players_from_chain(&game, Some(1), None).await.unwrap(), None);
+
+        // Malformed events and RPC failures only drop that transaction.
+        let mut bad = joined(&game, &player, 1);
+        bad.pop();
+        let (transport, rpc) = chain(vec![
+            ("sig-bad", Some(program_logs(&[bad]))),
+            ("sig-fail", Some(Vec::new())),
+            ("sig-ok", Some(program_logs(&[joined(&game, &player, 0)]))),
+        ]);
+        transport.push("getTransaction", Err(RpcError::json_rpc(-32000, "boom")));
+        let sync = PlayerRegistrySync::with_limits(rpc, PROGRAM_ID, 1, 0, 0);
+        assert_eq!(sync.fetch_players_from_chain(&game, Some(1), None).await.unwrap(), None);
+        assert_eq!(signature_limits(&transport), vec![10]);
+        assert_eq!(sync.fetch_players_from_chain(&game, Some(1), None).await.unwrap(), Some(vec![player]));
+    }
+
+    #[tokio::test]
+    async fn signature_failures_propagate() {
+        let transport = FakeTransport::new();
+        transport.on(|_, _, _| Some(Err(RpcError::json_rpc(-32602, "Invalid params"))));
+        let rpc = Arc::new(RpcPool::with_transport(&["https://a".into()], transport).unwrap());
+        let sync = PlayerRegistrySync::new(rpc, PROGRAM_ID);
+        let err = sync.fetch_players_from_chain(&Address([7; 32]), Some(1), None).await.unwrap_err();
+        assert_eq!(err.to_string(), "JSON-RPC error -32602: Invalid params");
+    }
+
+    #[test]
+    fn summarizes_assignments() {
+        assert_eq!(
+            summarize_ticket_assignments(&BTreeMap::new()),
+            RegistryStats { count: 0, max_index: None, min_index: None }
+        );
+        let assignments = BTreeMap::from([(2, "b".to_string()), (1, "a".to_string())]);
+        assert_eq!(
+            summarize_ticket_assignments(&assignments),
+            RegistryStats { count: 2, max_index: Some(2), min_index: Some(1) }
+        );
+        assert_eq!(RegistryStats::dense(3), RegistryStats { count: 3, max_index: Some(2), min_index: Some(0) });
+    }
+
+    // -- RegistrySyncManager ---------------------------------------------------
+
+    struct ManagerHarness {
+        _dir: tempfile::TempDir,
+        db: Arc<OracleDatabase>,
+        calls: Arc<AtomicUsize>,
+        manager: Arc<RegistrySyncManager>,
+    }
+
+    fn recover_fn(
+        calls: Arc<AtomicUsize>,
+        result: impl Fn(usize) -> anyhow::Result<Option<Vec<String>>> + Send + Sync + 'static,
+    ) -> RecoverPlayerRegistry {
+        let result = Arc::new(result);
+        Arc::new(move |request: RecoverRequest| {
+            assert!(request.reason == "completion" || request.reason == "readiness-check");
+            let n = calls.fetch_add(1, Ordering::SeqCst) + 1;
+            let outcome = result(n);
+            async move { outcome }.boxed()
+        })
+    }
+
+    fn manager_with(
+        recover: Option<Box<dyn Fn(Arc<AtomicUsize>) -> RecoverPlayerRegistry>>,
+        cooldown: Option<i64>,
+        now: i64,
+    ) -> ManagerHarness {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(OracleDatabase::open(dir.path().join("o.sqlite").to_str().unwrap()).unwrap());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let recover = recover.map(|make| make(calls.clone()));
+        let manager = Arc::new(RegistrySyncManager {
+            now: Arc::new(move || now),
+            ..RegistrySyncManager::new(db.clone(), recover, true, cooldown)
+        });
+        ManagerHarness { _dir: dir, db, calls, manager }
+    }
+
+    fn recovering(
+        result: impl Fn(usize) -> anyhow::Result<Option<Vec<String>>> + Send + Sync + Clone + 'static,
+    ) -> Option<Box<dyn Fn(Arc<AtomicUsize>) -> RecoverPlayerRegistry>> {
+        Some(Box::new(move |calls| recover_fn(calls, result.clone())))
+    }
+
+    fn game_context() -> GameContext {
+        GameContext {
+            game_pda: Address([8; 32]),
+            secret: SecretKeyData { secret_key: "aa".repeat(32), random_hash: "bb".repeat(32) },
+            random_hash: [0xbb; 32],
+            readiness: None,
+        }
+    }
+
+    fn readiness(tickets: u32) -> Readiness {
+        Readiness {
+            ready: true,
+            game_account: Some(GameAccount {
+                creator: Address([1; 32]),
+                game_type: GameType::Coinflip,
+                ticket_amount: 1,
+                max_tickets: tickets,
+                min_tickets: 1,
+                tickets_count: tickets,
+                token_mint: Address([2; 32]),
+                created_at: 0,
+                timeout: 60,
+                last_slot: 99,
+                is_private: false,
+                total_amount: 1,
+                participants: Vec::new(),
+            }),
+            evaluated_at: Some(0),
+        }
+    }
+
+    fn track(h: &ManagerHarness, game: &str, players: &[&str]) {
+        h.db.track_game(game, None, false).unwrap();
+        let players: Vec<String> = players.iter().map(|p| p.to_string()).collect();
+        h.db.replace_game_players(game, &players).unwrap();
+    }
+
+    #[tokio::test]
+    async fn clean_registries_skip_recovery() {
+        let h = manager_with(recovering(|_| Ok(None)), None, 0);
+        track(&h, "game1", &["p1"]);
+        for _ in 0..2 {
+            assert_eq!(h.manager.ensure_players_in_sync("game1", &game_context(), 1).await, Ok(vec!["p1".into()]));
+        }
+        assert_eq!(h.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn recovers_missing_players_when_sizes_match() {
+        let h = manager_with(recovering(|_| Ok(Some(vec!["p1".into(), "p2".into()]))), None, 0);
+        track(&h, "game2", &[]);
+        let players = h.manager.ensure_players_in_sync("game2", &game_context(), 2).await;
+        assert_eq!(players, Ok(vec!["p1".to_string(), "p2".to_string()]));
+        assert_eq!(h.db.get_game_players("game2"), vec!["p1".to_string(), "p2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn duplicates_trigger_recovery_despite_matching_length() {
+        let h = manager_with(recovering(|_| Ok(Some(vec!["dup".into(), "other".into()]))), None, 0);
+        track(&h, "dup-game", &["dup", "dup"]);
+        let players = h.manager.ensure_players_in_sync("dup-game", &game_context(), 2).await;
+        assert_eq!(players, Ok(vec!["dup".to_string(), "other".to_string()]));
+        assert_eq!(h.calls.load(Ordering::SeqCst), 1);
+        // The duplicate check also guards the final registry.
+        let h = manager_with(recovering(|_| Ok(Some(vec!["x".into(), "x".into()]))), None, 0);
+        track(&h, "still-dup", &[]);
+        let result = h.manager.ensure_players_in_sync("still-dup", &game_context(), 2).await;
+        assert_eq!(result, Err("Ticket registry out of sync"));
+    }
+
+    #[tokio::test]
+    async fn failed_recovery_marks_the_game_desynced() {
+        let h = manager_with(recovering(|_| Ok(Some(vec!["only-one".into()]))), None, 0);
+        track(&h, "game3", &[]);
+        h.manager.schedule.lock().unwrap().insert("game3".into(), 99);
+        let result = h.manager.ensure_players_in_sync("game3", &game_context(), 2).await;
+        assert_eq!(result, Err("Ticket registry out of sync"));
+        assert_eq!(h.db.get_game_status("game3").as_deref(), Some("desynced"));
+        assert!(!h.manager.schedule.lock().unwrap().contains_key("game3"), "prefetch schedule is reset");
+    }
+
+    #[tokio::test]
+    async fn zero_expected_entries_are_fatal() {
+        let h = manager_with(None, None, 0);
+        h.db.track_game("zero", None, false).unwrap();
+        let result = h.manager.ensure_players_in_sync("zero", &game_context(), 0).await;
+        assert_eq!(result, Err("No ticket entries available for completion"));
+        assert_eq!(h.db.get_game_status("zero").as_deref(), Some("desynced"));
+    }
+
+    #[tokio::test]
+    async fn desync_marking_can_be_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(OracleDatabase::open(dir.path().join("o.sqlite").to_str().unwrap()).unwrap());
+        let manager = RegistrySyncManager::new(db.clone(), None, false, None);
+        db.track_game("g", None, false).unwrap();
+        assert_eq!(manager.ensure_players_in_sync("g", &game_context(), 1).await, Err("Ticket registry out of sync"));
+        assert_eq!(db.get_game_status("g").as_deref(), Some("pending"));
+    }
+
+    #[tokio::test]
+    async fn recovery_can_retry_after_a_failure() {
+        let h = manager_with(
+            recovering(|n| if n == 1 { Ok(None) } else { Ok(Some(vec!["a".into(), "b".into()])) }),
+            None,
+            0,
+        );
+        h.db.track_game("retry", None, false).unwrap();
+        assert_eq!(h.manager.try_recover_player_registry("retry", &game_context(), 2, 1).await, None);
+        assert_eq!(
+            h.manager.try_recover_player_registry("retry", &game_context(), 2, 1).await,
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        assert_eq!(h.db.get_game_players("retry"), vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(h.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn recovery_errors_and_reentry_return_none() {
+        let h = manager_with(recovering(|_| Err(anyhow::anyhow!("network"))), None, 0);
+        assert_eq!(h.manager.try_recover_player_registry("g", &game_context(), 2, 0).await, None);
+        // A recovery already running for the game is not started twice.
+        h.manager.attempted_recovery.lock().unwrap().insert("g".into());
+        assert_eq!(h.manager.try_recover_player_registry("g", &game_context(), 2, 0).await, None);
+        assert_eq!(h.calls.load(Ordering::SeqCst), 1);
+        // Without a recovery hook there is nothing to try.
+        let h = manager_with(None, None, 0);
+        assert_eq!(h.manager.try_recover_player_registry("g", &game_context(), 2, 0).await, None);
+    }
+
+    #[tokio::test]
+    async fn recovery_storage_failures_return_none() {
+        let h = manager_with(recovering(|_| Ok(Some(vec!["a".into()]))), None, 0);
+        h.db.close();
+        assert_eq!(h.manager.try_recover_player_registry("g", &game_context(), 1, 0).await, None);
+        // Prefetch storage failures reset the schedule.
+        h.manager.prefetch_player_registry("g", &game_context(), &readiness(1)).await;
+        assert!(!h.manager.schedule.lock().unwrap().contains_key("g"));
+        assert_eq!(h.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn enforces_a_minimum_prefetch_cooldown() {
+        let h = manager_with(recovering(|_| Ok(Some(vec!["p".into()]))), Some(0), 1_000);
+        h.manager.prefetch_player_registry("cooldown-game", &game_context(), &readiness(1)).await;
+        assert_eq!(h.manager.schedule.lock().unwrap().get("cooldown-game"), Some(&2_000));
+        assert_eq!(h.db.get_game_players("cooldown-game"), vec!["p".to_string()]);
+
+        // Within the cooldown no new prefetch starts.
+        h.db.replace_game_players("cooldown-game", &[]).unwrap();
+        h.manager.prefetch_player_registry("cooldown-game", &game_context(), &readiness(1)).await;
+        assert_eq!(h.calls.load(Ordering::SeqCst), 1);
+        h.manager.reset_registry_prefetch_schedule("cooldown-game");
+        h.manager.prefetch_player_registry("cooldown-game", &game_context(), &readiness(1)).await;
+        assert_eq!(h.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn prefetch_retries_immediately_after_a_failure() {
+        let h = manager_with(
+            recovering(|n| if n == 1 { Err(anyhow::anyhow!("boom")) } else { Ok(Some(vec!["a".into(), "b".into()])) }),
+            None,
+            1_700_000_000_000,
+        );
+        h.manager.prefetch_player_registry("prefetch-retry", &game_context(), &readiness(2)).await;
+        assert!(h.db.get_game_players("prefetch-retry").is_empty());
+        h.manager.prefetch_player_registry("prefetch-retry", &game_context(), &readiness(2)).await;
+        assert_eq!(h.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(h.db.get_game_players("prefetch-retry"), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn prefetch_skips_when_nothing_to_do() {
+        let h = manager_with(recovering(|_| Ok(Some(vec!["a".into()]))), None, 0);
+        // No game account, zero tickets, or a complete registry.
+        let mut no_account = readiness(1);
+        no_account.game_account = None;
+        h.manager.prefetch_player_registry("g", &game_context(), &no_account).await;
+        h.manager.prefetch_player_registry("g", &game_context(), &readiness(0)).await;
+        track(&h, "full", &["a"]);
+        h.manager.prefetch_player_registry("full", &game_context(), &readiness(1)).await;
+        assert_eq!(h.calls.load(Ordering::SeqCst), 0);
+        // Wrong-size recoveries are ignored.
+        h.manager.prefetch_player_registry("g", &game_context(), &readiness(2)).await;
+        assert_eq!(h.calls.load(Ordering::SeqCst), 1);
+        assert!(h.db.get_game_players("g").is_empty());
+        // Without a recovery hook prefetching is disabled.
+        let h = manager_with(None, None, 0);
+        h.manager.prefetch_player_registry("g", &game_context(), &readiness(1)).await;
+    }
+
+    fn blocking_recover(
+        release: Arc<tokio::sync::Notify>,
+        fail: bool,
+    ) -> Option<Box<dyn Fn(Arc<AtomicUsize>) -> RecoverPlayerRegistry>> {
+        Some(Box::new(move |calls| {
+            let release = release.clone();
+            Arc::new(move |_request: RecoverRequest| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let release = release.clone();
+                async move {
+                    release.notified().await;
+                    if fail {
+                        anyhow::bail!("network");
+                    }
+                    Ok(Some(vec!["a".to_string(), "b".to_string()]))
+                }
+                .boxed()
+            })
+        }))
+    }
+
+    #[tokio::test]
+    async fn concurrent_prefetches_share_one_recovery() {
+        let release = Arc::new(tokio::sync::Notify::new());
+        let h = manager_with(blocking_recover(release.clone(), false), Some(1_000), 1_700_000_000_000);
+        let (context, ready) = (game_context(), readiness(2));
+        tokio::join!(
+            h.manager.prefetch_player_registry("concurrent", &context, &ready),
+            h.manager.prefetch_player_registry("concurrent", &context, &ready),
+            async {
+                tokio::task::yield_now().await;
+                release.notify_one();
+            }
+        );
+        assert_eq!(h.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(h.db.get_game_players("concurrent").len(), 2);
+        assert!(h.manager.prefetching.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn concurrent_prefetches_share_a_failure() {
+        let release = Arc::new(tokio::sync::Notify::new());
+        let h = manager_with(blocking_recover(release.clone(), true), None, 1_700_000_000_000);
+        let (context, ready) = (game_context(), readiness(2));
+        tokio::join!(
+            h.manager.prefetch_player_registry("fails", &context, &ready),
+            h.manager.prefetch_player_registry("fails", &context, &ready),
+            async {
+                tokio::task::yield_now().await;
+                release.notify_one();
+            }
+        );
+        assert_eq!(h.calls.load(Ordering::SeqCst), 1);
+        assert!(h.db.get_game_players("fails").is_empty());
+        assert!(!h.manager.schedule.lock().unwrap().contains_key("fails"));
+    }
 }

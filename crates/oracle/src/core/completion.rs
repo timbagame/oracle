@@ -558,3 +558,663 @@ pub fn is_game_ready(game: &GameAccount, evaluated_at: i64) -> bool {
     let has_min = has_tickets && tickets >= game.min_tickets;
     has_tickets && (is_full || (is_expired && has_min))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::registry::{RecoverPlayerRegistry, RecoverRequest};
+    use crate::db::SecretKeyData;
+    use crate::metrics::CompletionOutcome;
+    use crate::solana::pool::testing::FakeTransport;
+    use crate::solana::rpc::RpcError;
+    use base64::Engine;
+    use futures::FutureExt;
+    use serde_json::{json, Value};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use timba_protocol::contracts::{GameType, PROGRAM_ID};
+
+    const SECRET: [u8; 32] = [0x11; 32];
+    const BLOCK_TIME: i64 = 1_700_000_000;
+    const BLOCKHASH: &str = "4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM";
+
+    struct Harness {
+        _dir: tempfile::TempDir,
+        db: Arc<OracleDatabase>,
+        transport: Arc<FakeTransport>,
+        metrics: Arc<OracleMetrics>,
+        cache: ReadinessCache,
+        manager: CompletionManager,
+    }
+
+    fn harness(recover: Option<RecoverPlayerRegistry>) -> Harness {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(OracleDatabase::open(dir.path().join("o.sqlite").to_str().unwrap()).unwrap());
+        let transport = FakeTransport::new();
+        transport.on(|_, method, _| match method {
+            "getSlot" => Some(Ok(json!(100))),
+            "getBlockTime" => Some(Ok(json!(BLOCK_TIME))),
+            _ => None,
+        });
+        let rpc = Arc::new(RpcPool::with_transport(&["https://a".into()], transport.clone()).unwrap());
+        let program = ProgramClient::new(rpc.clone(), ContractVersion::V0_3_0, None);
+        let metrics = Arc::new(OracleMetrics::new(50));
+        let cache = ReadinessCache::default();
+        let registry = Arc::new(RegistrySyncManager::new(db.clone(), recover, true, None));
+        let manager = CompletionManager::new(CompletionManagerOptions {
+            contract_version: ContractVersion::V0_3_0,
+            db: db.clone(),
+            metrics: metrics.clone(),
+            rpc,
+            program,
+            operator: Arc::new(Keypair::generate()),
+            readiness_cache: cache.clone(),
+            registry,
+        });
+        Harness { _dir: dir, db, transport, metrics, cache, manager }
+    }
+
+    fn recover_with(
+        calls: Arc<AtomicUsize>,
+        result: impl Fn(usize) -> anyhow::Result<Option<Vec<String>>> + Send + Sync + 'static,
+    ) -> RecoverPlayerRegistry {
+        let result = Arc::new(result);
+        Arc::new(move |_request: RecoverRequest| {
+            let n = calls.fetch_add(1, Ordering::SeqCst) + 1;
+            let outcome = result(n);
+            async move { outcome }.boxed()
+        })
+    }
+
+    fn game_account(tickets: u32, max: u32, min: u32, created_at: u64, timeout: u64) -> GameAccount {
+        GameAccount {
+            creator: Keypair::generate().address(),
+            game_type: GameType::Coinflip,
+            ticket_amount: 10,
+            max_tickets: max,
+            min_tickets: min,
+            tickets_count: tickets,
+            token_mint: Address([2; 32]),
+            created_at,
+            timeout,
+            last_slot: 99,
+            is_private: false,
+            total_amount: 12_345,
+            participants: (0..tickets).map(|i| Address([i as u8 + 10; 32])).collect(),
+        }
+    }
+
+    fn account_value(game: &GameAccount) -> Value {
+        json!({"value": {
+            "data": [base64::engine::general_purpose::STANDARD.encode(game.encode()), "base64"],
+            "owner": PROGRAM_ID.to_base58(),
+            "lamports": 1,
+            "executable": false
+        }})
+    }
+
+    /// Stores a commitment and returns `(game_address, game_pda, random_hash)`.
+    fn store_game(h: &Harness, random_hash: [u8; 32]) -> (String, Address, [u8; 32]) {
+        let pda = find_game_pda(&random_hash, &PROGRAM_ID);
+        let address = pda.to_base58();
+        h.db.save_secret_key(&address, &hex::encode(SECRET), &hex::encode(random_hash)).unwrap();
+        h.db.track_game(&address, None, false).unwrap();
+        (address, pda, random_hash)
+    }
+
+    fn serve_game(h: &Harness, game: Option<GameAccount>) {
+        let value = match game {
+            Some(game) => account_value(&game),
+            None => json!({"value": null}),
+        };
+        h.transport.on(move |_, method, _| (method == "getAccountInfo").then(|| Ok(value.clone())));
+    }
+
+    fn serve_submission(h: &Harness) {
+        h.transport.on(|_, method, _| match method {
+            "getLatestBlockhash" => Some(Ok(json!({"value": {"blockhash": BLOCKHASH, "lastValidBlockHeight": 100}}))),
+            "sendTransaction" => Some(Ok(json!("landed-sig"))),
+            "getSignatureStatuses" => {
+                Some(Ok(json!({"value": [{"slot": 1, "confirmationStatus": "confirmed", "err": null}]})))
+            }
+            "getBlockHeight" => Some(Ok(json!(1))),
+            _ => None,
+        });
+    }
+
+    fn players(n: usize) -> Vec<String> {
+        (0..n).map(|_| Keypair::generate().address().to_base58()).collect()
+    }
+
+    fn context(pda: Address, random_hash: [u8; 32], readiness: Option<Readiness>) -> GameContext {
+        GameContext {
+            game_pda: pda,
+            secret: SecretKeyData { secret_key: hex::encode(SECRET), random_hash: hex::encode(random_hash) },
+            random_hash,
+            readiness,
+        }
+    }
+
+    #[test]
+    fn classifies_transient_failures() {
+        assert!(!is_transient_completion_failure(None));
+        assert!(!is_transient_completion_failure(Some("")));
+        assert!(is_transient_completion_failure(Some("Blockhash not found")));
+        assert!(is_transient_completion_failure(Some("RPC request failed: connection reset")));
+        assert!(is_transient_completion_failure(Some("Transaction sig expired before confirmation")));
+        assert!(!is_transient_completion_failure(Some("Ticket registry out of sync")));
+        assert!(!is_transient_completion_failure(Some(NO_SECRET_KEY_MESSAGE)));
+    }
+
+    #[test]
+    fn readiness_rules() {
+        // Zero tickets never complete, even when expired with a zero minimum.
+        assert!(!is_game_ready(&game_account(0, 5, 0, 0, 10), 100));
+        // The timeout boundary counts as expired when the minimum is met.
+        assert!(is_game_ready(&game_account(3, 5, 2, 1_000, 60), 1_060));
+        assert!(!is_game_ready(&game_account(3, 5, 2, 1_000, 60), 1_059));
+        // Full games are ready before expiry.
+        assert!(is_game_ready(&game_account(2, 2, 2, 1_000, 60), 0));
+        // Expired games below the minimum are not.
+        assert!(!is_game_ready(&game_account(1, 5, 2, 0, 10), 100));
+        // Huge timeouts do not overflow.
+        assert!(!is_game_ready(&game_account(1, 5, 1, u64::MAX, u64::MAX), i64::MAX));
+    }
+
+    #[test]
+    fn calculates_deterministic_winner_indexes() {
+        let h = harness(None);
+        let mut seed: u32 = 1;
+        let mut next = || {
+            let mut buf = [0u8; 64];
+            for byte in buf.iter_mut() {
+                seed = (seed.wrapping_mul(1_103_515_245).wrapping_add(12_345)) & 0x7fff_ffff;
+                *byte = (seed & 0xff) as u8;
+            }
+            buf
+        };
+        for players in 2..=12u64 {
+            let mut seen = HashSet::new();
+            for iteration in 0..20u64 {
+                let secret = if iteration == 0 { [0u8; 64] } else { next() };
+                let slot = 10_000 + iteration;
+                let first = h.manager.calculate_winner_index(&secret, slot, players).unwrap();
+                let second = h.manager.calculate_winner_index(&secret, slot, players).unwrap();
+                assert_eq!(first, second);
+                assert!(u64::from(first) < players);
+                seen.insert(first);
+            }
+            assert!(seen.len() > 1, "{players} players always drew the same index");
+        }
+        assert_eq!(
+            h.manager.calculate_winner_index(&[0; 16], 1, 2).unwrap_err().to_string(),
+            "Secret key buffer must be at least 32 bytes"
+        );
+        // Single-player games skip the draw entirely.
+        assert_eq!(h.manager.calculate_winner_index(&[], 1, 1).unwrap(), 0);
+    }
+
+    #[test]
+    fn derives_pdas_and_decodes_hashes() {
+        let h = harness(None);
+        assert_eq!(h.manager.program_id(), PROGRAM_ID);
+        let hash = [0x22; 32];
+        assert_eq!(h.manager.get_game_pda(&hash).unwrap(), find_game_pda(&hash, &PROGRAM_ID));
+        assert_eq!(h.manager.get_game_pda(&[1; 16]).unwrap_err().to_string(), "Game random hash must be 32 bytes");
+        assert_eq!(decode_random_hash(&hex::encode(hash)).unwrap(), hash);
+        assert!(decode_random_hash("zz").is_err());
+        assert!(decode_random_hash("abcd").is_err());
+
+        assert_eq!(h.manager.resolve_stored_game("unknown").unwrap(), None);
+        let (address, pda, random_hash) = store_game(&h, hash);
+        let stored = h.manager.resolve_stored_game(&address).unwrap().unwrap();
+        assert_eq!(stored, context(pda, random_hash, None));
+        h.db.save_secret_key("corrupt", "00", "abcd").unwrap();
+        assert!(h.manager.resolve_stored_game("corrupt").is_err());
+    }
+
+    #[test]
+    fn block_time_cache_round_trips() {
+        let cache = BlockTimeCache::default();
+        assert_eq!(cache.get(), None);
+        cache.set(5);
+        assert_eq!(cache.get(), Some(5));
+        cache.clear();
+        assert_eq!(cache.get(), None);
+    }
+
+    #[tokio::test]
+    async fn evaluates_readiness_from_chain() {
+        let h = harness(None);
+        let (address, pda, _) = store_game(&h, [0x22; 32]);
+        serve_game(&h, Some(game_account(3, 5, 2, 1_000, 60)));
+
+        let readiness = h.manager.evaluate_game_readiness(&pda, Some(1_060)).await.unwrap();
+        assert!(readiness.ready);
+        assert_eq!(readiness.evaluated_at, Some(1_060));
+        assert_eq!(readiness.game_account.as_ref().unwrap().total_amount, 12_345);
+
+        // Without a block time the blockchain time is fetched.
+        let readiness = h.manager.evaluate_game_readiness(&pda, None).await.unwrap();
+        assert_eq!(readiness.evaluated_at, Some(BLOCK_TIME));
+        assert_eq!(h.transport.calls_for("getSlot").len(), 1);
+        assert_eq!(h.transport.calls_for("getBlockTime")[0].1, json!([100]));
+
+        // Ready evaluations are cached for the scan; consuming removes them.
+        assert!(h.manager.is_game_ready_for_completion(&pda).await.unwrap());
+        assert!(h.cache.lock().unwrap().contains_key(&address));
+        assert!(h.manager.consume_readiness(&address).is_some());
+        assert!(h.manager.consume_readiness(&address).is_none());
+    }
+
+    #[tokio::test]
+    async fn not_ready_evaluations_clear_the_cache() {
+        let h = harness(None);
+        let (address, pda, _) = store_game(&h, [0x23; 32]);
+        serve_game(&h, Some(game_account(1, 5, 2, BLOCK_TIME as u64, 600)));
+        h.cache
+            .lock()
+            .unwrap()
+            .insert(address.clone(), Readiness { ready: true, game_account: None, evaluated_at: None });
+        assert!(!h.manager.is_game_ready_for_completion(&pda).await.unwrap());
+        assert!(!h.cache.lock().unwrap().contains_key(&address));
+    }
+
+    #[tokio::test]
+    async fn missing_accounts_are_not_ready_and_other_errors_propagate() {
+        let h = harness(None);
+        let pda = Address([5; 32]);
+        h.transport.push("getAccountInfo", Ok(json!({"value": null})));
+        assert_eq!(h.manager.fetch_game_account(&pda).await.unwrap(), None);
+        h.transport.push("getAccountInfo", Ok(json!({"value": null})));
+        let readiness = h.manager.evaluate_game_readiness(&pda, None).await.unwrap();
+        assert_eq!(readiness, Readiness { ready: false, game_account: None, evaluated_at: None });
+
+        h.transport.push("getAccountInfo", Err(RpcError::json_rpc(-32602, "Invalid params")));
+        let err = h.manager.fetch_game_account(&pda).await.unwrap_err();
+        assert_eq!(err.to_string(), "JSON-RPC error -32602: Invalid params");
+
+        h.transport.push(
+            "getAccountInfo",
+            Ok(json!({"value": {"data": ["AAAA", "base64"], "owner": PROGRAM_ID.to_base58()}})),
+        );
+        let err = h.manager.fetch_game_account(&pda).await.unwrap_err();
+        assert_eq!(err.to_string(), "Account is not a Timba game");
+    }
+
+    #[tokio::test]
+    async fn blockchain_time_falls_back_to_the_local_clock() {
+        let h = harness(None);
+        h.transport.push("getSlot", Err(RpcError::json_rpc(-32000, "slot unavailable")));
+        let before = timba_common::time::now_secs();
+        assert!(h.manager.get_blockchain_time().await >= before);
+        h.transport.push("getBlockTime", Ok(Value::Null));
+        assert!(h.manager.get_blockchain_time().await >= before);
+        assert_eq!(h.manager.get_blockchain_time().await, BLOCK_TIME);
+    }
+
+    #[tokio::test]
+    async fn resolves_context_and_readiness() {
+        let h = harness(None);
+        // No stored context.
+        let resolution = h.manager.resolve_context_and_readiness("missing", ResolveOptions::default()).await.unwrap();
+        assert_eq!(resolution, ReadinessResolution::MissingContext);
+        let resolution = h
+            .manager
+            .resolve_context_and_readiness("missing", ResolveOptions { require_on_chain: true, ..Default::default() })
+            .await
+            .unwrap();
+        assert_eq!(resolution, ReadinessResolution::MissingContext);
+
+        let (address, pda, random_hash) = store_game(&h, [0x24; 32]);
+        // A provided snapshot is trusted without RPC when on-chain data is optional.
+        let provided = Readiness { ready: true, game_account: None, evaluated_at: Some(1) };
+        let resolution = h
+            .manager
+            .resolve_context_and_readiness(
+                &address,
+                ResolveOptions { readiness: Some(provided.clone()), ..Default::default() },
+            )
+            .await
+            .unwrap();
+        let ReadinessResolution::Resolved { ready, context: ctx, readiness, prefetch_scheduled } = resolution else {
+            panic!("expected resolved");
+        };
+        assert!(!ready, "ready requires the game account");
+        assert_eq!(readiness, provided);
+        assert_eq!(ctx.readiness, Some(provided.clone()));
+        assert!(!prefetch_scheduled);
+        assert!(h.transport.calls.lock().unwrap().is_empty());
+
+        // Cached readiness is consumed when on-chain data is optional.
+        let game = game_account(2, 2, 2, 0, 60);
+        let cached = Readiness { ready: true, game_account: Some(game.clone()), evaluated_at: Some(7) };
+        h.cache.lock().unwrap().insert(address.clone(), cached.clone());
+        let resolution = h
+            .manager
+            .resolve_context_and_readiness(
+                &address,
+                ResolveOptions { context: Some(context(pda, random_hash, None)), ..Default::default() },
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(resolution, ReadinessResolution::Resolved { ready: true, ref readiness, .. } if *readiness == cached)
+        );
+        assert!(h.cache.lock().unwrap().is_empty());
+
+        // The shared block time is fetched once and reused.
+        serve_game(&h, Some(game));
+        let block_time = BlockTimeCache::default();
+        for _ in 0..2 {
+            let resolution = h
+                .manager
+                .resolve_context_and_readiness(
+                    &address,
+                    ResolveOptions {
+                        block_time_cache: Some(&block_time),
+                        require_on_chain: true,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(matches!(resolution, ReadinessResolution::Resolved { ready: true, prefetch_scheduled: true, .. }));
+        }
+        assert_eq!(block_time.get(), Some(BLOCK_TIME));
+        assert_eq!(h.transport.calls_for("getSlot").len(), 1);
+
+        // An explicit block time skips the clock entirely.
+        let resolution = h
+            .manager
+            .resolve_context_and_readiness(
+                &address,
+                ResolveOptions { block_time: Some(5), require_on_chain: true, ..Default::default() },
+            )
+            .await
+            .unwrap();
+        let ReadinessResolution::Resolved { readiness, .. } = resolution else { panic!("expected resolved") };
+        assert_eq!(readiness.evaluated_at, Some(5));
+        assert_eq!(h.transport.calls_for("getSlot").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn games_gone_from_chain_resolve_without_context() {
+        let h = harness(None);
+        let (address, _, _) = store_game(&h, [0x25; 32]);
+        serve_game(&h, None);
+        let resolution = h
+            .manager
+            .resolve_context_and_readiness(&address, ResolveOptions { require_on_chain: true, ..Default::default() })
+            .await
+            .unwrap();
+        assert_eq!(resolution, ReadinessResolution::MissingContext);
+        // Without the on-chain requirement the stale evaluation is returned.
+        let resolution = h.manager.resolve_context_and_readiness(&address, ResolveOptions::default()).await.unwrap();
+        assert!(matches!(resolution, ReadinessResolution::Resolved { ready: false, prefetch_scheduled: false, .. }));
+    }
+
+    #[tokio::test]
+    async fn completes_games_and_reports_the_total_pot() {
+        let h = harness(None);
+        let (address, _, _) = store_game(&h, [0x26; 32]);
+        let game = game_account(2, 2, 2, 0, 60);
+        let roster = players(2);
+        h.db.replace_game_players(&address, &roster).unwrap();
+        serve_game(&h, Some(game.clone()));
+        serve_submission(&h);
+
+        let result = h.manager.complete_game(&address, None, None).await;
+        let index = h.manager.calculate_winner_index(&SECRET, game.last_slot, 2).unwrap() as usize;
+        assert_eq!(
+            result,
+            CompletionResult {
+                success: true,
+                tx_hash: Some("landed-sig".into()),
+                winner_address: Some(roster[index].clone()),
+                total_pot: Some(12_345),
+                ..Default::default()
+            }
+        );
+        // The signed completion carries the revealed secret.
+        let sent = &h.transport.calls_for("sendTransaction")[0].1;
+        let wire = base64::engine::general_purpose::STANDARD.decode(sent[0].as_str().unwrap()).unwrap();
+        assert!(wire.windows(32).any(|w| w == SECRET));
+        assert_eq!(h.db.get_game_status(&address).as_deref(), Some("completed"));
+        assert_eq!(h.db.get_secret_key(&address), None, "secret is marked used");
+        assert!(h.db.get_game_players(&address).is_empty());
+        assert!(h.cache.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn missing_secret_is_a_permanent_failure() {
+        let h = harness(None);
+        h.db.track_game("no-secret", None, false).unwrap();
+        let result = h.manager.complete_game("no-secret", None, None).await;
+        assert_eq!(result, CompletionResult::failure(NO_SECRET_KEY_MESSAGE));
+        let state = h.db.get_completion_attempt_state("no-secret").unwrap();
+        assert_eq!(state.completion_attempts, 1);
+        assert_eq!(state.completion_failure_kind, Some(CompletionFailureKind::Permanent));
+    }
+
+    #[tokio::test]
+    async fn not_ready_games_are_not_recorded() {
+        let h = harness(None);
+        let (address, _, _) = store_game(&h, [0x27; 32]);
+        serve_game(&h, Some(game_account(1, 5, 2, BLOCK_TIME as u64, 600)));
+        assert_eq!(h.manager.complete_game(&address, None, None).await, CompletionResult::not_ready());
+        assert_eq!(h.db.get_completion_attempt_state(&address).unwrap().completion_attempts, 0);
+    }
+
+    #[tokio::test]
+    async fn provided_readiness_without_account_consults_the_chain() {
+        let h = harness(None);
+        let (address, pda, random_hash) = store_game(&h, [0x28; 32]);
+        let readiness = Readiness { ready: true, game_account: None, evaluated_at: Some(1) };
+        h.cache.lock().unwrap().insert(address.clone(), readiness.clone());
+        // The provided snapshot lacks the account, so the chain is consulted
+        // and the game no longer exists there.
+        serve_game(&h, None);
+        let result = h.manager.complete_game(&address, Some(readiness), Some(context(pda, random_hash, None))).await;
+        assert_eq!(result, CompletionResult::failure(NO_SECRET_KEY_MESSAGE));
+        assert!(h.cache.lock().unwrap().is_empty(), "fatal failures clear cached readiness");
+    }
+
+    #[tokio::test]
+    async fn registry_desync_marks_the_game() {
+        let h = harness(None);
+        let (address, _, _) = store_game(&h, [0x29; 32]);
+        h.db.replace_game_players(&address, &players(1)).unwrap();
+        serve_game(&h, Some(game_account(2, 2, 2, 0, 60)));
+        let result = h.manager.complete_game(&address, None, None).await;
+        assert_eq!(result, CompletionResult::failure("Ticket registry out of sync"));
+        assert_eq!(h.db.get_game_status(&address).as_deref(), Some("desynced"));
+    }
+
+    #[tokio::test]
+    async fn recovers_partial_registries_before_drawing() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let roster = players(2);
+        let recovered = roster.clone();
+        let h = harness(Some(recover_with(calls.clone(), move |_| Ok(Some(recovered.clone())))));
+        let (address, _, _) = store_game(&h, [0x2a; 32]);
+        h.db.replace_game_players(&address, &roster[..1]).unwrap();
+        serve_game(&h, Some(game_account(2, 2, 2, 0, 60)));
+        serve_submission(&h);
+        let result = h.manager.complete_game(&address, None, None).await;
+        assert!(result.success, "{result:?}");
+        assert!(roster.contains(result.winner_address.as_ref().unwrap()));
+        assert!(calls.load(Ordering::SeqCst) >= 1);
+        assert_eq!(h.db.get_game_status(&address).as_deref(), Some("completed"));
+    }
+
+    #[tokio::test]
+    async fn invalid_winners_are_permanent_failures() {
+        let h = harness(None);
+        let (address, _, _) = store_game(&h, [0x2b; 32]);
+        serve_game(&h, Some(game_account(1, 1, 1, 0, 60)));
+        h.db.replace_game_players(&address, &["not-an-address".to_string()]).unwrap();
+        let result = h.manager.complete_game(&address, None, None).await;
+        assert_eq!(result, CompletionResult::failure("Winner address is invalid"));
+
+        // Program-derived (off-curve) winners cannot own a token account.
+        let (address, pda, _) = store_game(&h, [0x2c; 32]);
+        h.db.replace_game_players(&address, &[pda.to_base58()]).unwrap();
+        let result = h.manager.complete_game(&address, None, None).await;
+        assert_eq!(result, CompletionResult::failure("Token owner must be on the ed25519 curve"));
+        let state = h.db.get_completion_attempt_state(&address).unwrap();
+        assert_eq!(state.completion_failure_kind, Some(CompletionFailureKind::Permanent));
+    }
+
+    #[tokio::test]
+    async fn submission_failures_are_classified_as_transient() {
+        let h = harness(None);
+        let (address, _, _) = store_game(&h, [0x2d; 32]);
+        h.db.replace_game_players(&address, &players(1)).unwrap();
+        serve_game(&h, Some(game_account(1, 1, 1, 0, 60)));
+        h.transport.on(|_, method, _| {
+            (method == "getLatestBlockhash").then(|| Err(RpcError::transport("RPC request failed: connection reset")))
+        });
+        let result = h.manager.complete_game(&address, None, None).await;
+        assert_eq!(result.error.as_deref(), Some("RPC request failed: connection reset"));
+        let state = h.db.get_completion_attempt_state(&address).unwrap();
+        assert_eq!(state.completion_attempts, 0);
+        assert_eq!(state.completion_failure_kind, Some(CompletionFailureKind::Transient));
+    }
+
+    #[tokio::test]
+    async fn expired_confirmation_returns_the_landed_signature() {
+        let h = harness(None);
+        h.transport.on(|_, method, _| match method {
+            "getLatestBlockhash" => Some(Ok(json!({"value": {"blockhash": BLOCKHASH, "lastValidBlockHeight": 10}}))),
+            "sendTransaction" => Some(Ok(json!("landed-sig"))),
+            "getBlockHeight" => Some(Ok(json!(11))),
+            _ => None,
+        });
+        // Not visible during confirmation, then confirmed when re-checked.
+        h.transport.push("getSignatureStatuses", Ok(json!({"value": [null]})));
+        h.transport.push(
+            "getSignatureStatuses",
+            Ok(json!({"value": [{"slot": 1, "confirmationStatus": "confirmed", "err": null}]})),
+        );
+        let game = game_account(1, 1, 1, 0, 60);
+        let winner = Keypair::generate().address();
+        let signature = h.manager.execute_game_completion(&game, &winner, &[0; 32], &[0; 32], 0).await.unwrap();
+        assert_eq!(signature, "landed-sig");
+        assert_eq!(h.transport.calls_for("sendTransaction").len(), 1);
+    }
+
+    #[test]
+    fn builds_completion_instructions() {
+        let h = harness(None);
+        let game = game_account(1, 1, 1, 0, 60);
+        let winner = Keypair::generate().address();
+        let ix = h.manager.build_completion_instruction(&game, &winner, &[3; 32], &[4; 32], 7).unwrap();
+        assert_eq!(ix.program_id, PROGRAM_ID);
+        assert_eq!(ix.accounts[0].address, find_game_pda(&[3; 32], &PROGRAM_ID));
+        assert_eq!(&ix.data[ix.data.len() - 4..], &7u32.to_le_bytes());
+        let off_curve = find_game_pda(&[3; 32], &PROGRAM_ID);
+        assert!(h.manager.build_completion_instruction(&game, &off_curve, &[3; 32], &[4; 32], 0).is_err());
+    }
+
+    #[tokio::test]
+    async fn attempts_skip_invalid_addresses_and_missing_context() {
+        let h = harness(None);
+        assert_eq!(h.manager.attempt_game_completion(AttemptOptions::new("not-a-public-key")).await.unwrap(), None);
+        assert!(h.transport.calls.lock().unwrap().is_empty());
+        let unknown = Address([9; 32]).to_base58();
+        assert_eq!(h.manager.attempt_game_completion(AttemptOptions::new(&unknown)).await.unwrap(), None);
+        assert!(h.metrics.completion_records().is_empty());
+    }
+
+    #[tokio::test]
+    async fn attempts_record_not_ready_outcomes() {
+        let h = harness(None);
+        let (address, _, _) = store_game(&h, [0x2e; 32]);
+        serve_game(&h, Some(game_account(1, 5, 2, BLOCK_TIME as u64, 600)));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let mut options = AttemptOptions::new(&address);
+        options.on_result = Some(Arc::new(move |result: &CompletionResult| sink.lock().unwrap().push(result.clone())));
+        let result = h.manager.attempt_game_completion(options).await.unwrap();
+        assert_eq!(result, Some(CompletionResult::not_ready()));
+        assert_eq!(*seen.lock().unwrap(), vec![CompletionResult::not_ready()]);
+        assert_eq!(
+            h.metrics.completion_records(),
+            vec![CompletionRecord { game_address: address, outcome: CompletionOutcome::NotReady, error: None }]
+        );
+    }
+
+    #[tokio::test]
+    async fn attempts_log_success_and_failure_once() {
+        let h = harness(None);
+        let logged = Arc::new(Mutex::new(Vec::new()));
+        let with_logs = |address: &str| {
+            let (success, failure) = (logged.clone(), logged.clone());
+            AttemptOptions::new(address).logs(
+                move |address| {
+                    success.lock().unwrap().push(format!("success:{address}"));
+                    format!("success:{address}")
+                },
+                move |address, error| {
+                    failure.lock().unwrap().push(format!("failure:{address}:{}", error.unwrap_or("")));
+                    String::new()
+                },
+            )
+        };
+
+        let (success_game, _, _) = store_game(&h, [0x30; 32]);
+        h.db.replace_game_players(&success_game, &players(1)).unwrap();
+        serve_game(&h, Some(game_account(1, 1, 1, 0, 60)));
+        serve_submission(&h);
+        let success = h.manager.attempt_game_completion(with_logs(&success_game)).await.unwrap().unwrap();
+        assert!(success.success);
+
+        let (failure_game, _, _) = store_game(&h, [0x31; 32]);
+        h.db.replace_game_players(&failure_game, &["bad".to_string()]).unwrap();
+        let failure = h.manager.attempt_game_completion(with_logs(&failure_game)).await.unwrap().unwrap();
+        assert_eq!(failure, CompletionResult::failure("Winner address is invalid"));
+
+        assert_eq!(
+            *logged.lock().unwrap(),
+            vec![format!("success:{success_game}"), format!("failure:{failure_game}:Winner address is invalid")]
+        );
+        let outcomes: Vec<_> = h.metrics.completion_records().into_iter().map(|r| (r.outcome, r.error)).collect();
+        assert_eq!(
+            outcomes,
+            vec![
+                (CompletionOutcome::Success, None),
+                (CompletionOutcome::Error, Some("Winner address is invalid".to_string()))
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn prevents_concurrent_completions_for_the_same_game() {
+        let h = harness(None);
+        let (address, pda, random_hash) = store_game(&h, [0x32; 32]);
+        h.db.replace_game_players(&address, &players(1)).unwrap();
+        let game = game_account(1, 1, 1, 0, 60);
+        serve_game(&h, Some(game.clone()));
+        serve_submission(&h);
+        let readiness = Readiness { ready: true, game_account: Some(game), evaluated_at: Some(1) };
+        let options = AttemptOptions {
+            context: Some(context(pda, random_hash, None)),
+            readiness: Some(readiness),
+            skip_readiness_check: true,
+            ..AttemptOptions::new(&address)
+        };
+
+        // An attempt already in flight blocks the second caller.
+        h.manager.in_flight.lock().unwrap().insert(address.clone());
+        assert_eq!(h.manager.attempt_game_completion(options.clone()).await.unwrap(), None);
+        assert!(h.transport.calls_for("sendTransaction").is_empty());
+
+        // The guard is released after an attempt finishes.
+        h.manager.in_flight.lock().unwrap().clear();
+        let result = h.manager.attempt_game_completion(options).await.unwrap().unwrap();
+        assert!(result.success);
+        assert!(h.manager.in_flight.lock().unwrap().is_empty());
+        assert_eq!(h.transport.calls_for("sendTransaction").len(), 1);
+        h.manager.reset_registry_prefetch_schedule(&address);
+    }
+}

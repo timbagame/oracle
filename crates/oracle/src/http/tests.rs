@@ -13,11 +13,17 @@ struct FakeOracle {
     sign_error: Mutex<Option<GameTransactionError>>,
     completion: Mutex<Option<CompletionResult>>,
     requeue: Mutex<Option<RequeueFailure>>,
+    fail_generate: Mutex<bool>,
+    policies: Mutex<Option<Vec<TokenPolicy>>>,
+    toggle: Mutex<Option<anyhow::Result<Result<bool, ToggleFailure>>>>,
 }
 
 impl OracleApi for FakeOracle {
     fn generate_game_secrets(&self, game_type: Option<&str>) -> anyhow::Result<GameSecrets> {
         self.game_types.lock().unwrap().push(game_type.map(str::to_string));
+        if *self.fail_generate.lock().unwrap() {
+            anyhow::bail!("database is closed");
+        }
         Ok(GameSecrets { random_hash: "ab".repeat(32), game_address: GAME.into(), oracle_operator: Some(GAME.into()) })
     }
     fn sign_game_transaction<'a>(&'a self, tx: &'a str) -> BoxFuture<'a, Result<String, GameTransactionError>> {
@@ -28,7 +34,8 @@ impl OracleApi for FakeOracle {
         futures::future::ready(result).boxed()
     }
     fn token_policies(&self) -> BoxFuture<'_, anyhow::Result<Vec<TokenPolicy>>> {
-        futures::future::ready(Err(anyhow::anyhow!("no prices"))).boxed()
+        let result = self.policies.lock().unwrap().clone().ok_or_else(|| anyhow::anyhow!("no prices"));
+        futures::future::ready(result).boxed()
     }
     fn stats(&self) -> ServiceStats {
         ServiceStats {
@@ -47,6 +54,9 @@ impl OracleApi for FakeOracle {
         futures::future::ready(self.completion.lock().unwrap().clone()).boxed()
     }
     fn set_auto_complete_disabled(&self, _game: &str, disabled: bool) -> anyhow::Result<Result<bool, ToggleFailure>> {
+        if let Some(result) = self.toggle.lock().unwrap().take() {
+            return result;
+        }
         Ok(if disabled { Ok(true) } else { Err(ToggleFailure::Unchanged) })
     }
 }
@@ -223,4 +233,289 @@ async fn admin_routes_are_disabled_by_default() {
 #[test]
 fn summarizes_unparseable_transactions() {
     assert!(summarize_game_transaction("AAAA")["parseError"].is_string());
+}
+
+#[tokio::test]
+async fn generate_hash_failures_and_lenient_bodies() {
+    let oracle = Arc::new(FakeOracle::default());
+    let app = app(oracle.clone(), false);
+    // Non-JSON content types and non-object JSON bodies count as empty.
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/generate-hash")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("content-type", "text/plain")
+        .body(Body::from("gameType=coinflip"))
+        .unwrap();
+    assert_eq!(app.clone().oneshot(request).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(call(&app, "POST", "/generate-hash", Some("[1, 2]"), true).await.0, StatusCode::OK);
+    assert_eq!(oracle.game_types.lock().unwrap().clone(), vec![None, None]);
+
+    *oracle.fail_generate.lock().unwrap() = true;
+    let (status, body, _) = call(&app, "POST", "/generate-hash", None, true).await;
+    assert_eq!((status, body["error"].clone()), (StatusCode::INTERNAL_SERVER_ERROR, json!("Failed to generate hash")));
+}
+
+#[tokio::test]
+async fn lists_token_policies() {
+    let oracle = Arc::new(FakeOracle::default());
+    let policy = TokenPolicy {
+        mint: GAME.into(),
+        enabled: true,
+        minimum_amount_raw: "100".into(),
+        accepted_minimum_amount_raw: "95".into(),
+        revision: 2,
+        effective_at: "2024-01-01T00:00:00.000Z".into(),
+    };
+    *oracle.policies.lock().unwrap() = Some(vec![policy]);
+    let (status, body, _) = call(&app(oracle, false), "GET", "/token-policies", None, true).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["success"], true);
+    assert_eq!(body["policies"][0]["mint"], GAME);
+    assert_eq!(body["policies"][0]["acceptedMinimumAmountRaw"], "95");
+}
+
+#[tokio::test]
+async fn sign_reports_policy_minimums() {
+    let oracle = Arc::new(FakeOracle::default());
+    let app = app(oracle.clone(), false);
+    *oracle.sign_error.lock().unwrap() = Some(GameTransactionError::CreationPolicy(CreationPolicyError {
+        minimum_amount_raw: Some("100".into()),
+        accepted_minimum_amount_raw: Some("95".into()),
+        ..CreationPolicyError::new(RejectionCode::AmountBelowMinimum, "Game amount is below the token minimum", GAME)
+            .revision(3)
+    }));
+    let (status, body, _) = call(&app, "POST", "/sign-game-transaction", Some(r#"{"txBase64":"AAAA"}"#), true).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let keys: Vec<_> = body.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(
+        keys,
+        [
+            "timestamp",
+            "service",
+            "success",
+            "error",
+            "code",
+            "mint",
+            "minimumAmountRaw",
+            "acceptedMinimumAmountRaw",
+            "revision"
+        ]
+    );
+    assert_eq!(body["minimumAmountRaw"], "100");
+    assert_eq!(body["acceptedMinimumAmountRaw"], "95");
+    assert_eq!(body["revision"], 3);
+    // Extra keys make the request invalid.
+    let (status, _, _) =
+        call(&app, "POST", "/sign-game-transaction", Some(r#"{"txBase64":"AAAA","extra":1}"#), true).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn complete_now_reports_completed_games() {
+    let oracle = Arc::new(FakeOracle::default());
+    let app = app(oracle.clone(), false);
+    let body = format!(r#"{{"gameAddress":"{GAME}"}}"#);
+    *oracle.completion.lock().unwrap() = Some(CompletionResult {
+        success: true,
+        tx_hash: Some("sig".into()),
+        winner_address: Some("winner".into()),
+        total_pot: Some(500),
+        ..Default::default()
+    });
+    let (status, json, _) = call(&app, "POST", "/games/complete-now", Some(&body), true).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["status"], "completed");
+    assert_eq!(json["txHash"], "sig");
+    assert_eq!(json["winnerAddress"], "winner");
+    assert_eq!(json["totalPot"], 500);
+    assert_eq!(json["gameAddress"], GAME);
+
+    *oracle.completion.lock().unwrap() = Some(CompletionResult { success: true, ..Default::default() });
+    let (status, json, _) = call(&app, "POST", "/games/complete-now", Some(&body), true).await;
+    assert_eq!((status, json["error"].clone()), (StatusCode::INTERNAL_SERVER_ERROR, json!("Internal server error")));
+
+    let (status, json, _) = call(&app, "POST", "/games/complete-now", Some("{"), true).await;
+    assert_eq!((status, json["error"].clone()), (StatusCode::BAD_REQUEST, json!("Invalid JSON payload")));
+}
+
+#[tokio::test]
+async fn requeue_maps_every_failure() {
+    let oracle = Arc::new(FakeOracle::default());
+    let app = app(oracle.clone(), true);
+    let body = format!(r#"{{"gameAddress":" {GAME} "}}"#);
+    let (status, json, _) = call(&app, "POST", "/games/requeue", Some(&body), false).await;
+    assert_eq!((status, json["gameAddress"].clone()), (StatusCode::OK, json!(GAME)), "addresses are trimmed");
+    for (reason, status, message) in [
+        (RequeueFailure::InvalidAddress, StatusCode::BAD_REQUEST, "gameAddress is required"),
+        (RequeueFailure::NotFound, StatusCode::NOT_FOUND, "Game is not tracked"),
+        (RequeueFailure::Finalized, StatusCode::CONFLICT, "Game is already finalized"),
+        (RequeueFailure::Unchanged, StatusCode::CONFLICT, "Game is already queued for completion"),
+    ] {
+        *oracle.requeue.lock().unwrap() = Some(reason);
+        let (actual, json, _) = call(&app, "POST", "/games/requeue", Some(&body), false).await;
+        assert_eq!(actual, status, "{reason:?}");
+        assert_eq!(json["error"], message, "{reason:?}");
+    }
+    for bad in [r#"{}"#, r#"{"gameAddress":"  "}"#, r#"{"gameAddress":1}"#] {
+        let (status, json, _) = call(&app, "POST", "/games/requeue", Some(bad), false).await;
+        assert_eq!((status, json["error"].clone()), (StatusCode::BAD_REQUEST, json!("gameAddress is required")));
+    }
+    let (status, _, _) = call(&app, "POST", "/games/requeue", Some("{"), false).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn toggle_auto_complete_maps_every_outcome() {
+    let oracle = Arc::new(FakeOracle::default());
+    let app = app(oracle.clone(), true);
+    let toggle = format!(r#"{{"gameAddress":"{GAME}","autoCompleteDisabled":true}}"#);
+    let (status, json, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["autoCompleteDisabled"], true);
+    assert_eq!(json["gameAddress"], GAME);
+
+    for (reason, status, message) in [
+        (ToggleFailure::InvalidAddress, StatusCode::BAD_REQUEST, "gameAddress is required"),
+        (ToggleFailure::NotFound, StatusCode::NOT_FOUND, "Game is not tracked"),
+        (ToggleFailure::Finalized, StatusCode::CONFLICT, "Game is already finalized"),
+    ] {
+        *oracle.toggle.lock().unwrap() = Some(Ok(Err(reason)));
+        let (actual, json, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), false).await;
+        assert_eq!((actual, json["error"].clone()), (status, json!(message)), "{reason:?}");
+    }
+    *oracle.toggle.lock().unwrap() = Some(Err(anyhow::anyhow!("database is closed")));
+    let (status, json, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), false).await;
+    assert_eq!((status, json["error"].clone()), (StatusCode::INTERNAL_SERVER_ERROR, json!("Internal server error")));
+
+    let missing_flag = format!(r#"{{"gameAddress":"{GAME}","autoCompleteDisabled":"yes"}}"#);
+    let (status, json, _) = call(&app, "POST", "/games/auto-complete", Some(&missing_flag), false).await;
+    assert_eq!(
+        (status, json["error"].clone()),
+        (StatusCode::BAD_REQUEST, json!("autoCompleteDisabled must be a boolean"))
+    );
+    let (status, json, _) =
+        call(&app, "POST", "/games/auto-complete", Some(r#"{"autoCompleteDisabled":true}"#), false).await;
+    assert_eq!((status, json["error"].clone()), (StatusCode::BAD_REQUEST, json!("gameAddress is required")));
+    let (status, _, _) = call(&app, "POST", "/games/auto-complete", Some("{"), false).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn delegates_to_the_indexer_router() {
+    let mut options = RouterOptions::new(Some(TOKEN.into()));
+    options.indexer = Some(Router::new().route("/indexer/games", axum::routing::get(|| async { "games" })));
+    let app = router(Arc::new(FakeOracle::default()), options);
+    let (status, body, _) = call(&app, "GET", "/indexer/games", None, true).await;
+    assert_eq!((status, body), (StatusCode::OK, Value::String("games".into())));
+    // Without a web router the path falls through to the oracle routes.
+    let (status, _, _) = call(&app, "GET", "/web/config", None, true).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // Unsupported methods and an empty configured token are rejected.
+    assert_eq!(call(&app, "DELETE", "/health", None, false).await.0, StatusCode::NOT_FOUND);
+    let locked = router(Arc::new(FakeOracle::default()), RouterOptions::new(Some(String::new())));
+    assert_eq!(call(&locked, "GET", "/stats", None, true).await.0, StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn summarizes_parseable_transactions() {
+    use crate::solana::Keypair;
+    use timba_protocol::{AccountMeta, Address, Instruction};
+    let payer = Keypair::generate();
+    let instruction = Instruction {
+        program_id: Address([7; 32]),
+        accounts: vec![AccountMeta::writable_signer(payer.address()), AccountMeta::readonly(Address([8; 32]))],
+        data: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    };
+    let (_, wire) = crate::solana::tx::sign_legacy_transaction(&payer, &[], &Address([9; 32]), &[instruction]).unwrap();
+    let summary = summarize_game_transaction(&wire);
+    assert_eq!(summary["instructionCount"], 1);
+    assert_eq!(summary["signatureSlots"], 1);
+    assert_eq!(
+        summary["instructions"][0],
+        json!({
+            "index": 0,
+            "programId": Address([7; 32]).to_base58(),
+            "accountCount": 2,
+            "signerCount": 1,
+            "writableCount": 1,
+            "accountFlags": [{"signer": true, "writable": true}, {"signer": false, "writable": false}],
+            "dataLength": 10,
+            "discriminator": "0102030405060708",
+        })
+    );
+}
+
+/// The production [`OracleApi`] implementation wired to a real service.
+mod service_api {
+    use super::*;
+    use crate::config::OracleConfig;
+    use crate::db::OracleDatabase;
+    use crate::metrics::OracleMetrics;
+    use crate::solana::pool::testing::FakeTransport;
+    use crate::solana::{Keypair, RpcPool};
+    use crate::token::price::TokenPriceResolver;
+    use std::collections::HashMap;
+
+    struct NoPrices;
+
+    impl TokenPriceResolver for NoPrices {
+        fn get_token_usd_prices<'a>(
+            &'a self,
+            _mints: &'a [String],
+            _allow_partial: bool,
+        ) -> BoxFuture<'a, anyhow::Result<HashMap<String, f64>>> {
+            futures::future::ready(Ok(HashMap::new())).boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn serves_requests_from_the_oracle_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(OracleDatabase::open(dir.path().join("o.sqlite").to_str().unwrap()).unwrap());
+        let transport = FakeTransport::new();
+        let rpc = Arc::new(RpcPool::with_transport(&["https://a".into()], transport).unwrap());
+        let service = OracleService::new(crate::core::service::OracleServiceOptions {
+            config: OracleConfig::for_tests(),
+            db,
+            metrics: Arc::new(OracleMetrics::new(10)),
+            rpc,
+            operator: Keypair::generate(),
+            price_resolver: Arc::new(NoPrices),
+        });
+        let mut options = RouterOptions::new(Some(TOKEN.into()));
+        options.enable_admin_routes = true;
+        let app = router(service.clone(), options);
+
+        let (status, body, _) = call(&app, "POST", "/generate-hash", Some(r#"{"gameType":"giveaway"}"#), true).await;
+        assert_eq!(status, StatusCode::OK);
+        let game = body["gameAddress"].as_str().unwrap().to_string();
+        assert_eq!(service.db().get_game_type(&game).as_deref(), Some("giveaway"));
+        assert_eq!(body["oracleOperator"], service.operator_address().to_base58());
+
+        let (status, body, _) = call(&app, "GET", "/stats", None, true).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["stats"]["totalSecrets"], 1);
+        assert_eq!(body["stats"]["eventListening"], false);
+
+        let (status, body, _) = call(&app, "GET", "/token-policies", None, true).await;
+        assert_eq!((status, body["policies"].clone()), (StatusCode::OK, json!([])));
+
+        let (status, body, _) =
+            call(&app, "POST", "/sign-game-transaction", Some(r#"{"txBase64":"AAAA"}"#), true).await;
+        assert_eq!((status, body["error"].clone()), (StatusCode::BAD_REQUEST, json!("Invalid game transaction")));
+
+        let requeue = format!(r#"{{"gameAddress":"{GAME}"}}"#);
+        let (status, _, _) = call(&app, "POST", "/games/requeue", Some(&requeue), false).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let toggle = format!(r#"{{"gameAddress":"{game}","autoCompleteDisabled":true}}"#);
+        let (status, body, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), false).await;
+        assert_eq!((status, body["autoCompleteDisabled"].clone()), (StatusCode::OK, json!(true)));
+
+        // Disabled games are skipped by the background wake-up.
+        let complete = format!(r#"{{"gameAddress":"{game}"}}"#);
+        let (status, body, _) = call(&app, "POST", "/games/complete-now", Some(&complete), true).await;
+        assert_eq!((status, body["status"].clone()), (StatusCode::OK, json!("in-flight")));
+        service.close().await;
+    }
 }

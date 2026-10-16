@@ -214,4 +214,59 @@ mod tests {
         let ata = find_associated_token_address(&owner, &WRAPPED_SOL_MINT, &TOKEN_PROGRAM_ID);
         assert!(ata.is_off_curve());
     }
+
+    #[test]
+    fn static_decoder_matches_bs58_at_runtime() {
+        for value in [
+            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+            "So11111111111111111111111111111111111111112",
+            "11111111111111111111111111111111",
+            "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+        ] {
+            assert_eq!(Address::from_static(value), Address::parse(value).unwrap(), "{value}");
+        }
+        // Invalid characters and values wider than 32 bytes are rejected.
+        assert_eq!(decode_base58_const(b"0OIl"), None);
+        assert_eq!(decode_base58_const(&[b'z'; 45]), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid static address")]
+    fn static_addresses_must_be_valid() {
+        let _ = Address::from_static("not-base58!");
+    }
+
+    #[test]
+    fn formats_parses_and_serializes() {
+        let address = TOKEN_PROGRAM_ID;
+        assert_eq!(format!("{address:?}"), "Address(TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA)");
+        assert_eq!(address.to_string(), "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+        assert_eq!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA".parse::<Address>().unwrap(), address);
+        let json = serde_json::to_string(&address).unwrap();
+        assert_eq!(json, "\"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA\"");
+        assert_eq!(serde_json::from_str::<Address>(&json).unwrap(), address);
+        let err = serde_json::from_str::<Address>("\"nope\"").unwrap_err();
+        assert!(err.to_string().contains("Invalid Solana address: nope"), "{err}");
+        assert!(serde_json::from_str::<Address>("1").is_err());
+    }
+
+    #[test]
+    fn program_address_seed_limits() {
+        let program = TOKEN_PROGRAM_ID;
+        let long = [0u8; MAX_SEED_LENGTH + 1];
+        assert_eq!(Address::create_program_address(&[&long], &program), Err(AddressError::InvalidSeeds));
+        let seeds: Vec<&[u8]> = vec![b"s"; MAX_SEEDS + 1];
+        assert_eq!(Address::create_program_address(&seeds, &program), Err(AddressError::InvalidSeeds));
+        // find_program_address reserves one seed slot for the bump.
+        let seeds: Vec<&[u8]> = vec![b"s"; MAX_SEEDS];
+        assert_eq!(Address::find_program_address(&seeds, &program), Err(AddressError::InvalidSeeds));
+        assert_eq!(Address::find_program_address(&[&long], &program), Err(AddressError::InvalidSeeds));
+
+        let (pda, bump) = Address::find_program_address(&[b"game"], &program).unwrap();
+        assert!(pda.is_off_curve());
+        assert_eq!(Address::create_program_address(&[b"game", &[bump]], &program), Ok(pda));
+        // Wallet keys are on the curve, unlike derived addresses.
+        let on_curve = Address::parse("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM").unwrap();
+        assert!(on_curve.is_on_curve());
+    }
 }

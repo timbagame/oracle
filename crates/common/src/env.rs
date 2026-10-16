@@ -86,4 +86,74 @@ mod tests {
         assert_eq!(parse_integer(Some("70000"), 5, Some(0), Some(65535), "K"), 5);
         assert_eq!(parse_integer(Some("1e3"), 5, None, None, "K"), 1000);
     }
+
+    /// Every case mutating process-wide variables lives in this one test so
+    /// they cannot race each other.
+    #[test]
+    fn environment_detection() {
+        const KEYS: [&str; 5] = ["NODE_ENV", "BUN_ENV", "CI", "USE_FAKE_KEYPAIR", "TIMBA_ENV_TEST_VALUE"];
+        let saved: Vec<(&str, Option<String>)> = KEYS.iter().map(|k| (*k, std::env::var(k).ok())).collect();
+        let set = |pairs: &[(&str, &str)]| {
+            for key in KEYS {
+                std::env::remove_var(key);
+            }
+            for (key, value) in pairs {
+                std::env::set_var(key, value);
+            }
+        };
+
+        set(&[("TIMBA_ENV_TEST_VALUE", "  padded  ")]);
+        assert_eq!(read_env("TIMBA_ENV_TEST_VALUE").as_deref(), Some("padded"));
+        set(&[("TIMBA_ENV_TEST_VALUE", "   ")]);
+        assert_eq!(read_env("TIMBA_ENV_TEST_VALUE"), None);
+        assert_eq!(read_env("TIMBA_ENV_TEST_MISSING"), None);
+
+        for (raw, expected) in [
+            ("1", Some(true)),
+            ("TRUE", Some(true)),
+            ("yes", Some(true)),
+            ("On", Some(true)),
+            ("0", Some(false)),
+            ("false", Some(false)),
+            ("NO", Some(false)),
+            ("off", Some(false)),
+            ("maybe", None),
+        ] {
+            set(&[("TIMBA_ENV_TEST_VALUE", raw)]);
+            assert_eq!(read_bool_env("TIMBA_ENV_TEST_VALUE"), expected, "{raw}");
+        }
+
+        set(&[]);
+        assert_eq!(environment_mode(), "development");
+        assert!(!is_ci_environment());
+        assert!(!is_test_environment());
+        assert!(!should_use_ephemeral_keypair());
+
+        set(&[("CI", "true")]);
+        assert!(is_ci_environment());
+        assert_eq!(environment_mode(), "ci");
+        assert!(!is_test_environment());
+        assert!(should_use_ephemeral_keypair());
+        set(&[("CI", "1")]);
+        assert!(!is_ci_environment(), "only the literal \"true\" marks CI");
+
+        set(&[("BUN_ENV", "Test"), ("CI", "true")]);
+        assert_eq!(environment_mode(), "Test");
+        assert!(is_test_environment());
+        set(&[("NODE_ENV", "production"), ("BUN_ENV", "test")]);
+        assert_eq!(environment_mode(), "production", "NODE_ENV takes precedence");
+        assert!(!should_use_ephemeral_keypair());
+
+        set(&[("NODE_ENV", "test"), ("USE_FAKE_KEYPAIR", "off")]);
+        assert!(!should_use_ephemeral_keypair(), "explicit opt-out wins");
+        set(&[("NODE_ENV", "production"), ("USE_FAKE_KEYPAIR", "yes")]);
+        assert!(should_use_ephemeral_keypair(), "explicit opt-in wins");
+
+        for (key, value) in saved {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
 }

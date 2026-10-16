@@ -720,4 +720,126 @@ mod tests {
         assert_eq!(data.len(), INITIALIZE_GAME_DATA_LEN);
         assert_eq!(InitializeGameArgs::decode(&data).unwrap(), args);
     }
+
+    #[test]
+    fn versions_capabilities_and_parsing() {
+        let v2 = ContractVersion::V0_2_0.capabilities();
+        assert!(v2.game_token_account && !v2.oracle_token_policy);
+        assert!(!v2.operator_game_closed_event && !v2.direct_completion_fee_transfer);
+        let v3 = ContractVersion::V0_3_0.capabilities();
+        assert!(!v3.game_token_account && v3.oracle_token_policy);
+        assert!(v3.operator_game_closed_event && v3.direct_completion_fee_transfer);
+
+        assert_eq!(ContractVersion::parse_env(None, "CONTRACT_VERSION"), Ok(DEFAULT_CONTRACT_VERSION));
+        assert_eq!(ContractVersion::parse_env(Some("  "), "CONTRACT_VERSION"), Ok(ContractVersion::V0_2_0));
+        assert_eq!(ContractVersion::parse_env(Some(" 0.3.0 "), "CONTRACT_VERSION"), Ok(ContractVersion::V0_3_0));
+        assert_eq!(
+            ContractVersion::parse_env(Some("1.0.0"), "VERSION"),
+            Err("VERSION must be one of 0.2.0, 0.3.0; received 1.0.0".into())
+        );
+        assert_eq!("0.4.0".parse::<ContractVersion>(), Err("Unsupported contract version: 0.4.0".into()));
+        for version in SUPPORTED_CONTRACT_VERSIONS {
+            assert_eq!(version.to_string(), version.as_str());
+            assert_eq!(version.as_str().parse::<ContractVersion>(), Ok(version));
+        }
+
+        for game_type in [GameType::Coinflip, GameType::Giveaway] {
+            assert_eq!(GameType::from_name(game_type.name()), Some(game_type));
+            assert_eq!(GameType::from_u8(game_type as u8).unwrap(), game_type);
+        }
+        assert_eq!((GameType::Coinflip.name(), GameType::Giveaway.name()), ("coinflip", "giveaway"));
+        assert_eq!(GameType::from_name("Coinflip"), None);
+    }
+
+    #[test]
+    fn oracle_and_game_token_accounts_round_trip() {
+        let oracle = OracleAccount {
+            operator: Address([1; 32]),
+            fee_percentage: 5,
+            oracle_buffer_time: 30,
+            max_tickets: 100,
+            max_timeout: 86_400,
+            min_timeout: 60,
+        };
+        let bytes = oracle.encode();
+        assert_eq!(bytes.len(), 8 + 32 + 1 + 8 + 4 + 8 + 8);
+        assert_eq!(OracleAccount::decode(&bytes).unwrap(), oracle);
+        let mut wrong = bytes.clone();
+        wrong[0] ^= 1;
+        assert_eq!(OracleAccount::decode(&wrong).unwrap_err().to_string(), "Account is not a Timba oracle");
+        assert!(OracleAccount::decode(&bytes[..20]).is_err());
+
+        let token = GameTokenAccount {
+            token_mint: Address([2; 32]),
+            vault_bump: 254,
+            min_amount: 1_000,
+            fee_amount: 10,
+            enabled: true,
+        };
+        let bytes = token.encode();
+        assert!(GameTokenAccount::is_game_token(&bytes));
+        assert!(!GameTokenAccount::is_game_token(&bytes[..7]));
+        assert!(!GameTokenAccount::is_game_token(&oracle.encode()));
+        assert_eq!(GameTokenAccount::decode(&bytes).unwrap(), token);
+        assert_eq!(
+            GameTokenAccount::decode(&oracle.encode()).unwrap_err().to_string(),
+            "Account is not a Timba game token"
+        );
+        let disabled = GameTokenAccount { enabled: false, ..token };
+        assert_eq!(GameTokenAccount::decode(&disabled.encode()).unwrap(), disabled);
+    }
+
+    #[test]
+    fn instruction_builders_follow_the_idl() {
+        let mut data = InitializeGameArgs {
+            game_type: GameType::Giveaway,
+            amount: 1,
+            max_tickets: 3,
+            min_tickets: 1,
+            timeout: 60,
+            is_private: true,
+            random_hash: [1; 32],
+        }
+        .encode();
+        data[0] ^= 1;
+        assert_eq!(InitializeGameArgs::decode(&data).unwrap_err().to_string(), "Instruction is not initialize_game");
+
+        let join = JoinGameAccounts {
+            game: Address([1; 32]),
+            player: Address([2; 32]),
+            oracle_operator: Some(Address([3; 32])),
+            token_mint: Address([4; 32]),
+            player_token_account: Address([5; 32]),
+        };
+        let metas = join_game_account_metas(ContractVersion::V0_3_0, &join, &PROGRAM_ID);
+        assert_eq!(metas[2], AccountMeta::readonly_signer(Address([3; 32])));
+
+        let (game, operator, mint, creator) = (Address([1; 32]), Address([3; 32]), Address([4; 32]), Address([6; 32]));
+        let ix = operator_close_game_instruction(&game, &operator, &mint, &creator, &PROGRAM_ID);
+        assert_eq!(ix.program_id, PROGRAM_ID);
+        assert_eq!(ix.data, discriminators::OPERATOR_CLOSE_GAME.to_vec());
+        let idl = idl(ContractVersion::V0_3_0);
+        // Composite IDL account groups flatten into their member accounts.
+        fn flatten(accounts: &Value, out: &mut Vec<(bool, bool)>) {
+            for account in accounts.as_array().unwrap() {
+                match account.get("accounts") {
+                    Some(nested) => flatten(nested, out),
+                    None => out.push((
+                        account["writable"].as_bool().unwrap_or(false),
+                        account["signer"].as_bool().unwrap_or(false),
+                    )),
+                }
+            }
+        }
+        let mut expected = Vec::new();
+        flatten(&find(&idl["instructions"], "operator_close_game")["accounts"], &mut expected);
+        let actual: Vec<(bool, bool)> = ix.accounts.iter().map(|a| (a.writable, a.signer)).collect();
+        assert_eq!(actual, expected);
+        assert_eq!(ix.accounts[0], AccountMeta::writable(game));
+        assert_eq!(ix.accounts[1], AccountMeta::writable_signer(operator));
+        assert_eq!(ix.accounts[2], AccountMeta::readonly(find_oracle_pda(&PROGRAM_ID)));
+        assert_eq!(ix.accounts[3], AccountMeta::readonly(mint));
+        assert_eq!(ix.accounts[ix.accounts.len() - 2], AccountMeta::readonly(creator));
+        assert_eq!(ix.accounts[ix.accounts.len() - 1], AccountMeta::writable(ata(&creator, &mint)));
+    }
 }

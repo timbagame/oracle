@@ -381,3 +381,91 @@ pub fn build_create_game_plan(
     instructions.push(initialize);
     Ok(CreateGamePlan { game, instructions })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contracts::PROGRAM_ID;
+
+    fn account(game_type: GameType) -> GameAccount {
+        GameAccount {
+            creator: Address([1; 32]),
+            game_type,
+            ticket_amount: 25,
+            max_tickets: 4,
+            min_tickets: 2,
+            tickets_count: 2,
+            token_mint: Address([2; 32]),
+            created_at: 1_000,
+            timeout: 600,
+            last_slot: u64::MAX,
+            is_private: true,
+            total_amount: 50,
+            participants: vec![Address([3; 32]), Address([4; 32])],
+        }
+    }
+
+    #[test]
+    fn maps_and_serializes_games() {
+        let coinflip = map_game("game", &account(GameType::Coinflip));
+        assert_eq!(
+            coinflip,
+            TimbaGameAccount {
+                address: "game".into(),
+                creator: Address([1; 32]).to_base58(),
+                game_type: GameType::Coinflip,
+                token_mint: Address([2; 32]).to_base58(),
+                stake_amount: 25,
+                prize_amount: 50,
+                current_players: 2,
+                min_players: 2,
+                max_players: 4,
+                is_private: true,
+                created_at: 1_000,
+                expires_at: 1_600,
+                creation_signature: String::new(),
+                last_slot: u64::MAX,
+                participant_addresses: vec![Address([3; 32]).to_base58(), Address([4; 32]).to_base58()],
+            }
+        );
+        // Giveaways have no stake; the ticket amount is the prize.
+        let giveaway = map_game("game", &account(GameType::Giveaway));
+        assert_eq!((giveaway.stake_amount, giveaway.prize_amount), (0, 25));
+
+        let serialized = serialize_game(&coinflip);
+        let json = serde_json::to_value(&serialized).unwrap();
+        assert_eq!(json["type"], "coinflip");
+        assert_eq!(json["stakeAmount"], "25");
+        assert_eq!(json["prizeAmount"], "50");
+        assert_eq!(json["lastSlot"], u64::MAX.to_string(), "u64 values are strings");
+        assert_eq!(json["expiresAt"], 1_600);
+        assert_eq!(json["participantAddresses"].as_array().unwrap().len(), 2);
+        assert_eq!(serde_json::from_value::<SerializedTimbaGameAccount>(json).unwrap(), serialized);
+
+        let adapter = ContractAdapter::new(ContractVersion::V0_3_0, PROGRAM_ID);
+        let bytes = account(GameType::Coinflip).encode();
+        assert_eq!(adapter.decode_game("game", &bytes).unwrap(), coinflip);
+        assert_eq!(decode_game("game", &bytes).unwrap(), coinflip);
+        assert!(adapter.decode_game("game", &bytes[..10]).is_err());
+        assert!(adapter.has_participant(&coinflip, &Address([4; 32])));
+        assert!(!adapter.has_participant(&coinflip, &Address([1; 32])));
+    }
+
+    #[test]
+    fn token_helpers_validate_owners_and_amounts() {
+        let pda = crate::contracts::find_oracle_pda(&PROGRAM_ID);
+        assert_eq!(get_associated_token_address(&NATIVE_MINT, &pda, false), Err(PlanError::TokenOwnerOffCurve));
+        assert_eq!(PlanError::TokenOwnerOffCurve.to_string(), "TokenOwnerOffCurveError");
+        let ata = get_associated_token_address(&NATIVE_MINT, &pda, true).unwrap();
+        assert_eq!(ata, find_associated_token_address(&pda, &NATIVE_MINT, &TOKEN_PROGRAM_ID));
+
+        let owner = Address::parse("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM").unwrap();
+        assert_eq!(build_wrap_sol_instructions(&owner, 0).unwrap_err().to_string(), "SOL amount must be positive");
+        assert!(build_wrap_sol_instructions(&pda, 1).is_err(), "off-curve owners cannot wrap SOL");
+        let (account, instructions) = build_wrap_sol_instructions(&owner, 1).unwrap();
+        assert_eq!(account, find_associated_token_address(&owner, &NATIVE_MINT, &TOKEN_PROGRAM_ID));
+        assert!(!instructions.is_empty());
+        assert!(is_wrapped_sol(&NATIVE_MINT));
+        assert!(!is_wrapped_sol(&TOKEN_PROGRAM_ID));
+    }
+}

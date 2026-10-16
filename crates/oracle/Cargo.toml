@@ -40,3 +40,4 @@ num-bigint = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }

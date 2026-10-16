@@ -174,4 +174,186 @@ mod tests {
         assert!(normalize_game_type(Some(&long), false).is_err());
         assert_eq!(normalize_game_type(Some(&long), true).unwrap().unwrap().len(), 128);
     }
+
+    const KEYS: [&str; 19] = [
+        "SOLANA_NETWORK",
+        "SOLANA_WS_ENDPOINT",
+        "OPERATOR_KEYPAIR_PATH",
+        "ORACLE_KEYPAIR_PATH",
+        "ORACLE_PORT",
+        "CONTRACT_VERSION",
+        "DATABASE_FILE",
+        "INDEXER_DATABASE_FILE",
+        "INDEXER_POLL_INTERVAL_MS",
+        "ORACLE_SCAN_THROTTLE_MS",
+        "ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS",
+        "ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS",
+        "ORACLE_AUTOCOMPLETE_DEBOUNCE_MS",
+        "BOT_INTERNAL_URL",
+        "ORACLE_API_TOKEN_FILE",
+        "ORACLE_API_TOKEN",
+        "JUPITER_API_KEY_FILE",
+        "JUPITER_API_KEY",
+        "JUPITER_PRICE_URL",
+    ];
+
+    /// Runs `body` with exactly `vars` set among the configuration keys,
+    /// restoring the previous environment afterwards.
+    fn with_env<R>(vars: &[(&str, &str)], body: impl FnOnce() -> R) -> R {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<(&str, Option<String>)> = KEYS.iter().map(|k| (*k, std::env::var(k).ok())).collect();
+        for key in KEYS {
+            std::env::remove_var(key);
+        }
+        for (key, value) in vars {
+            std::env::set_var(key, value);
+        }
+        let result = body();
+        for (key, value) in saved {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn loads_defaults_from_the_environment() {
+        let config =
+            with_env(&[("SOLANA_NETWORK", "https://a.example, https://b.example")], OracleConfig::from_env).unwrap();
+        assert_eq!(config.contract_version, ContractVersion::V0_2_0);
+        assert_eq!(config.solana_networks.len(), 2);
+        assert_eq!(config.solana_network, config.solana_networks[0]);
+        assert!(config.solana_network.starts_with("https://a.example"));
+        assert_eq!(config.solana_ws_endpoint, None);
+        assert_eq!(config.oracle_port, DEFAULT_ORACLE_PORT);
+        assert_eq!(config.database_file, DEFAULT_DATABASE_FILE);
+        assert_eq!(config.indexer_database_file, DEFAULT_INDEXER_DATABASE_FILE);
+        assert_eq!(config.indexer_poll_interval_ms, 300_000);
+        assert!(
+            config.operator_keypair_source == DEFAULT_KEYPAIR_FILE
+                || config.operator_keypair_source == LEGACY_KEYPAIR_FILE
+        );
+        assert!(Path::new(&config.operator_keypair_path).is_absolute());
+        assert_eq!(config.scan_throttle_ms, 0);
+        assert_eq!(config.player_event_flush_debounce_ms, 100);
+        assert_eq!(config.player_event_flush_max_operations, 500);
+        assert_eq!(config.auto_complete_debounce_ms, 500);
+        assert_eq!(config.bot_internal_url.as_deref(), Some("http://bot:3002"));
+        assert_eq!(config.api_token, None);
+        assert_eq!(config.jupiter_api_key, None);
+        assert_eq!(config.jupiter_price_url, "https://api.jup.ag/price/v3");
+        assert_eq!(config.environment, timba_common::env::environment_mode());
+    }
+
+    #[test]
+    fn loads_overrides_from_the_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let token_file = dir.path().join("token");
+        std::fs::write(&token_file, " file-token \n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&token_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let token_path = token_file.to_str().unwrap().to_string();
+        let config = with_env(
+            &[
+                ("SOLANA_NETWORK", "https://rpc.example"),
+                ("SOLANA_WS_ENDPOINT", "wss://ws.example"),
+                ("ORACLE_KEYPAIR_PATH", "/keys/operator.json"),
+                ("ORACLE_PORT", "4000"),
+                ("CONTRACT_VERSION", " 0.3.0 "),
+                ("DATABASE_FILE", "/data/o.sqlite"),
+                ("INDEXER_DATABASE_FILE", "/data/i.sqlite"),
+                ("INDEXER_POLL_INTERVAL_MS", "6000"),
+                ("ORACLE_SCAN_THROTTLE_MS", "25"),
+                ("ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS", "0"),
+                ("ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS", "10"),
+                ("ORACLE_AUTOCOMPLETE_DEBOUNCE_MS", "5"),
+                ("BOT_INTERNAL_URL", "http://bot.internal"),
+                ("ORACLE_API_TOKEN_FILE", &token_path),
+                ("ORACLE_API_TOKEN", "ignored-when-a-file-is-set"),
+                ("JUPITER_API_KEY", " jup-key "),
+                ("JUPITER_PRICE_URL", "https://prices.example"),
+            ],
+            OracleConfig::from_env,
+        )
+        .unwrap();
+        assert_eq!(config.contract_version, ContractVersion::V0_3_0);
+        assert_eq!(config.solana_ws_endpoint.as_deref(), Some("wss://ws.example"));
+        assert_eq!(config.operator_keypair_source, "/keys/operator.json");
+        assert_eq!(config.operator_keypair_path, "/keys/operator.json");
+        assert_eq!(config.oracle_port, 4000);
+        assert_eq!(config.database_file, "/data/o.sqlite");
+        assert_eq!(config.indexer_database_file, "/data/i.sqlite");
+        assert_eq!(config.indexer_poll_interval_ms, 6_000);
+        assert_eq!(config.scan_throttle_ms, 25);
+        assert_eq!(config.player_event_flush_debounce_ms, 0);
+        assert_eq!(config.player_event_flush_max_operations, 10);
+        assert_eq!(config.auto_complete_debounce_ms, 5);
+        assert_eq!(config.bot_internal_url.as_deref(), Some("http://bot.internal"));
+        assert_eq!(config.api_token.as_deref(), Some("file-token"));
+        assert_eq!(config.jupiter_api_key.as_deref(), Some("jup-key"));
+        assert_eq!(config.jupiter_price_url, "https://prices.example");
+
+        // OPERATOR_KEYPAIR_PATH wins over the legacy variable.
+        let config = with_env(
+            &[
+                ("SOLANA_NETWORK", "https://rpc.example"),
+                ("OPERATOR_KEYPAIR_PATH", "/keys/new.json"),
+                ("ORACLE_KEYPAIR_PATH", "/keys/old.json"),
+                ("ORACLE_API_TOKEN", "env-token"),
+            ],
+            OracleConfig::from_env,
+        )
+        .unwrap();
+        assert_eq!(config.operator_keypair_source, "/keys/new.json");
+        assert_eq!(config.api_token.as_deref(), Some("env-token"));
+    }
+
+    #[test]
+    fn invalid_values_fall_back_or_fail() {
+        let config = with_env(
+            &[
+                ("SOLANA_NETWORK", "https://rpc.example"),
+                ("ORACLE_PORT", "70000"),
+                ("INDEXER_POLL_INTERVAL_MS", "100"),
+                ("ORACLE_SCAN_THROTTLE_MS", "-5"),
+                ("ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS", "0"),
+                ("ORACLE_AUTOCOMPLETE_DEBOUNCE_MS", "soon"),
+            ],
+            OracleConfig::from_env,
+        )
+        .unwrap();
+        assert_eq!(config.oracle_port, DEFAULT_ORACLE_PORT);
+        assert_eq!(config.indexer_poll_interval_ms, 300_000);
+        assert_eq!(config.scan_throttle_ms, 0);
+        assert_eq!(config.player_event_flush_max_operations, 500);
+        assert_eq!(config.auto_complete_debounce_ms, 500);
+
+        assert_eq!(with_env(&[], OracleConfig::from_env).unwrap_err(), "SOLANA_NETWORK is required");
+        let err = with_env(&[("SOLANA_NETWORK", "https://rpc.example"), ("CONTRACT_VERSION", "9.9.9")], || {
+            OracleConfig::from_env()
+        })
+        .unwrap_err();
+        assert_eq!(err, "CONTRACT_VERSION must be one of 0.2.0, 0.3.0; received 9.9.9");
+        let err = with_env(
+            &[("SOLANA_NETWORK", "https://rpc.example"), ("JUPITER_API_KEY_FILE", "/definitely/missing/key")],
+            OracleConfig::from_env,
+        )
+        .unwrap_err();
+        assert!(err.contains("Jupiter API key file could not be read"), "{err}");
+    }
+
+    #[test]
+    fn global_config_is_loaded_once() {
+        let first = with_env(&[("SOLANA_NETWORK", "https://rpc.example")], || {
+            OracleConfig::global().map(|c| c as *const OracleConfig)
+        });
+        let second = OracleConfig::global().map(|c| c as *const OracleConfig);
+        assert_eq!(first, second);
+    }
 }
