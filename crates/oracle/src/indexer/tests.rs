@@ -1123,7 +1123,6 @@ fn reads_fail_cleanly_when_their_tables_are_gone() {
     };
     for (index, (table, read)) in reads.into_iter().enumerate() {
         // A separate database proves the read works, so the failure below is the missing table.
-        // (Statements cached by a successful read would fail at execution instead of at prepare.)
         let (_dir, path, healthy) = file_fixture_with(options());
         seed(&path, &healthy);
         assert!(!read(&healthy.db, &healthy), "read {index} failed on a healthy database");
@@ -1131,6 +1130,8 @@ fn reads_fail_cleanly_when_their_tables_are_gone() {
         let (_dir, path, f) = file_fixture_with(options());
         seed(&path, &f);
         sabotage(&path, &format!("DROP TABLE {table}"));
+        // Any statement makes the connection notice the new schema, so the read fails to prepare.
+        f.db.get_verified_game("refresh").unwrap();
         assert!(read(&f.db, &f), "read {index} did not fail without {table}");
     }
 }
