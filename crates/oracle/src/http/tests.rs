@@ -427,6 +427,41 @@ async fn delegates_to_the_indexer_router() {
     assert_eq!(call(&locked, "GET", "/stats", None, true).await.0, StatusCode::UNAUTHORIZED);
 }
 
+#[tokio::test]
+async fn missing_sub_routers_and_tokens_fall_through() {
+    // No indexer router configured: the path is just unknown.
+    let app = app(Arc::default(), false);
+    let (status, body, _) = call(&app, "GET", "/indexer/games", None, true).await;
+    assert_eq!((status, body["error"].clone()), (StatusCode::NOT_FOUND, json!("Endpoint not found")));
+
+    // Without a configured token nothing is protected or rate limited.
+    let open = router(Arc::new(FakeOracle::default()), RouterOptions::new(None));
+    for _ in 0..12 {
+        assert_eq!(call(&open, "GET", "/stats", None, false).await.0, StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn game_type_is_optional_and_malformed_bodies_are_rejected() {
+    let oracle = Arc::new(FakeOracle::default());
+    let app = app(oracle.clone(), false);
+    assert_eq!(call(&app, "POST", "/generate-hash", Some("{}"), true).await.0, StatusCode::OK);
+    assert_eq!(oracle.game_types.lock().unwrap().clone(), vec![None]);
+    let (status, body, _) = call(&app, "POST", "/sign-game-transaction", Some("{"), true).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"].is_string(), "{body}");
+}
+
+#[test]
+fn routes_keep_their_documentation() {
+    let route = route("/x", HttpMethod::Post, Handler::Stats, "Does x", Some("{}"));
+    assert_eq!(route.handler, Handler::Stats);
+    assert_eq!(
+        (route.doc.path, route.doc.method, route.doc.summary, route.doc.request_example),
+        ("/x", HttpMethod::Post, "Does x", Some("{}"))
+    );
+}
+
 #[test]
 fn summarizes_parseable_transactions() {
     use crate::solana::Keypair;

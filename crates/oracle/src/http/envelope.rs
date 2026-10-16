@@ -77,4 +77,14 @@ mod tests {
         let service: Vec<_> = payload["service"].as_object().unwrap().keys().cloned().collect();
         assert_eq!(service, ["name", "version", "environment", "uptime"]);
     }
+
+    #[test]
+    fn non_object_fields_are_dropped() {
+        for fields in [Value::Null, json!([1, 2]), json!("text")] {
+            let keys: Vec<_> = service_payload(fields.clone()).as_object().unwrap().keys().cloned().collect();
+            assert_eq!(keys, ["timestamp", "service"], "{fields}");
+            let keys: Vec<_> = contract_payload(fields).as_object().unwrap().keys().cloned().collect();
+            assert_eq!(keys, ["timestamp", "service"]);
+        }
+    }
 }
