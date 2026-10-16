@@ -69,7 +69,8 @@ fn js_number(text: &str) -> Option<f64> {
 }
 
 pub fn http_price_fetcher() -> PriceFetcher {
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(10)).build().expect("reqwest client");
+    let client =
+        timba_common::http_client::client_builder().timeout(Duration::from_secs(10)).build().expect("reqwest client");
     Arc::new(move |url: String, api_key: String| {
         let client = client.clone();
         async move {

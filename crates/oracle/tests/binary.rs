@@ -225,7 +225,7 @@ async fn serves_the_api_until_sigterm() {
     let server = oracle.spawn();
     server.wait_for_output("Oracle services initialized").await;
 
-    let http = reqwest::Client::new();
+    let http = timba_common::http_client::client_builder().build().unwrap();
     let health = http.get(server.url("/health")).send().await.unwrap();
     assert_eq!(health.status(), 200);
     let anonymous = http.get(server.url("/stats")).send().await.unwrap();

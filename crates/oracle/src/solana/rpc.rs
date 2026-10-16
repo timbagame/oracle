@@ -153,7 +153,7 @@ pub struct HttpTransport {
 
 impl HttpTransport {
     pub fn new(rebate_address: Option<String>) -> Self {
-        let client = reqwest::Client::builder()
+        let client = timba_common::http_client::client_builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
             .build()

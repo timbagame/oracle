@@ -341,7 +341,10 @@ impl OracleService {
                 scanner,
                 registry_sync,
                 prices: price_resolver,
-                http: reqwest::Client::builder().timeout(Duration::from_secs(10)).build().unwrap_or_default(),
+                http: timba_common::http_client::client_builder()
+                    .timeout(Duration::from_secs(10))
+                    .build()
+                    .unwrap_or_default(),
                 readiness_cache,
                 retries: Mutex::new(HashMap::new()),
                 next_timer: AtomicU64::new(1),

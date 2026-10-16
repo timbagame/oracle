@@ -100,7 +100,7 @@ fn operator_key() -> String {
 async fn start(
     rpc_urls: Vec<String>,
 ) -> (Deployment, Shutdown, tokio::task::JoinHandle<anyhow::Result<()>>, reqwest::Response) {
-    let client = reqwest::Client::new();
+    let client = timba_common::http_client::client_builder().build().unwrap();
     for _ in 0..5 {
         let deployment = deployment(rpc_urls.clone(), &operator_key());
         let shutdown = Shutdown::new();
@@ -126,7 +126,7 @@ async fn serves_the_api_and_ticks_until_shutdown() {
     // The first endpoint refuses connections; the fallback moves on to the second.
     let (deployment, shutdown, running, unauthorized) = start(vec!["http://127.0.0.1:1".into(), url]).await;
 
-    let client = reqwest::Client::new();
+    let client = timba_common::http_client::client_builder().build().unwrap();
     let base = format!("http://127.0.0.1:{}", deployment.port);
     assert_eq!(unauthorized.status(), 401);
     // Oversized bodies are refused before the bearer check, as Bun's maxRequestBodySize does.
@@ -210,7 +210,7 @@ fn binary(config_file: Option<&str>) -> std::process::Command {
 async fn the_binary_reports_failed_cycles_and_stops_cleanly_on_sigterm() {
     let chain = FakeChain::new();
     let url = rpc_endpoint(chain.clone()).await;
-    let client = reqwest::Client::new();
+    let client = timba_common::http_client::client_builder().build().unwrap();
     for _ in 0..5 {
         let deployment = deployment(vec![url.clone()], &operator_key());
         let mut child = binary(Some(&deployment.config_file)).spawn().unwrap();

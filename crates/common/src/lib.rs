@@ -3,6 +3,7 @@
 pub mod blocking;
 pub mod env;
 pub mod http;
+pub mod http_client;
 pub mod log;
 pub mod secrets;
 pub mod security;
