@@ -175,8 +175,7 @@ impl ProgramClient {
             // A panicking listener must not leave the program without a subscription:
             // always fall through to the reconnect logic.
             match AssertUnwindSafe(client.consume_notifications(subscription)).catch_unwind().await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => warn!("Timba program log subscription failed: {error}"),
+                Ok(error) => warn!("Timba program log subscription failed: {error}"),
                 Err(_) => warn!("Timba program log subscription stopped after a listener panicked"),
             }
             client.on_subscription_ended(generation).await;
@@ -229,9 +228,13 @@ impl ProgramClient {
         }
     }
 
-    async fn consume_notifications(&self, mut subscription: LogsSubscription) -> Result<(), String> {
-        while let Some(notification) = subscription.next().await {
-            let notification = notification?;
+    /// Dispatches events until the subscription ends, returning why it did.
+    async fn consume_notifications(&self, mut subscription: LogsSubscription) -> String {
+        loop {
+            let notification = match subscription.next().await {
+                Ok(notification) => notification,
+                Err(error) => return error,
+            };
             if notification.err.is_some() || notification.slot > (1 << 53) - 1 {
                 continue;
             }
@@ -260,7 +263,6 @@ impl ProgramClient {
                 self.dispatch(dispatch).await;
             }
         }
-        Ok(())
     }
 
     /// Invokes every listener registered for the event concurrently.
@@ -358,14 +360,16 @@ mod tests {
     /// notifications the client must skip (failed, out of range, malformed), a
     /// second join and then hangs up; later connections deliver one join and
     /// stay open.
-    async fn scripted_server() -> (String, Arc<AtomicU64>) {
+    async fn scripted_server() -> (String, Arc<AtomicU64>, tokio::sync::mpsc::UnboundedReceiver<u64>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let connections = Arc::new(AtomicU64::new(0));
         let counter = connections.clone();
+        let (hung_up, hung_up_rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let connection = counter.fetch_add(1, Ordering::SeqCst);
+                let hung_up = hung_up.clone();
                 tokio::spawn(async move {
                     let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else { return };
                     let Some(Ok(request)) = ws.next().await else { return };
@@ -391,15 +395,16 @@ mod tests {
                         ws.send(notification(20 + connection, Value::Null, joined_logs(4))).await.unwrap();
                     }
                     while let Some(Ok(_)) = ws.next().await {}
+                    let _ = hung_up.send(connection);
                 });
             }
         });
-        (format!("ws://{addr}"), connections)
+        (format!("ws://{addr}"), connections, hung_up_rx)
     }
 
     #[tokio::test]
     async fn dispatches_notifications_and_reconnects() {
-        let (url, connections) = scripted_server().await;
+        let (url, connections, mut hung_up) = scripted_server().await;
         let rpc = Arc::new(RpcPool::new(&["http://127.0.0.1:1".into()]).unwrap());
         let client = ProgramClient::new(rpc, ContractVersion::V0_3_0, Some(url));
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -438,11 +443,13 @@ mod tests {
         assert_eq!(client.listener_count(), 0);
         assert!(client.state.lock().await.task.is_none());
         client.close().await;
+        // Stopping the subscription closes the socket the server was serving.
+        assert_eq!(tokio::time::timeout(Duration::from_secs(10), hung_up.recv()).await.unwrap(), Some(1));
     }
 
     #[tokio::test]
     async fn reconnects_after_a_listener_panics() {
-        let (url, connections) = scripted_server().await;
+        let (url, connections, _hung_up) = scripted_server().await;
         let rpc = Arc::new(RpcPool::new(&["http://127.0.0.1:1".into()]).unwrap());
         let client = ProgramClient::new(rpc, ContractVersion::V0_3_0, Some(url));
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -463,6 +470,122 @@ mod tests {
         assert_eq!(membership.slot, 21, "delivered over the restored subscription");
         assert_eq!(connections.load(Ordering::SeqCst), 2);
         client.close().await;
+    }
+
+    fn client_for(ws_endpoint: &str) -> Arc<ProgramClient> {
+        let rpc = Arc::new(RpcPool::new(&["http://127.0.0.1:1".into()]).unwrap());
+        ProgramClient::new(rpc, ContractVersion::V0_3_0, Some(ws_endpoint.into()))
+    }
+
+    fn add_unrouted_listener(client: &ProgramClient, id: u64) {
+        client.listeners.lock().unwrap().insert(id, (EventName::GameCompleted, Arc::new(|_| async {}.boxed())));
+    }
+
+    #[tokio::test]
+    async fn failed_subscription_cancels_a_pending_reconnect() {
+        let client = client_for("ws://127.0.0.1:1");
+        let timer = tokio::spawn(std::future::pending::<()>());
+        let abort = timer.abort_handle();
+        client.state.lock().await.reconnect = Some(timer);
+        let result = client.add_event_listener(EventName::GameCompleted, Arc::new(|_| async {}.boxed())).await;
+        assert!(result.unwrap_err().to_string().starts_with("WebSocket connection failed:"));
+        assert!(client.state.lock().await.reconnect.is_none(), "nothing is left to reconnect");
+        tokio::task::yield_now().await;
+        assert!(abort.is_finished(), "the stale timer was cancelled");
+    }
+
+    #[tokio::test]
+    async fn failed_subscription_keeps_the_reconnect_for_other_listeners() {
+        let client = client_for("ws://127.0.0.1:1");
+        add_unrouted_listener(&client, 1000);
+        client.state.lock().await.reconnect = Some(tokio::spawn(std::future::pending::<()>()));
+        assert!(client.add_event_listener(EventName::GameCompleted, Arc::new(|_| async {}.boxed())).await.is_err());
+        assert_eq!(client.listener_count(), 1, "only the failed registration is undone");
+        assert!(client.state.lock().await.reconnect.as_ref().is_some_and(|timer| !timer.is_finished()));
+        client.close().await;
+    }
+
+    #[tokio::test]
+    async fn stale_subscription_endings_are_ignored() {
+        let client = client_for("ws://127.0.0.1:1");
+        add_unrouted_listener(&client, 1);
+        client.state.lock().await.task = Some(tokio::spawn(std::future::pending::<()>()));
+        client.state.lock().await.generation = 3;
+        client.on_subscription_ended(2).await;
+        {
+            let state = client.state.lock().await;
+            assert!(state.task.is_some(), "a newer subscription is not torn down by an older one");
+            assert!(state.reconnect.is_none());
+        }
+        client.close().await;
+    }
+
+    #[tokio::test]
+    async fn reconnects_are_only_scheduled_when_needed() {
+        let client = client_for("ws://127.0.0.1:1");
+        // Nobody is listening: no timer.
+        {
+            let mut state = client.state.lock().await;
+            client.schedule_reconnect(&mut state);
+            assert!(state.reconnect.is_none());
+        }
+        // A timer that is still running is kept rather than replaced.
+        add_unrouted_listener(&client, 1);
+        let mut state = client.state.lock().await;
+        state.reconnect = Some(tokio::spawn(std::future::pending::<()>()));
+        let before = state.reconnect.as_ref().unwrap().id();
+        client.schedule_reconnect(&mut state);
+        assert_eq!(state.reconnect.as_ref().unwrap().id(), before);
+        state.reconnect.take().unwrap().abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_gives_up_when_every_listener_left() {
+        let (url, connections, _hung_up) = scripted_server().await;
+        let client = client_for(&url);
+        add_unrouted_listener(&client, 1);
+        let timer = {
+            let mut state = client.state.lock().await;
+            client.schedule_reconnect(&mut state);
+            state.reconnect.take().unwrap()
+        };
+        client.listeners.lock().unwrap().clear();
+        timer.await.unwrap();
+        assert_eq!(connections.load(Ordering::SeqCst), 0);
+        assert!(client.state.lock().await.task.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_reconnects_are_retried() {
+        let client = client_for("ws://127.0.0.1:1");
+        add_unrouted_listener(&client, 1);
+        let timer = {
+            let mut state = client.state.lock().await;
+            client.schedule_reconnect(&mut state);
+            state.reconnect.take().unwrap()
+        };
+        timer.await.unwrap();
+        {
+            let state = client.state.lock().await;
+            assert!(state.task.is_none());
+            assert!(state.reconnect.as_ref().is_some_and(|timer| !timer.is_finished()), "the next attempt is queued");
+        }
+        client.close().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stopped_clients_do_not_retry_failed_reconnects() {
+        let client = client_for("ws://127.0.0.1:1");
+        add_unrouted_listener(&client, 1);
+        let timer = {
+            let mut state = client.state.lock().await;
+            client.schedule_reconnect(&mut state);
+            state.reconnect.take().unwrap()
+        };
+        // The client is stopped while the attempt is in flight.
+        client.state.lock().await.generation += 1;
+        timer.await.unwrap();
+        assert!(client.state.lock().await.reconnect.is_none());
     }
 
     #[tokio::test]

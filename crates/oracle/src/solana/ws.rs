@@ -2,12 +2,12 @@
 
 use std::time::Duration;
 
-use futures::{SinkExt, StreamExt};
+use futures::{Sink, SinkExt, Stream, StreamExt};
 use serde_json::{json, Value};
 use timba_protocol::Address;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
 const PING_INTERVAL: Duration = Duration::from_secs(5);
 const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -43,9 +43,12 @@ impl Drop for LogsSubscription {
 }
 
 impl LogsSubscription {
-    /// Next notification; `None` or `Some(Err)` means the stream ended.
-    pub async fn next(&mut self) -> Option<Result<LogsNotification, String>> {
-        self.receiver.recv().await
+    /// Next notification; an error means the stream ended.
+    pub async fn next(&mut self) -> Result<LogsNotification, String> {
+        match self.receiver.recv().await {
+            Some(notification) => notification,
+            None => Err("WebSocket subscription closed".into()),
+        }
     }
 }
 
@@ -102,61 +105,72 @@ async fn subscribe_logs_with(
 ) -> Result<LogsSubscription, String> {
     // Bound the connect and TLS handshake too: a stalled endpoint must not hang the
     // caller (and the subscription lock it holds) forever.
-    let mut socket = tokio::time::timeout(SUBSCRIBE_TIMEOUT, open_subscription(ws_url, mentions))
+    let socket = tokio::time::timeout(SUBSCRIBE_TIMEOUT, open_subscription(ws_url, mentions))
         .await
         .map_err(|_| "Timed out waiting for logsSubscribe acknowledgement".to_string())??;
     let (sender, receiver) = mpsc::channel(256);
-    let task = tokio::spawn(async move {
-        let mut ping = tokio::time::interval(ping_interval);
-        ping.tick().await;
-        // Any frame (pongs included) proves the socket is alive; a half-open TCP
-        // connection otherwise goes unnoticed until the OS gives up retransmitting.
-        let mut last_seen = tokio::time::Instant::now();
-        loop {
-            tokio::select! {
-                _ = ping.tick() => {
-                    if last_seen.elapsed() > pong_timeout {
-                        let _ = sender.send(Err("WebSocket stopped answering pings".into())).await;
+    let task = tokio::spawn(pump(socket, sender, ping_interval, pong_timeout));
+    Ok(LogsSubscription { receiver, task })
+}
+
+/// Forwards notifications from `socket` to `sender` until the socket fails,
+/// closes or stops answering pings, reporting why through `sender`.
+async fn pump<S>(
+    mut socket: S,
+    sender: mpsc::Sender<Result<LogsNotification, String>>,
+    ping_interval: Duration,
+    pong_timeout: Duration,
+) where
+    S: Stream<Item = Result<Message, WsError>> + Sink<Message, Error = WsError> + Unpin,
+{
+    let mut ping = tokio::time::interval(ping_interval);
+    ping.tick().await;
+    // Any frame (pongs included) proves the socket is alive; a half-open TCP
+    // connection otherwise goes unnoticed until the OS gives up retransmitting.
+    let mut last_seen = tokio::time::Instant::now();
+    loop {
+        tokio::select! {
+            _ = ping.tick() => {
+                if last_seen.elapsed() > pong_timeout {
+                    let _ = sender.send(Err("WebSocket stopped answering pings".into())).await;
+                    return;
+                }
+                if let Err(e) = socket.send(Message::Ping(Vec::new().into())).await {
+                    let _ = sender.send(Err(e.to_string())).await;
+                    return;
+                }
+            }
+            message = socket.next() => {
+                last_seen = tokio::time::Instant::now();
+                match message {
+                    None => {
+                        let _ = sender.send(Err("WebSocket closed".into())).await;
                         return;
                     }
-                    if let Err(e) = socket.send(Message::Ping(Vec::new().into())).await {
+                    Some(Err(e)) => {
                         let _ = sender.send(Err(e.to_string())).await;
                         return;
                     }
-                }
-                message = socket.next() => {
-                    last_seen = tokio::time::Instant::now();
-                    match message {
-                        None => {
-                            let _ = sender.send(Err("WebSocket closed".into())).await;
-                            return;
+                    Some(Ok(Message::Text(text))) => {
+                        let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
+                        if value["method"] != "logsNotification" {
+                            continue;
                         }
-                        Some(Err(e)) => {
-                            let _ = sender.send(Err(e.to_string())).await;
-                            return;
-                        }
-                        Some(Ok(Message::Text(text))) => {
-                            let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
-                            if value["method"] != "logsNotification" {
-                                continue;
-                            }
-                            if let Some(notification) = parse_notification(&value) {
-                                if sender.send(Ok(notification)).await.is_err() {
-                                    return;
-                                }
+                        if let Some(notification) = parse_notification(&value) {
+                            if sender.send(Ok(notification)).await.is_err() {
+                                return;
                             }
                         }
-                        Some(Ok(Message::Close(_))) => {
-                            let _ = sender.send(Err("WebSocket closed".into())).await;
-                            return;
-                        }
-                        Some(Ok(_)) => {}
                     }
+                    Some(Ok(Message::Close(_))) => {
+                        let _ = sender.send(Err("WebSocket closed".into())).await;
+                        return;
+                    }
+                    Some(Ok(_)) => {}
                 }
             }
         }
-    });
-    Ok(LogsSubscription { receiver, task })
+    }
 }
 
 #[cfg(test)]
@@ -203,9 +217,9 @@ mod tests {
             ws.close(None).await.unwrap();
         });
         let mut sub = subscribe_logs(&format!("ws://{addr}"), &Address([1; 32])).await.unwrap();
-        let first = sub.next().await.unwrap().unwrap();
+        let first = sub.next().await.unwrap();
         assert_eq!(first.slot, 7);
-        assert!(sub.next().await.unwrap().is_err());
+        assert!(sub.next().await.is_err());
     }
 
     /// Serves one websocket client with `script`, returning the URL to connect to.
@@ -239,6 +253,8 @@ mod tests {
             ws.next().await;
             ws.send(Message::Text("not json".into())).await.unwrap();
             ws.send(Message::Binary(vec![1].into())).await.unwrap();
+            // Traffic for other requests is not the acknowledgement.
+            ws.send(Message::Text(json!({"jsonrpc": "2.0", "id": 2, "result": 0}).to_string().into())).await.unwrap();
             ws.close(None).await.unwrap();
         })
         .await;
@@ -254,12 +270,17 @@ mod tests {
         // Accept the TCP connection but never answer the websocket upgrade.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let (hung_up, hung_up_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            let (_stream, _) = listener.accept().await.unwrap();
-            std::future::pending::<()>().await;
+            let (mut stream, _) = listener.accept().await.unwrap();
+            // Read the upgrade request, then wait for the client to give up.
+            let mut buffer = [0u8; 1024];
+            while tokio::io::AsyncReadExt::read(&mut stream, &mut buffer).await.is_ok_and(|read| read > 0) {}
+            let _ = hung_up.send(());
         });
         let err = subscribe_logs(&format!("ws://{addr}"), &Address([1; 32])).await.err().unwrap();
         assert_eq!(err, "Timed out waiting for logsSubscribe acknowledgement");
+        hung_up_rx.await.unwrap();
     }
 
     #[tokio::test]
@@ -278,7 +299,7 @@ mod tests {
             subscribe_logs_with(&url, &Address([1; 32]), Duration::from_millis(20), Duration::from_millis(100))
                 .await
                 .unwrap();
-        assert_eq!(sub.next().await.unwrap().unwrap_err(), "WebSocket stopped answering pings");
+        assert_eq!(sub.next().await.unwrap_err(), "WebSocket stopped answering pings");
     }
 
     #[tokio::test]
@@ -300,9 +321,105 @@ mod tests {
         })
         .await;
         let mut sub = subscribe_logs(&url, &Address([1; 32])).await.unwrap();
-        let note = sub.next().await.unwrap().unwrap();
+        let note = sub.next().await.unwrap();
         assert_eq!((note.slot, note.signature.as_str(), note.logs.len()), (8, "t", 0));
         assert!(note.err.is_some());
-        assert!(sub.next().await.unwrap().is_err(), "a dropped connection ends the stream");
+        assert!(sub.next().await.is_err(), "a dropped connection ends the stream");
+    }
+
+    /// A socket replaying `frames`, then either ending or staying silent.
+    struct ScriptedSocket {
+        frames: std::vec::IntoIter<Result<Message, WsError>>,
+        silent_afterwards: bool,
+        fail_sends: bool,
+    }
+
+    impl Stream for ScriptedSocket {
+        type Item = Result<Message, WsError>;
+
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            match self.frames.next() {
+                Some(frame) => std::task::Poll::Ready(Some(frame)),
+                None if self.silent_afterwards => std::task::Poll::Pending,
+                None => std::task::Poll::Ready(None),
+            }
+        }
+    }
+
+    impl Sink<Message> for ScriptedSocket {
+        type Error = WsError;
+
+        fn poll_ready(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), WsError>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn start_send(self: std::pin::Pin<&mut Self>, _: Message) -> Result<(), WsError> {
+            if self.fail_sends {
+                Err(WsError::ConnectionClosed)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), WsError>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), WsError>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    fn scripted(frames: Vec<Result<Message, WsError>>, silent_afterwards: bool, fail_sends: bool) -> ScriptedSocket {
+        ScriptedSocket { frames: frames.into_iter(), silent_afterwards, fail_sends }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ends_the_stream_when_a_ping_cannot_be_sent() {
+        let (sender, mut receiver) = mpsc::channel(4);
+        let socket = scripted(Vec::new(), true, true);
+        tokio::spawn(pump(socket, sender, Duration::from_secs(5), Duration::from_secs(3600)));
+        assert_eq!(receiver.recv().await.unwrap().unwrap_err(), WsError::ConnectionClosed.to_string());
+        assert!(receiver.recv().await.is_none(), "the pump stops after reporting");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ends_the_stream_when_the_socket_is_exhausted() {
+        let (sender, mut receiver) = mpsc::channel(4);
+        let socket = scripted(Vec::new(), false, false);
+        tokio::spawn(pump(socket, sender, Duration::from_secs(5), Duration::from_secs(15)));
+        assert_eq!(receiver.recv().await.unwrap().unwrap_err(), "WebSocket closed");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stops_pumping_when_the_subscriber_is_gone() {
+        let note = json!({"method": "logsNotification", "params": {"result": {
+            "context": {"slot": 1}, "value": {"signature": "s"}
+        }}});
+        let (sender, receiver) = mpsc::channel(4);
+        drop(receiver);
+        let socket = scripted(vec![Ok(Message::Text(note.to_string().into()))], true, false);
+        // Returns instead of waiting for more frames.
+        pump(socket, sender, Duration::from_secs(5), Duration::from_secs(15)).await;
+    }
+
+    #[tokio::test]
+    async fn closed_subscriptions_report_an_error() {
+        let (sender, receiver) = mpsc::channel(1);
+        drop(sender);
+        let mut subscription = LogsSubscription { receiver, task: tokio::spawn(async {}) };
+        assert_eq!(subscription.next().await.unwrap_err(), "WebSocket subscription closed");
     }
 }
