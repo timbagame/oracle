@@ -5,6 +5,7 @@ pub mod confirm;
 pub mod keypair;
 pub mod pool;
 pub mod rpc;
+pub mod tx;
 pub mod ws;
 
 pub use keypair::Keypair;
