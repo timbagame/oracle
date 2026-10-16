@@ -70,3 +70,34 @@ fn plans_match_typescript() {
         assert_eq!(tx(&creator, &close.instructions), expected["close"], "close {version}");
     }
 }
+
+#[test]
+fn completion_instruction_matches_typescript() {
+    use timba_protocol::contracts::{complete_game_instruction, find_game_pda, CompleteGameInput};
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/complete.json")).unwrap();
+    let operator = addr(fixture["operator"].as_str().unwrap());
+    let cases = fixture["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 4);
+    for case in cases {
+        let version = match case["version"].as_str().unwrap() {
+            "0.2.0" => ContractVersion::V0_2_0,
+            _ => ContractVersion::V0_3_0,
+        };
+        let random_hash = [case["randomHash"].as_u64().unwrap() as u8; 32];
+        let instruction = complete_game_instruction(
+            version,
+            &CompleteGameInput {
+                game: find_game_pda(&random_hash, &PROGRAM_ID),
+                token_mint: addr(case["mint"].as_str().unwrap()),
+                oracle_operator: operator,
+                winner: addr(case["winner"].as_str().unwrap()),
+                creator: addr(case["creator"].as_str().unwrap()),
+                random_hash,
+                secret_key: [case["secretKey"].as_u64().unwrap() as u8; 32],
+                winner_index: case["winnerIndex"].as_u64().unwrap() as u32,
+            },
+            &PROGRAM_ID,
+        );
+        assert_eq!(tx(&operator, &[instruction]), case["tx"], "{case}");
+    }
+}
