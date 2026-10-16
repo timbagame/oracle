@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use futures::future::{BoxFuture, FutureExt};
-use rand::RngCore;
+use rand::Rng;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use timba_common::{error, info, warn};
@@ -542,7 +542,7 @@ impl OracleService {
 
     pub fn generate_game_secrets(&self, game_type: Option<&str>) -> anyhow::Result<GameSecrets> {
         let mut secret = [0u8; SECRET_KEY_LENGTH];
-        rand::thread_rng().fill_bytes(&mut secret);
+        rand::rng().fill_bytes(&mut secret);
         let random_hash: [u8; 32] = Sha256::digest(secret).into();
         let game_address = self.completion.get_game_pda(&random_hash)?.to_base58();
         self.db.save_secret_key(&game_address, &hex::encode(secret), &hex::encode(random_hash))?;
