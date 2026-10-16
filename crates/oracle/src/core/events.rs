@@ -854,8 +854,7 @@ mod tests {
     impl EventHooks for RecordingHooks {
         fn try_auto_complete(&self, _key: Option<Address>, game: String, trigger: String) -> BoxFuture<'static, ()> {
             self.auto_completes.lock().unwrap().push((game, trigger));
-            if self.panic_auto_completes.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok()
-            {
+            if self.panic_auto_completes.try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok() {
                 return async { panic!("simulated auto-complete bug") }.boxed();
             }
             let hold = self.hold_auto_completes.load(Ordering::SeqCst).then(|| self.auto_release.clone());
@@ -868,10 +867,10 @@ mod tests {
         }
         fn sync_player_registry(&self, request: RegistrySyncRequest) -> BoxFuture<'static, bool> {
             self.syncs.lock().unwrap().push(request);
-            if self.panic_syncs.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok() {
+            if self.panic_syncs.try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok() {
                 return async { panic!("simulated registry sync bug") }.boxed();
             }
-            let fail = self.fail_syncs.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok();
+            let fail = self.fail_syncs.try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok();
             let hold = self.hold_syncs.load(Ordering::SeqCst).then(|| self.release.clone());
             async move {
                 if let Some(release) = hold {
