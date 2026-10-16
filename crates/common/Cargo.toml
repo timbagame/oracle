@@ -1,0 +1,15 @@
+[package]
+name = "timba-common"
+description = "Shared runtime helpers for the Timba oracle services"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+chrono.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
