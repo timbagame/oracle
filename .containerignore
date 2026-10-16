@@ -1,24 +1,22 @@
-# Dependencies
-node_modules
-bun.lockb
-
 # Build outputs
-build
-dist
+target
 
 # Version control and tooling
 .git
 .gitignore
+.github
+.claude
 .vscode
 
-# Tests and local data
+# Local data
 coverage
-tests
-*.sqlite
+*.sqlite*
 
-# Environment files
+# Environment files and keys
 .env
 .env.*
+admin-keypair.json
+secrets/
 
 # Misc
 .DS_Store

@@ -42,3 +42,6 @@ secrets/
 
 /coverage/
 target/
+
+# local agent state
+.claude/

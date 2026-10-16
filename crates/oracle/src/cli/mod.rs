@@ -205,3 +205,20 @@ pub async fn manual_shutdown() -> anyhow::Result<()> {
     oracle.close().await;
     Ok(())
 }
+
+/// Container health probe: exits non-zero unless `GET /health` on the local
+/// API port succeeds. Replaces the `bun -e fetch(...)` quadlet HealthCmd.
+pub async fn healthcheck() -> anyhow::Result<()> {
+    let port = std::env::var("ORACLE_PORT")
+        .ok()
+        .and_then(|value| value.trim().parse::<u16>().ok())
+        .unwrap_or(crate::config::DEFAULT_ORACLE_PORT);
+    let response = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(4))
+        .build()?
+        .get(format!("http://127.0.0.1:{port}/health"))
+        .send()
+        .await?;
+    anyhow::ensure!(response.status().is_success(), "Health check failed with status {}", response.status());
+    Ok(())
+}

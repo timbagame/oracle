@@ -15,6 +15,11 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
+  RUST_TOOLCHAIN: "1.97.0"
+  CARGO_LLVM_COV_VERSION: "0.9.1"
+  CARGO_AUDIT_VERSION: "0.22.2"
+  MIN_LINE_COVERAGE: "80"
+  CARGO_TERM_COLOR: always
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -53,36 +58,41 @@ jobs:
     if: ${{ !cancelled() && needs.reviewed.outputs.tested != 'true' }}
     name: Validate
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.3
-      - name: Restore Bun cache
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt,clippy,llvm-tools-preview
+          rustup default "$RUST_TOOLCHAIN"
+      - name: Restore Cargo cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.bun/install/cache
-          key: bun-install-${{ runner.os }}-${{ hashFiles('bun.lock', 'package.json') }}
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            bun-install-${{ runner.os }}-
-      - name: Install dependencies
-        env:
-          NODE_AUTH_TOKEN: ${{ github.token }}
-        run: bun install --frozen-lockfile
+            cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
+      - name: Install Cargo tools
+        run: |
+          cargo install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
+          cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION"
       - name: Audit dependencies
-        run: bun audit
+        run: cargo audit
       - name: Check formatting
-        run: bun run format:check
+        run: cargo fmt --all --check
       - name: Lint
-        run: bun run lint
-      - name: Typecheck
-        run: bun x tsc -p tsconfig.json --noEmit
-      - name: Tests
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests with coverage
         id: tests
-        run: bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage
-      - name: Enforce 100% line coverage
-        run: bun run scripts/check-coverage.ts coverage-scope.json coverage/lcov.info
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov --workspace --locked --lcov --output-path coverage/lcov.info
+          cargo llvm-cov report --summary-only --fail-under-lines "$MIN_LINE_COVERAGE"
       - name: Upload coverage
         if: ${{ always() && steps.tests.outcome != 'skipped' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -90,6 +100,13 @@ jobs:
           name: coverage
           path: coverage/
           if-no-files-found: error
+
+      - name: Build OCI image
+        run: |
+          command -v podman >/dev/null || { sudo apt-get update && sudo apt-get install --yes podman; }
+          podman build --build-arg VCS_REF="${GITHUB_SHA}" --format oci --file Containerfile --tag oracle:ci .
+          podman run --rm oracle:ci timba-oracle --version
+          podman run --rm oracle:ci test -x /usr/local/bin/timba-evm-oracle
 
       - name: Record the tree that passed validation
         if: github.event_name == 'pull_request'
@@ -151,9 +168,7 @@ jobs:
           echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
 
       - name: Build OCI image
-        env:
-          PACKAGE_TOKEN: ${{ github.token }}
-        run: podman build --build-arg VCS_REF="${GITHUB_SHA}" --secret=id=npm_token,env=PACKAGE_TOKEN --platform linux/amd64 --format oci --file Containerfile --tag "${IMAGE_TAG}" .
+        run: podman build --build-arg VCS_REF="${GITHUB_SHA}" --platform linux/amd64 --format oci --file Containerfile --tag "${IMAGE_TAG}" .
 
       - name: Push OCI image
         run: podman push --digestfile /tmp/image-digest "${IMAGE_TAG}"
