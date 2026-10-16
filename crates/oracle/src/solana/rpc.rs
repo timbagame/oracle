@@ -370,4 +370,111 @@ mod tests {
         assert_eq!(err.message, "JSON-RPC error -32002: Blockhash not found");
         assert_eq!(unwrap_response(json!({"result": 5})).unwrap(), json!(5));
     }
+
+    /// Local JSON-RPC endpoint answering by method name and recording the
+    /// request ids and paths it saw.
+    async fn rpc_server() -> (String, std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>) {
+        use axum::http::{HeaderMap, StatusCode, Uri};
+        use axum::response::IntoResponse;
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = seen.clone();
+        let app =
+            axum::Router::new().fallback(axum::routing::post(move |uri: Uri, axum::Json(body): axum::Json<Value>| {
+                let record = record.clone();
+                async move {
+                    record.lock().unwrap().push((uri.to_string(), body.clone()));
+                    let id = body["id"].clone();
+                    match body["method"].as_str().unwrap_or_default() {
+                        "getSlot" => axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": 42})).into_response(),
+                        "getBalance" => axum::Json(
+                            json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32602, "message": "bad params"}}),
+                        )
+                        .into_response(),
+                        "getHealth" => {
+                            let mut headers = HeaderMap::new();
+                            headers.insert("retry-after", "3".parse().unwrap());
+                            (StatusCode::TOO_MANY_REQUESTS, headers, "slow down").into_response()
+                        }
+                        "getVersion" => "definitely not json".into_response(),
+                        "sendTransaction" => {
+                            axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": "sig"})).into_response()
+                        }
+                        _ => StatusCode::BAD_GATEWAY.into_response(),
+                    }
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}/rpc"), seen)
+    }
+
+    #[tokio::test]
+    async fn http_transport_round_trips() {
+        let (endpoint, seen) = rpc_server().await;
+        let transport = HttpTransport::new(Some("Rebate111".into()));
+
+        assert_eq!(transport.send(&endpoint, "getSlot", json!([])).await.unwrap(), json!(42));
+
+        let err = transport.send(&endpoint, "getBalance", json!(["x"])).await.unwrap_err();
+        assert_eq!(err.kind, RpcErrorKind::JsonRpc);
+        assert_eq!(err.code, Some(-32602));
+        assert_eq!(err.to_string(), "JSON-RPC error -32602: bad params");
+
+        let err = transport.send(&endpoint, "getHealth", json!([])).await.unwrap_err();
+        assert_eq!(err.kind, RpcErrorKind::Http);
+        assert_eq!(err.status, Some(429));
+        assert_eq!(err.retry_after_ms, Some(3_000));
+        assert!(err.is_rate_limit());
+        assert_eq!(err.to_string(), "HTTP error (429): Too Many Requests");
+
+        let err = transport.send(&endpoint, "getVersion", json!([])).await.unwrap_err();
+        assert_eq!(err.kind, RpcErrorKind::Decode);
+        assert!(err.to_string().starts_with("Invalid JSON-RPC response:"), "{err}");
+
+        let err = transport.send(&endpoint, "getIdentity", json!([])).await.unwrap_err();
+        assert_eq!((err.status, err.retry_after_ms), (Some(502), None));
+        assert!(err.is_retryable());
+
+        // Rebates only apply to Helius endpoints, so the local URL is unchanged.
+        assert_eq!(transport.send(&endpoint, "sendTransaction", json!(["tx"])).await.unwrap(), json!("sig"));
+
+        let requests = seen.lock().unwrap().clone();
+        assert_eq!(requests.len(), 6);
+        assert!(requests.iter().all(|(path, _)| path == "/rpc"));
+        let ids: Vec<u64> = requests.iter().map(|(_, body)| body["id"].as_u64().unwrap()).collect();
+        assert_eq!(ids, vec![1, 2, 3, 4, 5, 6], "ids increase per request");
+        assert_eq!(requests[0].1, json!({"jsonrpc": "2.0", "id": 1, "method": "getSlot", "params": []}));
+    }
+
+    #[tokio::test]
+    async fn http_transport_reports_connection_failures() {
+        let transport = HttpTransport::from_env();
+        let err = transport.send("http://127.0.0.1:1", "getSlot", json!([])).await.unwrap_err();
+        assert_eq!(err.kind, RpcErrorKind::Transport);
+        assert!(err.to_string().starts_with("RPC request failed: "), "{err}");
+        assert!(err.is_retryable());
+        assert_eq!(RpcError::decode("odd").kind, RpcErrorKind::Decode);
+    }
+
+    #[test]
+    fn transaction_account_keys_include_loaded_addresses() {
+        let info = TransactionInfo::from_value(json!({
+            "slot": 9,
+            "blockTime": 1_700,
+            "transaction": {"message": {"accountKeys": ["a", "b", 3]}},
+            "meta": {"err": {"InstructionError": [0, "Custom"]}, "logMessages": ["x"], "loadedAddresses": {"writable": ["c"], "readonly": ["d", null]}}
+        }))
+        .unwrap();
+        assert_eq!(info.slot, 9);
+        assert_eq!(info.block_time, Some(1_700));
+        assert!(info.err.is_some());
+        assert_eq!(info.log_messages, vec!["x"]);
+        assert_eq!(info.account_keys(), vec!["a", "b", "c", "d"]);
+
+        let bare = TransactionInfo::from_value(json!({"meta": {"err": null}})).unwrap();
+        assert_eq!((bare.slot, bare.block_time, bare.err.clone()), (0, None, None));
+        assert!(bare.account_keys().is_empty());
+        assert!(TransactionInfo::from_value(Value::Null).is_none());
+    }
 }

@@ -292,4 +292,200 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(client.listener_count(), 0);
     }
+
+    use base64::Engine;
+    use futures::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio_tungstenite::tungstenite::Message;
+
+    fn joined_logs(ticket_index: u32) -> Vec<String> {
+        let mut data = timba_protocol::events::discriminators::PLAYER_JOINED.to_vec();
+        data.extend_from_slice(&[1; 32]);
+        data.extend_from_slice(&[2; 32]);
+        data.extend_from_slice(&10u64.to_le_bytes());
+        data.extend_from_slice(&(ticket_index + 1).to_le_bytes());
+        data.extend_from_slice(&ticket_index.to_le_bytes());
+        data.extend_from_slice(&5u64.to_le_bytes());
+        data.extend_from_slice(&6u64.to_le_bytes());
+        let program = PROGRAM_ID.to_base58();
+        vec![
+            format!("Program {program} invoke [1]"),
+            format!("Program data: {}", base64::engine::general_purpose::STANDARD.encode(data)),
+            format!("Program {program} success"),
+        ]
+    }
+
+    fn notification(slot: u64, err: Value, logs: Vec<String>) -> Message {
+        let note = json!({"jsonrpc": "2.0", "method": "logsNotification", "params": {"subscription": 1, "result": {
+            "context": {"slot": slot}, "value": {"signature": format!("sig-{slot}"), "err": err, "logs": logs}
+        }}});
+        Message::Text(note.to_string().into())
+    }
+
+    /// Serves logs subscriptions. The first connection delivers a join,
+    /// two notifications the client must skip, and then a malformed event that
+    /// ends the subscription; later connections deliver one join and stay open.
+    async fn scripted_server() -> (String, Arc<AtomicU64>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let connections = Arc::new(AtomicU64::new(0));
+        let counter = connections.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let connection = counter.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else { return };
+                    let Some(Ok(request)) = ws.next().await else { return };
+                    let request: Value = serde_json::from_str(request.to_text().unwrap()).unwrap();
+                    let reply = json!({"jsonrpc": "2.0", "id": request["id"], "result": 1});
+                    ws.send(Message::Text(reply.to_string().into())).await.unwrap();
+                    if connection == 0 {
+                        ws.send(notification(10, Value::Null, joined_logs(0))).await.unwrap();
+                        ws.send(notification(11, json!({"InstructionError": [0, "Custom"]}), joined_logs(1)))
+                            .await
+                            .unwrap();
+                        ws.send(notification(1 << 53, Value::Null, joined_logs(2))).await.unwrap();
+                        let mut broken = joined_logs(3);
+                        broken[1] = format!(
+                            "Program data: {}",
+                            base64::engine::general_purpose::STANDARD
+                                .encode([39u8, 144, 49, 106, 108, 210, 183, 38, 1])
+                        );
+                        ws.send(notification(12, Value::Null, broken)).await.unwrap();
+                    } else {
+                        ws.send(notification(20 + connection, Value::Null, joined_logs(4))).await.unwrap();
+                    }
+                    while let Some(Ok(_)) = ws.next().await {}
+                });
+            }
+        });
+        (format!("ws://{addr}"), connections)
+    }
+
+    #[tokio::test]
+    async fn dispatches_notifications_and_reconnects() {
+        let (url, connections) = scripted_server().await;
+        let rpc = Arc::new(RpcPool::new(&["http://127.0.0.1:1".into()]).unwrap());
+        let client = ProgramClient::new(rpc, ContractVersion::V0_3_0, Some(url));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let id = client
+            .add_event_listener(
+                EventName::PlayerJoined,
+                Arc::new(move |event| {
+                    tx.send(event).unwrap();
+                    async {}.boxed()
+                }),
+            )
+            .await
+            .unwrap();
+        let ignored =
+            client.add_event_listener(EventName::GameCompleted, Arc::new(|_| async {}.boxed())).await.unwrap();
+        assert_eq!(client.listener_count(), 2);
+
+        async fn next(rx: &mut tokio::sync::mpsc::UnboundedReceiver<ProgramDispatch>) -> ProgramDispatch {
+            tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.unwrap().unwrap()
+        }
+        let ProgramDispatch::PlayerMembership(first) = next(&mut rx).await else { panic!("membership expected") };
+        assert_eq!((first.slot, first.ticket_index, first.signature.as_str()), (10, 0, "sig-10"));
+        // Failed and out-of-range notifications are skipped; the malformed one
+        // ends the subscription, which is restored after the reconnect delay.
+        let ProgramDispatch::PlayerMembership(second) = next(&mut rx).await else { panic!("membership expected") };
+        assert_eq!((second.slot, second.ticket_index), (21, 4));
+        assert_eq!(connections.load(Ordering::SeqCst), 2);
+
+        client.remove_event_listener(ignored).await;
+        assert_eq!(client.listener_count(), 1);
+        client.remove_event_listener(id).await;
+        assert_eq!(client.listener_count(), 0);
+        assert!(client.state.lock().await.task.is_none());
+        client.close().await;
+    }
+
+    #[tokio::test]
+    async fn names_dispatches() {
+        let initialized = ProgramDispatch::GameInitialized(GameInitializedEvent {
+            game_key: "g".into(),
+            creator: "c".into(),
+            game_type: "coinflip".into(),
+            ticket_amount: 1,
+            total_amount: 1,
+            max_tickets: 2,
+            min_tickets: 1,
+            token_mint: "m".into(),
+            is_private: false,
+            created_at: 0,
+            timeout: 0,
+            signature: "s".into(),
+            slot: 1,
+        });
+        let completed = ProgramDispatch::GameCompleted(GameCompletedEvent {
+            game_key: "g".into(),
+            winner: "w".into(),
+            tickets_count: 1,
+            winner_amount: 1,
+            fee_amount: 0,
+            timestamp: 0,
+            signature: "s".into(),
+            slot: 1,
+        });
+        let membership = |kind| {
+            ProgramDispatch::PlayerMembership(PlayerMembershipEvent {
+                kind,
+                game_key: "g".into(),
+                player: "p".into(),
+                tickets_count: 1,
+                ticket_index: 0,
+                moved_participant: None,
+                timestamp: 0,
+                signature: "s".into(),
+                slot: 1,
+            })
+        };
+        assert_eq!(initialized.name(), EventName::GameInitialized);
+        assert_eq!(completed.name(), EventName::GameCompleted);
+        assert_eq!(closed(false).name(), EventName::GameClosed);
+        assert_eq!(closed(true).name(), EventName::OperatorGameClosed);
+        assert_eq!(membership(MembershipKind::Joined).name(), EventName::PlayerJoined);
+        assert_eq!(membership(MembershipKind::Unjoined).name(), EventName::PlayerUnjoined);
+    }
+
+    #[tokio::test]
+    async fn fetches_and_decodes_game_accounts() {
+        use crate::solana::pool::testing::FakeTransport;
+        use timba_protocol::contracts::GameType;
+        let transport = FakeTransport::new();
+        let rpc = Arc::new(RpcPool::with_transport(&["https://a".into()], transport.clone()).unwrap());
+        let client = ProgramClient::new(rpc, ContractVersion::V0_3_0, None);
+        let game = GameAccount {
+            creator: Address([1; 32]),
+            game_type: GameType::Coinflip,
+            ticket_amount: 10,
+            max_tickets: 2,
+            min_tickets: 2,
+            tickets_count: 1,
+            token_mint: Address([2; 32]),
+            created_at: 5,
+            timeout: 60,
+            last_slot: 9,
+            is_private: false,
+            total_amount: 10,
+            participants: vec![Address([3; 32])],
+        };
+        let encoded = base64::engine::general_purpose::STANDARD.encode(game.encode());
+        transport.push(
+            "getAccountInfo",
+            Ok(json!({"value": {"data": [encoded, "base64"], "owner": PROGRAM_ID.to_base58(), "lamports": 1, "executable": false}})),
+        );
+        transport.push("getAccountInfo", Ok(json!({"value": null})));
+        transport.push(
+            "getAccountInfo",
+            Ok(json!({"value": {"data": ["AAAA", "base64"], "owner": PROGRAM_ID.to_base58(), "lamports": 1, "executable": false}})),
+        );
+        let key = Address([4; 32]);
+        assert_eq!(client.fetch_game(&key).await.unwrap(), game);
+        let missing = client.fetch_game(&key).await.unwrap_err().to_string();
+        assert_eq!(missing, account_not_found_message(&key));
+        assert!(is_account_missing_error(&missing));
+        assert!(client.fetch_game(&key).await.is_err());
+    }
 }

@@ -242,4 +242,116 @@ mod tests {
         let err = parse_transaction_events("sig", 1, &logs(&[bad]), PROGRAM).unwrap_err();
         assert_eq!(err, "Invalid Timba event in sig: Invalid Timba event length");
     }
+
+    fn event(disc: [u8; 8], parts: &[&[u8]]) -> Vec<u8> {
+        let mut data = disc.to_vec();
+        for part in parts {
+            data.extend_from_slice(part);
+        }
+        data
+    }
+
+    fn initialized(ticket_amount: u64) -> Vec<u8> {
+        event(
+            discriminators::GAME_INITIALIZED,
+            &[
+                &[1; 32],
+                &[2; 32],
+                &[1],
+                &ticket_amount.to_le_bytes(),
+                &20u64.to_le_bytes(),
+                &5u32.to_le_bytes(),
+                &2u32.to_le_bytes(),
+                &[3; 32],
+                &[0],
+                &1_700u64.to_le_bytes(),
+                &600u64.to_le_bytes(),
+            ],
+        )
+    }
+
+    fn b58(byte: u8) -> String {
+        timba_protocol::Address([byte; 32]).to_base58()
+    }
+
+    #[test]
+    fn parses_every_listener_event() {
+        let completed = event(
+            discriminators::GAME_COMPLETED,
+            &[&[1; 32], &[4; 32], &3u32.to_le_bytes(), &90u64.to_le_bytes(), &10u64.to_le_bytes(), &7u64.to_le_bytes()],
+        );
+        let operator_closed = event(
+            discriminators::OPERATOR_GAME_CLOSED,
+            &[&[1; 32], &[2; 32], &[5; 32], &30u64.to_le_bytes(), &40u64.to_le_bytes(), &9u64.to_le_bytes()],
+        );
+        let withdrawn = event(discriminators::TOKEN_FEE_WITHDRAWN, &[&[5; 32], &[3; 32], &42u64.to_le_bytes()]);
+        let events = parse_transaction_events(
+            "sig",
+            42,
+            &logs(&[initialized(10), completed, operator_closed, withdrawn, vec![0; 12]]),
+            PROGRAM,
+        )
+        .unwrap();
+        assert_eq!(
+            events.initialized,
+            vec![GameInitializedEvent {
+                game_key: b58(1),
+                creator: b58(2),
+                game_type: timba_protocol::contracts::GameType::Giveaway.name().into(),
+                ticket_amount: 10,
+                total_amount: 20,
+                max_tickets: 5,
+                min_tickets: 2,
+                token_mint: b58(3),
+                is_private: false,
+                created_at: 1_700,
+                timeout: 600,
+                signature: "sig".into(),
+                slot: 42,
+            }]
+        );
+        assert_eq!(
+            events.completed,
+            vec![GameCompletedEvent {
+                game_key: b58(1),
+                winner: b58(4),
+                tickets_count: 3,
+                winner_amount: 90,
+                fee_amount: 10,
+                timestamp: 7,
+                signature: "sig".into(),
+                slot: 42,
+            }]
+        );
+        assert_eq!(
+            events.closed,
+            vec![GameClosedEvent { game_key: b58(1), timestamp: 9, operator: true, signature: "sig".into(), slot: 42 }]
+        );
+        assert!(events.membership.is_empty(), "fee withdrawals and unknown events are ignored");
+        assert!(!events.is_empty());
+
+        let mut merged = IndexedEvents::default();
+        assert!(merged.is_empty());
+        merged.extend(events.clone());
+        merged.extend(
+            parse_transaction_events("other", 1, &logs(&[membership(discriminators::PLAYER_JOINED, None)]), PROGRAM)
+                .unwrap(),
+        );
+        assert_eq!(merged.initialized.len(), 1);
+        assert_eq!(merged.completed.len(), 1);
+        assert_eq!(merged.closed.len(), 1);
+        assert_eq!(merged.membership.len(), 1);
+
+        let json = serde_json::to_value(&merged.membership[0]).unwrap();
+        assert_eq!(json["kind"], "joined");
+        assert_eq!(json["ticketIndex"], 1);
+        assert!(json.get("movedParticipant").is_none());
+    }
+
+    #[test]
+    fn rejects_unsafe_integers() {
+        let err = parse_transaction_events("sig", 1, &logs(&[initialized(1 << 53)]), PROGRAM).unwrap_err();
+        assert_eq!(err, "Invalid Timba event in sig: Event field exceeds the safe integer range");
+        assert!(parse_transaction_events("sig", 1, &logs(&[initialized((1 << 53) - 1)]), PROGRAM).is_ok());
+    }
 }
