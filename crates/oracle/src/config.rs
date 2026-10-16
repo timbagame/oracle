@@ -74,6 +74,16 @@ impl std::fmt::Debug for OracleConfig {
     }
 }
 
+/// The operator keypair file used when none is configured: the current one if
+/// it exists at `default_path`, else the legacy name.
+fn default_keypair_source(default_path: &Path) -> &'static str {
+    if default_path.exists() {
+        DEFAULT_KEYPAIR_FILE
+    } else {
+        LEGACY_KEYPAIR_FILE
+    }
+}
+
 fn non_negative(key: &str, default: i64) -> u64 {
     parse_integer(read_env(key).as_deref(), default, Some(0), None, key) as u64
 }
@@ -90,14 +100,9 @@ impl OracleConfig {
         let environment = environment_mode();
         let solana_networks = parse_rpc_endpoint_list(read_env("SOLANA_NETWORK").as_deref())?;
         let solana_network = solana_networks[0].clone();
-        let operator_keypair_source =
-            read_env("OPERATOR_KEYPAIR_PATH").or_else(|| read_env("ORACLE_KEYPAIR_PATH")).unwrap_or_else(|| {
-                if Path::new(&resolve_path(DEFAULT_KEYPAIR_FILE)).exists() {
-                    DEFAULT_KEYPAIR_FILE.into()
-                } else {
-                    LEGACY_KEYPAIR_FILE.into()
-                }
-            });
+        let operator_keypair_source = read_env("OPERATOR_KEYPAIR_PATH")
+            .or_else(|| read_env("ORACLE_KEYPAIR_PATH"))
+            .unwrap_or_else(|| default_keypair_source(&resolve_path(DEFAULT_KEYPAIR_FILE)).into());
         let operator_keypair_path = resolve_path(&operator_keypair_source).to_string_lossy().into_owned();
         let oracle_port = oracle_port_from_env();
         Ok(Self {
@@ -202,6 +207,15 @@ mod tests {
         let long = "a".repeat(129);
         assert!(normalize_game_type(Some(&long), false).is_err());
         assert_eq!(normalize_game_type(Some(&long), true).unwrap().unwrap().len(), 128);
+    }
+
+    #[test]
+    fn default_keypair_prefers_the_current_file_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join(DEFAULT_KEYPAIR_FILE);
+        assert_eq!(default_keypair_source(&current), LEGACY_KEYPAIR_FILE);
+        std::fs::write(&current, "[]").unwrap();
+        assert_eq!(default_keypair_source(&current), DEFAULT_KEYPAIR_FILE);
     }
 
     const KEYS: [&str; 19] = [
