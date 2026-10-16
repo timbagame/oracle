@@ -3987,13 +3987,13 @@ dependencies = [
 
 [[package]]
 name = "timba-protocol"
-version = "1.0.0"
+version = "0.15.0"
+source = "git+https://github.com/timbagame/protocol?tag=v0.15.0#3e36b3dc8d9a685ef0c633159842cc63c1422b17"
 dependencies = [
  "base64",
  "bs58",
  "curve25519-dalek",
  "hex",
- "proptest",
  "regex",
  "serde",
  "serde_json",

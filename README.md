@@ -329,9 +329,11 @@ cargo test --workspace
 cargo llvm-cov --workspace --summary-only  # coverage (cargo install cargo-llvm-cov)
 ```
 
-`crates/protocol/tests` compares Rust encodings byte-for-byte with fixtures
-generated from the previous TypeScript implementation; see
-`crates/protocol/tests/fixtures/README.md`.
+The protocol codecs live in the shared `timba-protocol` crate in
+[timbagame/protocol](https://github.com/timbagame/protocol), checked byte for
+byte against the TypeScript package there. The oracle's own signer and web
+fixtures come from the previous TypeScript implementation; see
+`crates/oracle/tests/fixtures/README.md`.
 
 ### Key Improvements
 
