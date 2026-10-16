@@ -790,6 +790,13 @@ mod tests {
                 assert!(scripted.calls.lock().unwrap().is_empty());
             }
             assert_eq!(unwrap(&bad_parity).unwrap().authorization.authority(), None);
+            // Both valid parities recover some authority; only one recovers the signer.
+            let authorization = unwrap(&plain).unwrap().authorization;
+            for y_parity in [0, 1] {
+                let recovered = SignedAuthorization { y_parity, ..authorization.clone() }.authority();
+                assert!(recovered.is_some(), "parity {y_parity}");
+                assert_eq!(recovered == Some(account().address()), y_parity == authorization.y_parity);
+            }
         }
     }
 }

@@ -409,6 +409,9 @@ mod tests {
         );
         assert!(parse_rpc_endpoint_list(None).unwrap_err().contains("required"));
         assert!(parse_rpc_endpoint_list(Some("[nope]")).unwrap_err().contains("JSON array"));
+        // Only a value wrapped in brackets on both ends is JSON; a lone bracket is a list entry.
+        assert_eq!(parse_rpc_endpoint_list(Some("https://x/]")).unwrap(), vec!["https://x/]"]);
+        assert_eq!(parse_rpc_endpoint_list(Some("[https://x")).unwrap(), vec!["[https://x"]);
         assert!(parse_rpc_endpoint_list(Some(" , ")).unwrap_err().contains("empty list"));
     }
 

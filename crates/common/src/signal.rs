@@ -58,6 +58,24 @@ mod tests {
         assert!(status.success());
     }
 
+    /// In a child process: the first signal runs the callback, the second exits at once.
+    #[tokio::test]
+    async fn the_second_signal_exits_without_waiting() {
+        if std::env::var_os("TIMBA_CHILD").is_some() {
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            on_termination(move |signal| sender.send(signal).unwrap());
+            raise("TERM");
+            println!("first {}", receiver.await.unwrap());
+            raise("INT");
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            unreachable!("the second signal exits");
+        }
+        let output = crate::log::tests::run_child("signal::tests::the_second_signal_exits_without_waiting");
+        assert_eq!(output.status.code(), Some(130), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("first SIGTERM"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("SIGINT received again"));
+    }
+
     #[tokio::test]
     async fn names_each_signal() {
         let mut signals = Termination::listen();

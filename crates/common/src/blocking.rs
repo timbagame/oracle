@@ -26,13 +26,19 @@ mod tests {
         assert_eq!(blocking(|| 2), 2);
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // One worker: only `block_in_place` hands its queue to another thread.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn lets_other_tasks_run_while_blocking() {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        // Spawned on the same runtime: it must make progress while this worker blocks.
-        let other = tokio::spawn(async move { sender.send(()).unwrap() });
-        blocking(|| receiver.recv_timeout(std::time::Duration::from_secs(5)).expect("other task ran"));
-        other.await.unwrap();
+        // The test body runs on the main thread; block from inside the runtime's only worker.
+        tokio::spawn(async {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            // Queued on this worker: it must make progress while the worker blocks.
+            let other = tokio::spawn(async move { sender.send(()).unwrap() });
+            blocking(|| receiver.recv_timeout(std::time::Duration::from_secs(2)).expect("other task ran"));
+            other.await.unwrap();
+        })
+        .await
+        .unwrap();
         let from_pool = tokio::task::spawn_blocking(|| blocking(|| 3)).await.unwrap();
         assert_eq!(from_pool, 3);
     }

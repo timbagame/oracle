@@ -84,8 +84,37 @@ macro_rules! error {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// Runs this test binary again as `test`, with `TIMBA_CHILD` set, and returns its output.
+    pub(crate) fn run_child(test: &str) -> std::process::Output {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture", "--test-threads=1"])
+            .env("TIMBA_CHILD", "1")
+            .env_remove("LOG_SILENT")
+            .env_remove("LOG_LEVEL")
+            .output()
+            .unwrap()
+    }
+
+    #[test]
+    fn writes_warnings_and_errors_to_stderr_and_the_rest_to_stdout() {
+        if std::env::var_os("TIMBA_CHILD").is_some() {
+            set_level(Level::Info);
+            crate::debug!("hidden-debug");
+            crate::info!("to-stdout");
+            crate::warn!("warn-to-stderr");
+            crate::error!("error-to-stderr");
+            return;
+        }
+        let output = run_child("log::tests::writes_warnings_and_errors_to_stderr_and_the_rest_to_stdout");
+        let (stdout, stderr) = (String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert!(output.status.success(), "{output:?}");
+        assert!(stdout.contains("] to-stdout\n") && !stdout.contains("to-stderr"), "{stdout}");
+        assert!(stderr.contains("] warn-to-stderr\n") && stderr.contains("] error-to-stderr\n"), "{stderr}");
+        assert!(!stdout.contains("hidden-debug") && !stderr.contains("hidden-debug"));
+    }
 
     #[test]
     fn resolves_levels_from_the_environment_values() {

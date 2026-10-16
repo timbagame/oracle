@@ -734,7 +734,8 @@ impl EventProcessor {
                         Some(next) => next,
                         None => {
                             entry.running = false;
-                            if entry.retry_pending.is_none() && entry.timer.is_none() {
+                            // A waiting retry always has its timer, so the request alone tells.
+                            if entry.retry_pending.is_none() {
                                 entries.remove(&game);
                             }
                             return;

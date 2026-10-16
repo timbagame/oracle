@@ -1191,6 +1191,18 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_leaderboard_ttl_caches_nothing() {
+        let options = IndexerDatabaseOptions { leaderboard_cache_ttl_ms: Some(0), ..Default::default() };
+        let db = IndexerDatabase::open_with_options(":memory:", options).unwrap();
+        db.get_leaderboard(10, None, LeaderboardPeriod::Day).unwrap();
+        assert!(db.cache.lock().unwrap().leaderboard_windows.is_empty());
+        memory().get_leaderboard(10, None, LeaderboardPeriod::Day).unwrap();
+        let cached = memory();
+        cached.get_leaderboard(10, None, LeaderboardPeriod::Day).unwrap();
+        assert_eq!(cached.cache.lock().unwrap().leaderboard_windows.len(), 1, "the default TTL caches windows");
+    }
+
+    #[test]
     fn parses_and_names_leaderboard_periods() {
         for (text, period) in
             [("24h", LeaderboardPeriod::Day), ("7d", LeaderboardPeriod::Week), ("all", LeaderboardPeriod::All)]

@@ -217,6 +217,9 @@ async fn admin_routes_require_the_token() {
         let (status, _, _) = call(&app, "POST", path, Some(&body), false).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");
     }
+    // Enabling them leaves the public routes public.
+    let (status, _, _) = call(&app, "GET", "/health", None, false).await;
+    assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]

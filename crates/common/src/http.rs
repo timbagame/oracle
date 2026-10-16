@@ -173,7 +173,12 @@ mod tests {
     #[tokio::test]
     async fn passes_bodies_up_to_the_limit() {
         let full = "x".repeat(MAX_REQUEST_BODY_BYTES);
-        assert_eq!(send(post_to(Body::from(full), None)).await, (StatusCode::OK, MAX_REQUEST_BODY_BYTES.to_string()));
+        assert_eq!(
+            send(post_to(Body::from(full.clone()), None)).await,
+            (StatusCode::OK, MAX_REQUEST_BODY_BYTES.to_string())
+        );
+        let declared = MAX_REQUEST_BODY_BYTES.to_string();
+        assert_eq!(send(post_to(Body::from(full), Some(&declared))).await.0, StatusCode::OK);
         let parts = chunked(vec![Ok(vec![b'a'; 10]), Ok(vec![b'b'; 5])]);
         assert_eq!(send(post_to(parts, None)).await, (StatusCode::OK, "15".into()));
     }
@@ -231,6 +236,27 @@ mod tests {
         .expect("idle connections are closed");
         assert!(started.elapsed() >= Duration::from_millis(100));
         assert!(!silent_output.contains("200") && !partial_output.contains("done"));
+        stop.notify_one();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn serve_limits_bodies_and_stops_on_shutdown() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let stop = Arc::new(Notify::new());
+        let waiter = stop.clone();
+        let task = tokio::spawn(serve(listener, echo(), async move { waiter.notified().await }));
+        let request = |length: usize| {
+            format!("POST /echo HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: {length}\r\n\r\n")
+        };
+        let mut small = tokio::net::TcpStream::connect(address).await.unwrap();
+        small.write_all(format!("{}abc", request(3)).as_bytes()).await.unwrap();
+        let output = read_all(&mut small).await;
+        assert!(output.starts_with("HTTP/1.1 200") && output.ends_with('3'), "{output}");
+        let mut large = tokio::net::TcpStream::connect(address).await.unwrap();
+        large.write_all(request(MAX_REQUEST_BODY_BYTES + 1).as_bytes()).await.unwrap();
+        assert!(read_all(&mut large).await.starts_with("HTTP/1.1 413"));
         stop.notify_one();
         task.await.unwrap().unwrap();
     }
