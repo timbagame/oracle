@@ -13,8 +13,8 @@
     "start:evm": "bun run evm/main.ts"
   },
   "dependencies": {
-    "@solana-program/system": "0.15.0",
-    "@solana-program/token": "0.17.0",
+    "@solana-program/system": "0.16.0",
+    "@solana-program/token": "0.18.0",
     "@solana/kit": "8.5.0",
     "@timbagame/protocol": "0.14.2",
     "viem": "2.57.7",
