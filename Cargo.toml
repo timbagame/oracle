@@ -10,7 +10,8 @@ license = "UNLICENSED"
 publish = false
 
 [workspace.dependencies]
-timba-protocol = { path = "crates/protocol" }
+# Shared with the TypeScript package; Cargo.lock pins the commit.
+timba-protocol = { git = "https://github.com/timbagame/protocol", branch = "rust-protocol-crate" }
 timba-common = { path = "crates/common" }
 anyhow = "1"
 axum = "0.8"
@@ -18,7 +19,6 @@ base64 = "0.23"
 bs58 = "0.5"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
-curve25519-dalek = "5"
 ed25519-dalek = { version = "3", features = ["rand_core"] }
 futures = "0.3"
 hex = "0.4"
@@ -40,7 +40,6 @@ tower = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
-proptest = { version = "1.12", default-features = false, features = ["std"] }
 
 [profile.release]
 lto = "thin"
