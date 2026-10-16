@@ -82,7 +82,7 @@ operator pays that one-time account rent and transaction fee.
 
 ### Prerequisites
 
-- [Rust](https://rustup.rs/) 1.85 or newer (CI and the image use 1.97)
+- [Rust](https://rustup.rs/) 1.85 or newer (CI and the image use 1.99)
 - Solana operator keypair file
 - Access to a Solana RPC endpoint (mainnet-beta for production)
 
