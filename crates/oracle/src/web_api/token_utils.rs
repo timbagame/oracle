@@ -68,5 +68,8 @@ mod tests {
         assert_eq!(tokens_to_amount(100, 9), 0.0000001);
         assert_eq!(tokens_to_amount(7, 0), 7.0);
         assert_eq!(tokens_to_amount(5, 30), 5e-30);
+        // 10^39 no longer fits in a u128.
+        assert_eq!(tokens_to_amount(5, 40), 5e-40);
+        assert_eq!(tokens_to_amount(u64::MAX, 39), u64::MAX as f64 / 1e39);
     }
 }

@@ -415,7 +415,6 @@ async fn verify(rpc: &RpcPool, program_id: &Address, value: &str) -> Result<Valu
 mod tests {
     use super::*;
     use crate::solana::pool::testing::FakeTransport;
-    use crate::solana::rpc::RpcError;
     use base64::Engine;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -485,6 +484,7 @@ mod tests {
         rpc: RpcPool,
         transport: Arc<FakeTransport>,
         complete_sig: String,
+        join_sig: String,
         init_sig: String,
         transactions: Arc<Mutex<HashMap<String, Value>>>,
         game: Address,
@@ -579,36 +579,41 @@ mod tests {
         mint[44] = 9;
         mint[45] = 1;
         let mint = base64::engine::general_purpose::STANDARD.encode(mint);
-        transport.on(move |_, method, params| -> Option<Result<Value, RpcError>> {
-            Some(Ok(match method {
-                "getTransaction" => {
-                    assert_eq!(params[1]["commitment"], "finalized");
-                    store.lock().unwrap().get(params[0].as_str().unwrap()).cloned().unwrap_or(Value::Null)
-                }
-                "getSignaturesForAddress" => {
-                    assert_eq!(params[1]["commitment"], "finalized");
-                    let mut pages = page_count.lock().unwrap();
-                    *pages += 1;
-                    match *pages {
-                        1 => json!([{ "signature": c, "slot": 2, "err": null }, { "signature": j, "slot": 2, "err": null }]),
-                        2 => json!([{ "signature": i, "slot": 1, "err": null }]),
-                        _ => json!([]),
+        transport.on(move |_, method, params| {
+            (method == "getTransaction").then(|| {
+                assert_eq!(params[1]["commitment"], "finalized");
+                Ok(store.lock().unwrap().get(params[0].as_str().unwrap()).cloned().unwrap_or(Value::Null))
+            })
+        });
+        transport.on(move |_, method, params| {
+            (method == "getSignaturesForAddress").then(|| {
+                assert_eq!(params[1]["commitment"], "finalized");
+                let mut pages = page_count.lock().unwrap();
+                *pages += 1;
+                Ok(match *pages {
+                    1 => {
+                        json!([{ "signature": c, "slot": 2, "err": null }, { "signature": j, "slot": 2, "err": null }])
                     }
-                }
-                "getBlock" => json!({ "signatures": [j, c] }),
-                "getMultipleAccounts" => json!({
+                    _ => json!([{ "signature": i, "slot": 1, "err": null }]),
+                })
+            })
+        });
+        let block = json!({ "signatures": [join_sig, complete_sig] });
+        transport.on(move |_, method, _| (method == "getBlock").then(|| Ok(block.clone())));
+        transport.on(move |_, method, _| {
+            (method == "getMultipleAccounts").then(|| {
+                Ok(json!({
                     "context": { "slot": 3 },
                     "value": [{
                         "data": [mint, "base64"],
                         "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
                         "lamports": 1, "executable": false, "space": 82
                     }],
-                }),
-                _ => return None,
-            }))
+                }))
+            })
         });
         let rpc = RpcPool::with_transport(&["https://rpc.test".into()], transport.clone()).unwrap();
-        Fixture { rpc, transport, complete_sig, init_sig, transactions, game }
+        Fixture { rpc, transport, complete_sig, join_sig, init_sig, transactions, game }
     }
 
     #[tokio::test]
@@ -713,6 +718,121 @@ mod tests {
         }
         let error = verify_game_transaction(&tampered.rpc, &PROGRAM_ID, &tampered.complete_sig).await.unwrap_err();
         assert_eq!(error.to_string(), "Invalid revealed commitment");
+    }
+
+    /// Edits the first event payload of a stored transaction.
+    fn edit_event(fixture: &Fixture, signature: &str, edit: impl FnOnce(&mut Vec<u8>)) {
+        let mut store = fixture.transactions.lock().unwrap();
+        let log = &mut store.get_mut(signature).unwrap()["meta"]["logMessages"][1];
+        let encoded = log.as_str().unwrap().strip_prefix("Program data: ").unwrap().to_string();
+        let mut data = base64::engine::general_purpose::STANDARD.decode(encoded).unwrap();
+        edit(&mut data);
+        *log = json!(format!("Program data: {}", base64::engine::general_purpose::STANDARD.encode(data)));
+    }
+
+    #[test]
+    fn follows_javascript_truthiness() {
+        for truthy in [json!(true), json!(1), json!(-0.5), json!("x"), json!([]), json!({})] {
+            assert!(js_truthy(&truthy), "{truthy}");
+        }
+        for falsy in [json!(null), json!(false), json!(0), json!(0.0), json!("")] {
+            assert!(!js_truthy(&falsy), "{falsy}");
+        }
+        let logged = |meta: Value| finalized_transaction(json!({ "slot": 4, "meta": meta }));
+        assert!(logged(json!({ "err": null, "logMessages": [] })).is_some());
+        assert!(logged(json!({ "err": 0, "logMessages": [] })).is_some());
+        for failed in [json!(true), json!(1), json!("boom"), json!({ "InstructionError": [0, "Custom"] })] {
+            assert!(logged(json!({ "err": failed, "logMessages": [] })).is_none());
+        }
+        assert!(logged(json!({ "err": null })).is_none(), "no logs");
+        assert!(logged(json!(null)).is_none(), "no meta");
+        assert!(finalized_transaction(json!({})).is_none());
+    }
+
+    #[tokio::test]
+    async fn finds_the_reveal_among_unrelated_instructions() {
+        let fixture = history_fixture();
+        {
+            let mut store = fixture.transactions.lock().unwrap();
+            let instructions =
+                &mut store.get_mut(&fixture.complete_sig).unwrap()["transaction"]["message"]["instructions"];
+            let real = instructions[0].clone();
+            *instructions = json!([
+                // Another program.
+                { "programIdIndex": 1, "accounts": [0, 1], "data": bs58::encode([1u8; 80]).into_string() },
+                // Another game.
+                { "programIdIndex": 2, "accounts": [1, 0], "data": bs58::encode([1u8; 80]).into_string() },
+                // Too short to be a completion.
+                { "programIdIndex": 2, "accounts": [0, 1], "data": bs58::encode([1u8; 12]).into_string() },
+                // Another instruction of the program.
+                { "programIdIndex": 2, "accounts": [0, 1], "data": bs58::encode([1u8; 80]).into_string() },
+                real,
+            ]);
+        }
+        let result = verify_game_transaction(&fixture.rpc, &PROGRAM_ID, &fixture.complete_sig).await.unwrap();
+        assert_eq!(result["winner"], PLAYER);
+    }
+
+    #[tokio::test]
+    async fn rejects_completions_without_a_reveal() {
+        let fixture = history_fixture();
+        let set = |instructions: Value| {
+            fixture.transactions.lock().unwrap().get_mut(&fixture.complete_sig).unwrap()["transaction"]["message"]
+                ["instructions"] = instructions;
+        };
+        set(json!([]));
+        let error = verify_game_transaction(&fixture.rpc, &PROGRAM_ID, &fixture.complete_sig).await.unwrap_err();
+        assert_eq!(error.to_string(), "Invalid revealed commitment");
+        set(json!([{ "programIdIndex": 2, "accounts": [0, 1], "data": "0OIl" }]));
+        let error = verify_game_transaction(&fixture.rpc, &PROGRAM_ID, &fixture.complete_sig).await.unwrap_err();
+        assert!(error.to_string().starts_with("Invalid instruction data:"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn rejects_transactions_that_did_not_complete_a_game() {
+        let fixture = history_fixture();
+        let error = verify_game_transaction(&fixture.rpc, &PROGRAM_ID, &fixture.join_sig).await.unwrap_err();
+        assert_eq!(error.to_string(), "Not a completed game");
+    }
+
+    #[tokio::test]
+    async fn refuses_to_verify_when_the_history_has_no_initialization() {
+        let fixture = history_fixture();
+        // The node has no signatures for the game at all.
+        fixture.transport.push("getSignaturesForAddress", Ok(json!([])));
+        let error = verify_game_transaction(&fixture.rpc, &PROGRAM_ID, &fixture.complete_sig).await.unwrap_err();
+        assert_eq!(error.to_string(), "Initialization history unavailable");
+    }
+
+    #[tokio::test]
+    async fn refuses_to_order_transactions_the_block_does_not_list() {
+        let missing_block = history_fixture();
+        missing_block.transport.push("getBlock", Ok(Value::Null));
+        let error =
+            verify_game_transaction(&missing_block.rpc, &PROGRAM_ID, &missing_block.complete_sig).await.unwrap_err();
+        assert_eq!(error.to_string(), "Transaction order unavailable");
+
+        let unlisted = history_fixture();
+        unlisted.transport.push("getBlock", Ok(json!({ "signatures": [] })));
+        let error = verify_game_transaction(&unlisted.rpc, &PROGRAM_ID, &unlisted.complete_sig).await.unwrap_err();
+        assert_eq!(error.to_string(), "Transaction order unavailable");
+    }
+
+    #[tokio::test]
+    async fn refuses_history_where_the_game_starts_after_its_completion() {
+        let fixture = history_fixture();
+        fixture.transactions.lock().unwrap().get_mut(&fixture.init_sig).unwrap()["slot"] = json!(5);
+        let error = verify_game_transaction(&fixture.rpc, &PROGRAM_ID, &fixture.complete_sig).await.unwrap_err();
+        assert_eq!(error.to_string(), "Incomplete game history");
+    }
+
+    #[tokio::test]
+    async fn ignores_events_of_other_games_when_counting_tickets() {
+        let fixture = history_fixture();
+        // The only join belongs to a different game, so nobody is in this one.
+        edit_event(&fixture, &fixture.join_sig, |data| data[8..40].copy_from_slice(&[9; 32]));
+        let error = verify_game_transaction(&fixture.rpc, &PROGRAM_ID, &fixture.complete_sig).await.unwrap_err();
+        assert_eq!(error.to_string(), "Ticket count mismatch");
     }
 
     #[tokio::test]

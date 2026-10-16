@@ -120,10 +120,8 @@ fn parse_submit_request(value: &Value) -> Option<String> {
 /// (including the empty `creationSignature`).
 fn serialized_game_value(adapter: &ContractAdapter, address: &str, data: &[u8]) -> Result<Value> {
     let game = adapter.decode_game(address, data).map_err(|error| anyhow!("{error}"))?;
-    let serialized = serde_json::to_value(serialize_game(&game))?;
-    let Value::Object(fields) = serialized else {
-        bail!("Serialized game is not an object");
-    };
+    // A game serializes to a JSON object; anything else fails to convert into a map.
+    let fields: serde_json::Map<String, Value> = serde_json::from_value(serde_json::to_value(serialize_game(&game))?)?;
     let mut output = serde_json::Map::new();
     for (key, value) in fields {
         let after_expiry = key == "expiresAt";

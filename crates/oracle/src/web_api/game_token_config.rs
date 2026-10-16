@@ -406,5 +406,18 @@ mod tests {
         let foreign = account(game_token_data(TIMBA_MINT, true, 1), TOKEN_PROGRAM_ID);
         assert!(decode_game_token_config(TIMBA_MINT, Some(&foreign)).is_err());
         assert_eq!(decode_game_token_config(UNKNOWN_MINT, None).unwrap_err().to_string(), "Unsupported game token");
+        // Owned by the program but not a game token account.
+        let mut stray = game_token_data(TIMBA_MINT, true, 1);
+        stray[..8].fill(0);
+        let error = decode_game_token_config(TIMBA_MINT, Some(&account(stray, PROGRAM_ID))).unwrap_err();
+        assert_eq!(message(error), "TIMBA game configuration is unavailable");
+    }
+
+    #[tokio::test]
+    async fn skips_the_network_when_there_are_no_mints() {
+        let transport = FakeTransport::new();
+        let rpc = RpcPool::with_transport(&["http://rpc.test".into()], transport.clone() as Arc<_>).unwrap();
+        assert!(get_game_token_metadata(&rpc, &[]).await.unwrap().is_empty());
+        assert!(transport.calls.lock().unwrap().is_empty());
     }
 }

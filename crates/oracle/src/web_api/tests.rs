@@ -430,6 +430,7 @@ async fn verification_serves_a_previously_verified_game_with_an_immutable_cache_
     assert_eq!(reply.header("cache-control"), Some("public, max-age=31536000, s-maxage=31536000, immutable"));
     assert!(transport.calls.lock().unwrap().is_empty());
     harness.api.verify(&signature).await.unwrap();
+    assert_eq!(harness.api.verified_game(&signature).await.unwrap()["winner"], "cached");
 }
 
 #[tokio::test]
@@ -534,6 +535,25 @@ async fn submission_broadcasts_the_oracle_co_signed_transaction() {
     let sent = transport.calls_for("sendTransaction");
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].1, json!([signed, { "encoding": "base64", "preflightCommitment": "confirmed" }]));
+}
+
+#[tokio::test]
+async fn submission_fails_closed_when_the_node_returns_a_malformed_signature() {
+    let (payer, other) = (Keypair::generate(), Keypair::generate());
+    let signed = signed_transaction(&payer, &other, 2);
+    let (rpc, transport) = rpc_for(&empty_chain());
+    transport.on(|_, method, _| (method == "sendTransaction").then(|| Ok(json!("not-a-signature"))));
+    let cosigned = signed.clone();
+    let harness = Harness::new(
+        FakeOracle { sign: Arc::new(move |_| Ok(cosigned.clone())), ..oracle(rpc) },
+        ContractVersion::V0_2_0,
+    );
+
+    let reply = harness.send(submit(json!({ "txBase64": signed }).to_string(), "application/json")).await;
+
+    assert_eq!(reply.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(reply.body, json!({ "error": "Game service temporarily unavailable" }));
+    assert_eq!(method_calls(&transport, "sendTransaction"), 1, "the transaction was broadcast");
 }
 
 #[tokio::test]
@@ -756,6 +776,34 @@ async fn preparation_builds_a_creator_funded_coinflip_transaction() {
 }
 
 #[tokio::test]
+async fn preparation_fails_closed_when_the_blockhash_expiry_is_not_a_safe_integer() {
+    let accounts = empty_chain();
+    let sol = Address::parse(SOL_MINT).unwrap();
+    accounts.lock().unwrap().insert(
+        find_game_token_pda(&sol, &PROGRAM_ID).to_base58(),
+        encoded_account(&game_token_data(&sol, 1, true), &PROGRAM_ID),
+    );
+    let (rpc, transport) = rpc_for(&accounts);
+    transport.push(
+        "getLatestBlockhash",
+        Ok(json!({
+            "context": { "slot": 1 },
+            "value": { "blockhash": "11111111111111111111111111111111", "lastValidBlockHeight": 9_007_199_254_740_993u64 }
+        })),
+    );
+    let harness = Harness::new(
+        FakeOracle { secrets: Arc::new(|_| Ok(secrets(Some(OPERATOR)))), ..oracle(rpc) },
+        ContractVersion::V0_2_0,
+    );
+
+    let reply = harness.send(prepare(prepare_body(SOL_MINT, "coinflip", "1000000", 2), Some("0.2.0"))).await;
+
+    assert_eq!(reply.status, StatusCode::SERVICE_UNAVAILABLE, "{}", reply.text);
+    assert_eq!(reply.body, json!({ "error": "Game service temporarily unavailable" }));
+    assert_eq!(method_calls(&transport, "getLatestBlockhash"), 1, "refused after building the transaction");
+}
+
+#[tokio::test]
 async fn preparation_with_oracle_token_policies_matches_the_typescript_transaction() {
     let (rpc, transport) = rpc_for(&token_chain());
     with_blockhash(&transport);
@@ -877,6 +925,13 @@ async fn routes_only_match_their_methods() {
     );
     let nested = harness.get("/web/games/a/b").await;
     assert_eq!(nested.status, StatusCode::NOT_FOUND);
+    // Known paths with the wrong method are not routed either.
+    let signature = signature_of(9);
+    let post_verification =
+        harness.send(post(&format!("/web/verification/{signature}"), "application/json", "{}", &[])).await;
+    assert_eq!(post_verification.status, StatusCode::NOT_FOUND);
+    let post_game = harness.send(post(&format!("/web/games/{CREATOR}"), "application/json", "{}", &[])).await;
+    assert_eq!(post_game.status, StatusCode::NOT_FOUND);
     let root = harness.get("/web/").await;
     assert_eq!(root.status, StatusCode::NOT_FOUND);
     assert_eq!(root.header("content-type"), Some(JSON_CONTENT_TYPE));
