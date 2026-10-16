@@ -219,13 +219,15 @@ impl EventProcessor {
     /// concurrently and run in submission order.
     fn enqueue(self: &Arc<Self>, game_address: &str, job: Job) {
         let mut queues = self.queues.lock().unwrap();
-        if let Some(sender) = queues.get(game_address) {
-            if let Err(error) = sender.send(job) {
-                // Unreachable: workers deregister under this lock before exiting.
-                error.0.now_or_never();
-            }
-            return;
-        }
+        // Workers deregister under this lock before exiting, so a failed send
+        // means the worker was dropped with its runtime: start a new one.
+        let job = match queues.get(game_address) {
+            Some(sender) => match sender.send(job) {
+                Ok(()) => return,
+                Err(unsent) => unsent.0,
+            },
+            None => job,
+        };
         let (sender, receiver) = mpsc::unbounded_channel();
         let _ = sender.send(job);
         queues.insert(game_address.to_string(), sender);
@@ -236,16 +238,14 @@ impl EventProcessor {
 
     async fn run_queue(self: Arc<Self>, game: String, mut receiver: mpsc::UnboundedReceiver<Job>) {
         loop {
-            let job = match receiver.try_recv() {
-                Ok(job) => job,
-                Err(_) => {
-                    let mut queues = self.queues.lock().unwrap();
-                    match receiver.try_recv() {
-                        Ok(job) => job,
-                        Err(_) => {
-                            queues.remove(&game);
-                            return;
-                        }
+            // Checked under the queue lock, so `enqueue` never sends to a worker that is exiting.
+            let job = {
+                let mut queues = self.queues.lock().unwrap();
+                match receiver.try_recv() {
+                    Ok(job) => job,
+                    Err(_) => {
+                        queues.remove(&game);
+                        return;
                     }
                 }
             };
@@ -297,29 +297,25 @@ impl EventProcessor {
             return Ok(());
         }
         info!("🎧 Starting event listeners...");
-        let mut ids = Vec::new();
-        for event in &self.events {
-            let weak = Arc::downgrade(self);
-            let callback: EventCallback = Arc::new(move |dispatch| {
-                let weak = weak.clone();
-                async move {
-                    if let Some(processor) = weak.upgrade() {
-                        processor.notify_observers();
-                        processor.handle_dispatch(dispatch).await;
+        let listeners = self
+            .events
+            .iter()
+            .map(|event| {
+                let weak = Arc::downgrade(self);
+                let callback: EventCallback = Arc::new(move |dispatch| {
+                    let weak = weak.clone();
+                    async move {
+                        if let Some(processor) = weak.upgrade() {
+                            processor.notify_observers();
+                            processor.handle_dispatch(dispatch).await;
+                        }
                     }
-                }
-                .boxed()
-            });
-            match self.program.add_event_listener(*event, callback).await {
-                Ok(id) => ids.push(id),
-                Err(error) => {
-                    for id in ids {
-                        self.program.remove_event_listener(id).await;
-                    }
-                    return Err(error);
-                }
-            }
-        }
+                    .boxed()
+                });
+                (*event, callback)
+            })
+            .collect();
+        let ids = self.program.add_event_listeners(listeners).await?;
         state.listening = true;
         state.listener_ids = ids;
         self.set_listening(&state);
@@ -854,12 +850,25 @@ mod tests {
         panic_syncs: AtomicUsize,
         hold_syncs: std::sync::atomic::AtomicBool,
         release: Arc<tokio::sync::Notify>,
+        panic_auto_completes: AtomicUsize,
+        hold_auto_completes: std::sync::atomic::AtomicBool,
+        auto_release: Arc<tokio::sync::Notify>,
     }
 
     impl EventHooks for RecordingHooks {
         fn try_auto_complete(&self, _key: Option<Address>, game: String, trigger: String) -> BoxFuture<'static, ()> {
             self.auto_completes.lock().unwrap().push((game, trigger));
-            async {}.boxed()
+            if self.panic_auto_completes.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok()
+            {
+                return async { panic!("simulated auto-complete bug") }.boxed();
+            }
+            let hold = self.hold_auto_completes.load(Ordering::SeqCst).then(|| self.auto_release.clone());
+            async move {
+                if let Some(release) = hold {
+                    release.notified().await;
+                }
+            }
+            .boxed()
         }
         fn sync_player_registry(&self, request: RegistrySyncRequest) -> BoxFuture<'static, bool> {
             self.syncs.lock().unwrap().push(request);
@@ -889,10 +898,34 @@ mod tests {
     }
 
     fn harness(player_flush_debounce_ms: u64) -> Harness {
+        harness_with(Settings { player_flush_debounce_ms, ..Settings::default() })
+    }
+
+    struct Settings {
+        player_flush_debounce_ms: u64,
+        auto_complete_debounce_ms: u64,
+        registry_sync_timeout_ms: u64,
+        ws_endpoint: Option<String>,
+    }
+
+    impl Default for Settings {
+        fn default() -> Self {
+            Self {
+                player_flush_debounce_ms: 0,
+                auto_complete_debounce_ms: 0,
+                registry_sync_timeout_ms: 1_000,
+                ws_endpoint: None,
+            }
+        }
+    }
+
+    fn harness_with(settings: Settings) -> Harness {
+        let Settings { player_flush_debounce_ms, auto_complete_debounce_ms, registry_sync_timeout_ms, ws_endpoint } =
+            settings;
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(OracleDatabase::open(dir.path().join("o.sqlite").to_str().unwrap()).unwrap());
         let rpc = Arc::new(RpcPool::with_transport(&["https://a".into()], FakeTransport::new()).unwrap());
-        let program = ProgramClient::new(rpc, ContractVersion::V0_2_0, None);
+        let program = ProgramClient::new(rpc, ContractVersion::V0_2_0, ws_endpoint);
         let hooks = Arc::new(RecordingHooks::default());
         let weak: Weak<dyn EventHooks> = Arc::downgrade(&(hooks.clone() as Arc<dyn EventHooks>));
         let processor = EventProcessor::new(EventProcessorOptions {
@@ -902,9 +935,9 @@ mod tests {
             events: ALL_EVENTS.to_vec(),
             player_flush_debounce_ms,
             player_flush_max_operations: 50,
-            auto_complete_debounce_ms: 0,
+            auto_complete_debounce_ms,
             registry_sync_retry_delay_ms: 10,
-            registry_sync_timeout_ms: 1_000,
+            registry_sync_timeout_ms,
         });
         Harness { _dir: dir, db, hooks, processor }
     }
@@ -1158,5 +1191,334 @@ mod tests {
             threads.into_iter().for_each(|t| t.join().unwrap());
             wait_until(|| !h.processor.has_pending_registry_sync(&game)).await;
         }
+    }
+
+    fn tracked(h: &Harness) -> String {
+        h.db.save_secret_key(&game(), "secret", "hash").unwrap();
+        h.db.track_game(&game(), None, true).unwrap();
+        game()
+    }
+
+    /// Makes every `operation` (INSERT/UPDATE) on `table` fail from now on.
+    fn break_writes(h: &Harness, table: &str, operation: &str) {
+        let conn = rusqlite::Connection::open(h._dir.path().join("o.sqlite")).unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TRIGGER fail_{operation}_{table} BEFORE {operation} ON {table} BEGIN SELECT RAISE(ABORT, 'disk full'); END;"
+        ))
+        .unwrap();
+    }
+
+    fn unjoin(game: &str, ticket_index: u32, moved: Option<&str>) -> PlayerMembershipEvent {
+        PlayerMembershipEvent {
+            kind: MembershipKind::Unjoined,
+            moved_participant: moved.map(str::to_string),
+            ..join(game, "gone", ticket_index, 1)
+        }
+    }
+
+    fn initialized(game: &str) -> GameInitializedEvent {
+        GameInitializedEvent {
+            game_key: game.into(),
+            creator: "c".into(),
+            game_type: "Bet".into(),
+            ticket_amount: 1,
+            total_amount: 1,
+            max_tickets: 2,
+            min_tickets: 2,
+            token_mint: "m".into(),
+            is_private: false,
+            created_at: 0,
+            timeout: 0,
+            signature: "s".into(),
+            slot: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn listens_through_the_program_client_and_notifies_observers() {
+        let h =
+            harness_with(Settings { ws_endpoint: Some(crate::core::testing::ws_node().await), ..Settings::default() });
+        let game = tracked(&h);
+        let seen = Arc::new(AtomicUsize::new(0));
+        let counter = seen.clone();
+        h.processor.add_program_event_observer(Arc::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }));
+        let broken = h.processor.add_program_event_observer(Arc::new(|| panic!("observer bug")));
+
+        h.processor.start_listening().await.unwrap();
+        h.processor.start_listening().await.unwrap();
+        assert_eq!(h.processor.program.listener_count(), ALL_EVENTS.len(), "registered once");
+
+        let program = h.processor.program.clone();
+        program.dispatch(ProgramDispatch::PlayerMembership(join(&game, "p1", 0, 2))).await;
+        program.dispatch(ProgramDispatch::PlayerMembership(join(&game, "p2", 1, 2))).await;
+        assert_eq!(h.db.get_game_players(&game), vec!["p1".to_string(), "p2".to_string()]);
+        program.dispatch(ProgramDispatch::PlayerMembership(unjoin(&game, 0, Some("p2")))).await;
+        assert_eq!(h.db.get_game_players(&game), vec!["p2".to_string()], "the last player moved into the gap");
+        program.dispatch(ProgramDispatch::GameInitialized(initialized(&game))).await;
+        assert_eq!(seen.load(Ordering::SeqCst), 4, "a panicking observer does not stop the others");
+
+        h.processor.remove_program_event_observer(broken);
+        let closed =
+            GameClosedEvent { game_key: game.clone(), timestamp: 1, operator: false, signature: "c".into(), slot: 2 };
+        program.dispatch(ProgramDispatch::GameClosed(closed)).await;
+        wait_until(|| h.db.get_game_status(&game).as_deref() == Some("cancelled")).await;
+        assert!(h.db.get_game_players(&game).is_empty(), "closing clears the stale players");
+        assert_eq!(h.hooks.finalized.lock().unwrap().clone(), vec![game.clone()]);
+        assert_eq!(seen.load(Ordering::SeqCst), 5);
+
+        h.processor.stop_listening().await;
+        h.processor.stop_listening().await;
+        assert_eq!(program.listener_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_failed_subscription_registers_no_listeners() {
+        let refused = format!("ws://{}", std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap());
+        let h = harness_with(Settings { ws_endpoint: Some(refused), ..Settings::default() });
+        assert!(h.processor.start_listening().await.is_err());
+        assert_eq!(h.processor.program.listener_count(), 0);
+        assert!(!h.processor.is_listening());
+    }
+
+    #[tokio::test]
+    async fn ignores_invalid_addresses_and_unknown_games() {
+        let h = harness(0);
+        h.processor.handle_player_event(join("not-an-address", "p1", 0, 1)).await;
+        h.processor.handle_game_status_change(GameStatus::Completed, "not-an-address").await;
+        h.processor.handle_game_initialized(&initialized("not-an-address"));
+        h.processor.handle_game_initialized(&initialized(&game()));
+        assert_eq!(h.db.get_game_status(&game()), None, "no tracking row without a secret");
+        assert!(h.hooks.auto_completes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn database_failures_are_logged_without_stopping_later_events() {
+        let h = harness(0);
+        h.db.save_secret_key(&game(), "secret", "hash").unwrap();
+        break_writes(&h, "secret_keys", "UPDATE");
+        h.processor.handle_game_initialized(&initialized(&game()));
+        assert_eq!(h.db.get_game_status(&game()), None, "stops before tracking");
+
+        let h = harness(0);
+        h.db.save_secret_key(&game(), "secret", "hash").unwrap();
+        break_writes(&h, "game_tracking", "INSERT");
+        h.processor.handle_game_initialized(&initialized(&game()));
+        assert_eq!(h.db.get_game_status(&game()), None);
+
+        let h = harness(0);
+        let game = tracked(&h);
+        break_writes(&h, "game_players", "INSERT");
+        h.processor.handle_player_event(join(&game, "p1", 0, 1)).await;
+        assert!(h.db.get_game_players(&game).is_empty());
+        assert!(h.hooks.auto_completes.lock().unwrap().is_empty(), "nothing to complete after a failed write");
+        break_writes(&h, "game_tracking", "UPDATE");
+        h.processor.handle_game_status_change(GameStatus::Completed, &game).await;
+        assert_eq!(h.db.get_game_status(&game).as_deref(), Some("pending"));
+        assert!(h.hooks.finalized.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn debounced_joins_flush_on_their_timer() {
+        let h = harness(20);
+        let game = tracked(&h);
+        h.processor.handle_player_event(join(&game, "p1", 0, 2)).await;
+        h.processor.handle_player_event(join(&game, "p2", 1, 2)).await;
+        assert!(h.db.get_game_players(&game).is_empty(), "buffered");
+        wait_until(|| h.db.get_game_players(&game).len() == 2).await;
+        let calls = h.hooks.auto_completes.lock().unwrap().clone();
+        assert_eq!(calls, vec![(game.clone(), "debounce".to_string())], "one attempt for the batch");
+        wait_until(|| !h.processor.buffers.lock().unwrap().contains_key(&game)).await;
+    }
+
+    #[tokio::test]
+    async fn player_buffer_guards() {
+        let h = harness(0);
+        let game = tracked(&h);
+        // Nothing buffered: nothing to queue.
+        h.processor.flush_player_buffer(&game, "debounce", None);
+        h.processor.buffers.lock().unwrap().insert(game.clone(), PlayerBuffer::default());
+        h.processor.flush_player_buffer(&game, "debounce", None);
+        assert!(!h.processor.buffers.lock().unwrap().contains_key(&game), "an idle empty buffer is dropped");
+
+        h.processor.buffers.lock().unwrap().insert(game.clone(), PlayerBuffer { running: true, ..Default::default() });
+        h.processor.flush_player_buffer_serialized(&game, "status", None).await;
+        assert!(h.processor.buffers.lock().unwrap().contains_key(&game), "a running flush is left alone");
+        h.processor.buffers.lock().unwrap().insert(game.clone(), PlayerBuffer::default());
+        h.processor.flush_player_buffer_serialized(&game, "status", None).await;
+        assert!(!h.processor.buffers.lock().unwrap().contains_key(&game));
+
+        h.processor.buffers.lock().unwrap().insert(
+            game.clone(),
+            PlayerBuffer { timer: Some(tokio::spawn(std::future::pending())), ..Default::default() },
+        );
+        h.processor.flush_player_buffer(&game, "debounce", None);
+        wait_until(|| !h.processor.buffers.lock().unwrap().contains_key(&game)).await;
+    }
+
+    #[tokio::test]
+    async fn joins_buffered_during_a_flush_are_flushed_next() {
+        let h = harness(0);
+        let game = tracked(&h);
+        h.hooks.hold_auto_completes.store(true, Ordering::SeqCst);
+        let processor = h.processor.clone();
+        let first = tokio::spawn({
+            let game = game.clone();
+            async move { processor.handle_player_event(join(&game, "p1", 0, 2)).await }
+        });
+        wait_until(|| h.hooks.auto_completes.lock().unwrap().len() == 1).await;
+        // The flush is waiting on auto-complete; a join lands in its buffer meanwhile.
+        h.processor
+            .buffers
+            .lock()
+            .unwrap()
+            .get_mut(&game)
+            .unwrap()
+            .operations
+            .push(PlayerMutation::Joined { player_address: "p2".into(), ticket_index: 1 });
+        h.hooks.hold_auto_completes.store(false, Ordering::SeqCst);
+        h.hooks.auto_release.notify_one();
+        first.await.unwrap();
+        assert_eq!(h.db.get_game_players(&game), vec!["p1".to_string(), "p2".to_string()]);
+        assert!(!h.processor.buffers.lock().unwrap().contains_key(&game));
+    }
+
+    #[tokio::test]
+    async fn debounced_auto_completes_coalesce_and_finalizing_cancels_them() {
+        let h = harness_with(Settings { auto_complete_debounce_ms: 20, ..Settings::default() });
+        let game = tracked(&h);
+        h.processor.handle_player_event(join(&game, "p1", 0, 2)).await;
+        h.processor.handle_player_event(join(&game, "p2", 1, 2)).await;
+        assert!(h.hooks.auto_completes.lock().unwrap().is_empty(), "waiting for the debounce");
+        wait_until(|| !h.hooks.auto_completes.lock().unwrap().is_empty()).await;
+        settle().await;
+        assert_eq!(h.hooks.auto_completes.lock().unwrap().len(), 1);
+
+        let h = harness_with(Settings { auto_complete_debounce_ms: 60_000, ..Settings::default() });
+        let game = tracked(&h);
+        h.processor.handle_player_event(join(&game, "p1", 0, 2)).await;
+        assert!(h.processor.auto_completes.lock().unwrap().contains_key(&game));
+        h.processor.handle_game_status_change(GameStatus::Completed, &game).await;
+        assert!(!h.processor.auto_completes.lock().unwrap().contains_key(&game), "the timer is cancelled");
+        assert!(h.hooks.auto_completes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn auto_complete_reruns_when_asked_again_and_survives_a_panic() {
+        let h = harness(0);
+        let game = tracked(&h);
+        h.hooks.panic_auto_completes.store(1, Ordering::SeqCst);
+        h.processor.handle_player_event(join(&game, "p1", 0, 2)).await;
+        assert!(!h.processor.auto_completes.lock().unwrap().contains_key(&game), "a panic clears the running flag");
+
+        h.hooks.hold_auto_completes.store(true, Ordering::SeqCst);
+        let processor = h.processor.clone();
+        let running = tokio::spawn({
+            let game = game.clone();
+            async move { processor.handle_player_event(join(&game, "p2", 1, 2)).await }
+        });
+        wait_until(|| h.hooks.auto_completes.lock().unwrap().len() == 2).await;
+        // Another trigger while the attempt runs only marks it pending.
+        assert!(h.processor.schedule_auto_complete(&game, None, Some("again".into())).is_none());
+        h.hooks.hold_auto_completes.store(false, Ordering::SeqCst);
+        h.hooks.auto_release.notify_one();
+        running.await.unwrap();
+        let triggers: Vec<String> = h.hooks.auto_completes.lock().unwrap().iter().map(|(_, t)| t.clone()).collect();
+        assert_eq!(triggers, vec!["joined", "joined", "again"]);
+
+        // A flush with nothing pending does nothing.
+        h.processor.auto_completes.lock().unwrap().insert(game.clone(), AutoCompleteState::default());
+        h.processor.flush_auto_complete(&game).await;
+        assert_eq!(h.hooks.auto_completes.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn requests_during_a_retry_wait_join_the_retry() {
+        let h = harness(0);
+        h.hooks.fail_syncs.store(1, Ordering::SeqCst);
+        h.processor.schedule_registry_sync(sync_request(&game(), "first"));
+        wait_until(|| h.processor.registry.lock().unwrap().get(&game()).is_some_and(|e| e.timer_pending)).await;
+        h.processor.schedule_registry_sync(sync_request(&game(), "second"));
+        wait_until(|| !h.processor.has_pending_registry_sync(&game())).await;
+        let triggers: Vec<String> = h.hooks.syncs.lock().unwrap().iter().map(|r| r.trigger.clone()).collect();
+        assert_eq!(triggers, vec!["first".to_string(), "second".to_string()], "merged into one retry");
+    }
+
+    #[tokio::test]
+    async fn registry_syncs_time_out_or_run_unbounded() {
+        let h = harness_with(Settings { registry_sync_timeout_ms: 20, ..Settings::default() });
+        h.hooks.hold_syncs.store(true, Ordering::SeqCst);
+        h.processor.schedule_registry_sync(sync_request(&game(), "slow"));
+        wait_until(|| h.hooks.syncs.lock().unwrap().len() >= 2).await;
+        h.processor.cancel_registry_sync(&game());
+
+        let h = harness_with(Settings { registry_sync_timeout_ms: 0, ..Settings::default() });
+        h.processor.schedule_registry_sync(sync_request(&game(), "unbounded"));
+        wait_until(|| !h.processor.has_pending_registry_sync(&game())).await;
+        assert_eq!(h.hooks.syncs.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn registry_syncs_fail_once_the_service_is_gone() {
+        let h = harness(0);
+        let Harness { processor, hooks, _dir, db: _db } = h;
+        drop(hooks);
+        processor.schedule_registry_sync(sync_request(&game(), "orphan"));
+        wait_until(|| processor.registry.lock().unwrap().get(&game()).is_some_and(|e| e.failures > 0)).await;
+        processor.cancel_registry_sync(&game());
+    }
+
+    #[tokio::test]
+    async fn registry_guards_keep_one_worker_per_game() {
+        let h = harness(0);
+        h.hooks.fail_syncs.store(1, Ordering::SeqCst);
+        h.hooks.hold_syncs.store(true, Ordering::SeqCst);
+        h.processor.schedule_registry_sync(sync_request(&game(), "first"));
+        wait_until(|| h.hooks.syncs.lock().unwrap().len() == 1).await;
+        // A retry is already waiting when this attempt fails: both are merged.
+        h.processor.registry.lock().unwrap().get_mut(&game()).unwrap().retry_pending =
+            Some(sync_request(&game(), "waiting"));
+        h.hooks.hold_syncs.store(false, Ordering::SeqCst);
+        h.hooks.release.notify_one();
+        wait_until(|| h.processor.registry.lock().unwrap().get(&game()).is_some_and(|e| e.timer_pending)).await;
+        let retry = h.processor.registry.lock().unwrap().get(&game()).unwrap().retry_pending.clone().unwrap();
+        assert_eq!(retry.trigger, "first", "the newer request wins the merge");
+        // A worker started meanwhile: the timer hands it the retry instead of starting another.
+        h.processor.registry.lock().unwrap().get_mut(&game()).unwrap().running = true;
+        wait_until(|| h.processor.registry.lock().unwrap().get(&game()).is_some_and(|e| !e.timer_pending)).await;
+        let entry_queue = h.processor.registry.lock().unwrap().get(&game()).unwrap().queue.len();
+        assert_eq!(entry_queue, 1, "queued for the running worker");
+        assert_eq!(h.hooks.syncs.lock().unwrap().len(), 1, "no second worker ran it");
+        h.processor.cancel_registry_sync(&game());
+    }
+
+    #[test]
+    fn a_queue_outlives_a_dropped_runtime() {
+        let h = {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let h = runtime.block_on(async { harness(0) });
+            runtime.block_on(async {
+                h.processor.enqueue(&game(), std::future::pending().boxed());
+                tokio::task::yield_now().await;
+            });
+            h
+        };
+        // The worker went down with its runtime but is still registered.
+        assert!(h.processor.queues.lock().unwrap().contains_key(&game()));
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let (done, ran) = oneshot::channel();
+            h.processor.enqueue(
+                &game(),
+                async move {
+                    let _ = done.send(());
+                }
+                .boxed(),
+            );
+            tokio::time::timeout(Duration::from_secs(1), ran).await.unwrap().unwrap();
+            h.processor.enqueue(&game(), async { panic!("handler bug") }.boxed());
+            wait_until(|| !h.processor.queues.lock().unwrap().contains_key(&game())).await;
+        });
     }
 }

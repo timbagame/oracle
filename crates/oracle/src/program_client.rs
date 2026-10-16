@@ -115,10 +115,27 @@ impl ProgramClient {
         event: EventName,
         callback: EventCallback,
     ) -> anyhow::Result<u64> {
-        let id = self.next_listener_id.fetch_add(1, Ordering::SeqCst);
-        self.listeners.lock().unwrap().insert(id, (event, callback));
+        Ok(self.add_event_listeners(vec![(event, callback)]).await?[0])
+    }
+
+    /// Registers every listener, or none of them when the subscription cannot start.
+    pub async fn add_event_listeners(
+        self: &Arc<Self>,
+        listeners: Vec<(EventName, EventCallback)>,
+    ) -> anyhow::Result<Vec<u64>> {
+        let ids: Vec<u64> = {
+            let mut registered = self.listeners.lock().unwrap();
+            listeners
+                .into_iter()
+                .map(|listener| {
+                    let id = self.next_listener_id.fetch_add(1, Ordering::SeqCst);
+                    registered.insert(id, listener);
+                    id
+                })
+                .collect()
+        };
         if let Err(error) = self.ensure_subscription().await {
-            self.listeners.lock().unwrap().remove(&id);
+            self.listeners.lock().unwrap().retain(|id, _| !ids.contains(id));
             if self.listener_count() == 0 {
                 if let Some(timer) = self.state.lock().await.reconnect.take() {
                     timer.abort();
@@ -126,7 +143,7 @@ impl ProgramClient {
             }
             return Err(error);
         }
-        Ok(id)
+        Ok(ids)
     }
 
     pub async fn remove_event_listener(&self, id: u64) {

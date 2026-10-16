@@ -98,3 +98,27 @@ pub fn account_value(game: &GameAccount) -> Value {
         "executable": false
     }})
 }
+
+/// A websocket node that acknowledges every `logsSubscribe` and keeps the socket open.
+pub async fn ws_node() -> String {
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else { return };
+                while let Some(Ok(message)) = socket.next().await {
+                    if let Message::Text(text) = message {
+                        let request: Value = serde_json::from_str(&text).unwrap();
+                        let ack = json!({ "jsonrpc": "2.0", "id": request["id"], "result": 1 });
+                        let _ = socket.send(Message::Text(ack.to_string().into())).await;
+                    }
+                }
+            });
+        }
+    });
+    url
+}

@@ -522,13 +522,11 @@ fn render(input: &RenderInput<'_>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use futures::{SinkExt, StreamExt};
     use serde_json::json;
-    use tokio_tungstenite::tungstenite::Message;
 
     use super::*;
     use crate::config::OracleConfig;
-    use crate::core::testing::{account_value, game_account, harness, harness_with, Harness};
+    use crate::core::testing::{account_value, game_account, harness, harness_with, ws_node, Harness};
     use crate::indexed_events::{GameClosedEvent, GameCompletedEvent, PlayerMembershipEvent};
     use crate::solana::rpc::RpcError;
     use crate::solana::Keypair;
@@ -686,27 +684,6 @@ mod tests {
         assert!(screens[0].contains("n/a (slot unavailable)"), "{}", screens[0]);
         assert!(screens[2].contains("- RPC slot/time: ") && screens[2].contains("Status: completed (account missing)"));
         assert!(screens[2].contains("Tickets: 0 | Players(DB): 1"), "{}", screens[2]);
-    }
-
-    /// Acknowledges every `logsSubscribe` and keeps the sockets open.
-    async fn ws_node() -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("ws://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move {
-            while let Ok((stream, _)) = listener.accept().await {
-                tokio::spawn(async move {
-                    let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else { return };
-                    while let Some(Ok(message)) = socket.next().await {
-                        if let Message::Text(text) = message {
-                            let request: serde_json::Value = serde_json::from_str(&text).unwrap();
-                            let ack = json!({ "jsonrpc": "2.0", "id": request["id"], "result": 1 });
-                            let _ = socket.send(Message::Text(ack.to_string().into())).await;
-                        }
-                    }
-                });
-            }
-        });
-        url
     }
 
     fn membership(kind: MembershipKind, game: &str, player: &str, ticket_index: u32) -> ProgramDispatch {
