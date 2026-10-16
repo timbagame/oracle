@@ -41,10 +41,11 @@ guide before enabling stakes.
 
 ## Shared contracts and discovery
 
-API schemas, authorization input validation, caller action policy and lifecycle
-decisions are ported from `@timbagame/protocol/evm` and `protocol/games` into
-`src/protocol`. This service keeps its EVM-specific operator wallet, event index
-and durable signed transactions.
+API schemas, authorization input validation, contract bindings, event decoding
+and lifecycle decisions come from the shared `timba-protocol` crate (`evm` feature),
+the Rust port of `@timbagame/protocol`. This service keeps its EVM-specific operator
+wallet, event index, durable signed transactions and the vendored viem helper
+bytecode in `src/bytecode.rs`.
 
 `GET /evm/config` includes the current recovery buffer. `GET /evm/games` lists
 indexed public games in pages of 20 (`offset`, response `nextOffset`). The optional

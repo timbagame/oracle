@@ -3948,6 +3948,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "timba-common",
+ "timba-protocol",
  "tokio",
  "tower",
  "url",
@@ -3990,6 +3991,9 @@ name = "timba-protocol"
 version = "0.15.0"
 source = "git+https://github.com/timbagame/protocol?tag=v0.15.0#3e36b3dc8d9a685ef0c633159842cc63c1422b17"
 dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "anyhow",
  "base64",
  "bs58",
  "curve25519-dalek",

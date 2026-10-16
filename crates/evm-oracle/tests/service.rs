@@ -12,13 +12,12 @@ use alloy_sol_types::{SolCall, SolEvent, SolValue};
 use common::*;
 use serde_json::{json, Value};
 use timba_evm_oracle::config::EvmConfig;
-use timba_evm_oracle::protocol::abi::{completeGameCall, CreateRequest, PlayerJoined};
-use timba_evm_oracle::protocol::client::{
-    commitment_for, complete_game_transaction, creation_digest, game_id_for, private_join_digest,
-};
-use timba_evm_oracle::protocol::schema::parse_bytes32;
 use timba_evm_oracle::rpc::{recover_address, RpcError};
 use timba_evm_oracle::store::{PendingTransaction, StoredGame};
+use timba_protocol::evm::abi::{completeGameCall, CreateRequest, PlayerJoined};
+use timba_protocol::evm::client::{complete_game_transaction, creation_digest, game_id_for, private_join_digest};
+use timba_protocol::evm::randomness::commitment_for;
+use timba_protocol::evm::schema::parse_bytes32;
 
 fn reverted() -> RpcError {
     RpcError::Node { code: 3, message: "execution reverted".into(), data: Some(json!("0x")) }
@@ -282,8 +281,8 @@ mod private_join {
         })
     }
 
-    fn private_game(status: u8, is_private: bool) -> timba_evm_oracle::protocol::abi::Game {
-        timba_evm_oracle::protocol::abi::Game { isPrivate: is_private, status, ..fake_game() }
+    fn private_game(status: u8, is_private: bool) -> timba_protocol::evm::abi::Game {
+        timba_protocol::evm::abi::Game { isPrivate: is_private, status, ..fake_game() }
     }
 
     #[tokio::test]
@@ -577,8 +576,8 @@ mod tick_settlement {
         let now = fake.chain.state().now;
         seed(&fake, GAME_A, SECRET_A, None);
         seed(&fake, GAME_B, SECRET_B, Some(now - 400));
-        fake.chain.state().games.insert(GAME_A, timba_evm_oracle::protocol::abi::Game { status: 2, ..fake_game() });
-        fake.chain.state().games.insert(GAME_B, timba_evm_oracle::protocol::abi::Game { status: 0, ..fake_game() });
+        fake.chain.state().games.insert(GAME_A, timba_protocol::evm::abi::Game { status: 2, ..fake_game() });
+        fake.chain.state().games.insert(GAME_B, timba_protocol::evm::abi::Game { status: 0, ..fake_game() });
 
         fake.service.tick().await.unwrap();
 
@@ -600,7 +599,7 @@ mod tick_settlement {
         seed(&fake, GAME_A, SECRET_A, None);
         fake.chain.state().games.insert(
             GAME_A,
-            timba_evm_oracle::protocol::abi::Game { participants: vec![creator()], expiresAt: now + 60, ..fake_game() },
+            timba_protocol::evm::abi::Game { participants: vec![creator()], expiresAt: now + 60, ..fake_game() },
         );
 
         fake.service.tick().await.unwrap();

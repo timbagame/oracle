@@ -11,8 +11,8 @@ use alloy_sol_types::{SolCall, SolValue};
 use futures::future::BoxFuture;
 use serde_json::{json, Value};
 
+use crate::bytecode::{DEPLOYLESS_CALL_BYTECODE, ERC6492_VALIDATOR_BYTECODE, MULTICALL3_BYTECODE};
 use crate::erc8010::{self, SignedAuthorization, Wrapped, ERC1271_MAGIC};
-use crate::protocol::abi::{DEPLOYLESS_CALL_BYTECODE, ERC6492_VALIDATOR_BYTECODE, MULTICALL3_BYTECODE};
 
 /// Per-endpoint request timeout (`http(url, { timeout: 3_000 })`).
 pub const RPC_TIMEOUT: Duration = Duration::from_millis(3_000);
@@ -308,7 +308,7 @@ fn parse_block(value: &Value) -> Result<Block, RpcError> {
 fn parse_log(value: &Value) -> Result<RpcLog, RpcError> {
     let address = value["address"]
         .as_str()
-        .and_then(crate::protocol::schema::parse_address)
+        .and_then(timba_protocol::evm::schema::parse_address)
         .ok_or_else(|| RpcError::InvalidResponse("log address is invalid".into()))?;
     let topics = value["topics"]
         .as_array()
@@ -317,7 +317,7 @@ fn parse_log(value: &Value) -> Result<RpcLog, RpcError> {
         .map(|topic| {
             topic
                 .as_str()
-                .and_then(crate::protocol::schema::parse_bytes32)
+                .and_then(timba_protocol::evm::schema::parse_bytes32)
                 .ok_or_else(|| RpcError::InvalidResponse("log topic is invalid".into()))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -623,7 +623,7 @@ mod tests {
     async fn reports_missing_blocks_and_empty_contract_results() {
         let error = answering(Value::Null).get_block(Some(9)).await.unwrap_err();
         assert_eq!(error.to_string(), RpcError::InvalidResponse("Block could not be found".into()).to_string());
-        let call = crate::protocol::abi::creationNoncesCall { creator: Address::ZERO };
+        let call = timba_protocol::evm::abi::creationNoncesCall { creator: Address::ZERO };
         let error = answering(json!("0x")).read_contract(Address::ZERO, &call).await.unwrap_err();
         assert_eq!(error.to_string(), "The contract function \"creationNonces(address)\" returned no data (\"0x\")");
     }

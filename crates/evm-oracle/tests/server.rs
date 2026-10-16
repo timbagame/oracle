@@ -211,7 +211,7 @@ async fn pages_public_games_with_their_on_chain_state() {
         fake.chain
             .state()
             .games
-            .insert(*id, timba_evm_oracle::protocol::abi::Game { minPlayers: index as u32 + 1, ..fake_game() });
+            .insert(*id, timba_protocol::evm::abi::Game { minPlayers: index as u32 + 1, ..fake_game() });
     }
     let router = router(&fake);
 
@@ -268,7 +268,7 @@ async fn rejects_malformed_game_list_queries() {
 async fn serves_a_single_game_with_its_events() {
     let fake = setup();
     insert_created(&fake, 1, &game_id().to_string());
-    fake.chain.state().games.insert(game_id(), timba_evm_oracle::protocol::abi::Game { maxPlayers: 4, ..fake_game() });
+    fake.chain.state().games.insert(game_id(), timba_protocol::evm::abi::Game { maxPlayers: 4, ..fake_game() });
 
     let path = format!("/evm/games/{}", game_id().to_string().to_uppercase().replacen("0X", "0x", 1));
     let game = body(send(&router(&fake), get(&path)).await).await;
@@ -322,9 +322,9 @@ async fn forwards_authorization_and_invitation_bodies_to_the_service() {
     assert_eq!(authorization["request"]["amount"], "100");
 
     let private = B256::repeat_byte(0x44);
-    fake.chain.state().games.insert(private, timba_evm_oracle::protocol::abi::Game { isPrivate: true, ..fake_game() });
+    fake.chain.state().games.insert(private, timba_protocol::evm::abi::Game { isPrivate: true, ..fake_game() });
     let deadline = fake.chain.state().now + 60;
-    let digest = timba_evm_oracle::protocol::client::private_join_digest(
+    let digest = timba_protocol::evm::client::private_join_digest(
         &fake.service.deployment,
         private,
         player(),

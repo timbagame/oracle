@@ -1,15 +1,17 @@
-//! Byte-for-byte conformance with the TypeScript protocol package and viem. The fixtures in
-//! `fixtures/viem.json` were produced by `@timbagame/protocol` 0.14.2 with viem 2.57.7.
+//! Byte-for-byte conformance of the oracle's wallet, signatures and transactions with viem.
+//! The fixtures in `fixtures/viem.json` were produced by `@timbagame/protocol` 0.14.2 with
+//! viem 2.57.7. `timba-protocol` checks the protocol values themselves against its own package.
 
 use alloy_primitives::{Address, Bytes, B256, U256};
 use serde_json::Value;
-use timba_evm_oracle::protocol::abi::{CreateRequest, ERC6492_VALIDATOR_BYTECODE};
-use timba_evm_oracle::protocol::client::{
-    commitment_for, complete_game_transaction, creation_digest, game_id_for, private_join_digest, EvmDeployment,
-};
-use timba_evm_oracle::protocol::events::{decode_evm_game_event, EvmLog};
+use timba_evm_oracle::bytecode::ERC6492_VALIDATOR_BYTECODE;
 use timba_evm_oracle::rpc::recover_address;
 use timba_evm_oracle::wallet::{Fees, OperatorWallet, PreparedTransaction};
+use timba_protocol::evm::abi::CreateRequest;
+use timba_protocol::evm::client::{
+    complete_game_transaction, creation_digest, game_id_for, private_join_digest, EvmDeployment,
+};
+use timba_protocol::evm::randomness::commitment_for;
 
 fn fixtures() -> Value {
     serde_json::from_str(include_str!("fixtures/viem.json")).unwrap()
@@ -77,18 +79,6 @@ fn typed_data_digests_and_signatures_match_viem() {
 }
 
 #[test]
-fn domain_rejects_unsupported_deployments() {
-    let mut unsupported = deployment();
-    unsupported.version = "0.2.0".into();
-    let error = game_id_for(&unsupported, Address::ZERO, U256::ZERO).unwrap_err();
-    assert_eq!(error.to_string(), "Unsupported EVM contract version");
-    let mut chain = deployment();
-    chain.chain_id = 0;
-    let error = game_id_for(&chain, Address::ZERO, U256::ZERO).unwrap_err();
-    assert_eq!(error.to_string(), "Invalid EVM chain ID");
-}
-
-#[test]
 fn settlement_transactions_match_viem_serialization() {
     let fixtures = fixtures();
     let operator = OperatorWallet::new(key(1)).unwrap();
@@ -120,52 +110,4 @@ fn validator_call_matches_viem_deploy_data() {
     let mut data = hex::decode(ERC6492_VALIDATOR_BYTECODE.trim_start_matches("0x")).unwrap();
     data.extend((creator, digest, signature).abi_encode_params());
     assert_eq!(Bytes::from(data).to_string(), text(&fixtures["validatorCall"]));
-}
-
-#[test]
-fn decoded_events_match_the_protocol_json() {
-    let fixtures = fixtures();
-    for log in fixtures["logs"].as_array().unwrap() {
-        let decoded = decode_evm_game_event(
-            &deployment(),
-            &EvmLog {
-                chain_id: 31337,
-                address: text(&log["address"]).parse().unwrap(),
-                data: text(&log["data"]).parse().unwrap(),
-                topics: log["topics"].as_array().unwrap().iter().map(|topic| text(topic).parse().unwrap()).collect(),
-                removed: false,
-            },
-        )
-        .unwrap();
-        let json = decoded.map_or(Value::Null, |event| event.to_json());
-        // Compare serialized text so key order is checked too.
-        assert_eq!(json.to_string(), log["decoded"].to_string(), "{}", log["eventName"]);
-    }
-}
-
-#[test]
-fn event_decoding_guards_chain_address_and_removal() {
-    let fixtures = fixtures();
-    let joined = &fixtures["logs"][2];
-    let log = EvmLog {
-        chain_id: 31337,
-        address: Address::repeat_byte(0x11),
-        data: text(&joined["data"]).parse().unwrap(),
-        topics: joined["topics"].as_array().unwrap().iter().map(|topic| text(topic).parse().unwrap()).collect(),
-        removed: false,
-    };
-    let other_chain = EvmLog { chain_id: 1, ..log.clone() };
-    let error = decode_evm_game_event(&deployment(), &other_chain).unwrap_err();
-    assert_eq!(error.to_string(), "Log belongs to another chain");
-    let foreign = EvmLog { address: Address::repeat_byte(0x44), ..log.clone() };
-    assert_eq!(decode_evm_game_event(&deployment(), &foreign).unwrap(), None);
-    let removed = EvmLog { removed: true, ..log.clone() };
-    let error = decode_evm_game_event(&deployment(), &removed).unwrap_err();
-    assert_eq!(error.to_string(), "Removed log requires rollback");
-    let unknown = EvmLog { topics: vec![B256::repeat_byte(0x99)], ..log.clone() };
-    assert_eq!(decode_evm_game_event(&deployment(), &unknown).unwrap(), None);
-    let truncated = EvmLog { data: Bytes::from(vec![0u8; 32]), ..log.clone() };
-    assert!(decode_evm_game_event(&deployment(), &truncated).is_err());
-    let missing_topic = EvmLog { topics: log.topics[..2].to_vec(), ..log };
-    assert!(decode_evm_game_event(&deployment(), &missing_topic).is_err());
 }

@@ -11,9 +11,9 @@ use futures::StreamExt;
 use serde_json::{json, Value};
 use timba_common::security::{has_valid_bearer_token, MAX_REQUEST_BODY_BYTES};
 
-use crate::protocol::abi::configCall;
-use crate::protocol::schema::{parse_address, parse_bytes32};
 use crate::service::{game_json, EvmService};
+use timba_protocol::evm::abi::configCall;
+use timba_protocol::evm::schema::{parse_address, parse_bytes32};
 
 /// Requests allowed per one-second window across all routes.
 const REQUESTS_PER_SECOND: u32 = 30;
