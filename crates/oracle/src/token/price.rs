@@ -146,17 +146,22 @@ impl JupiterTokenPriceResolver {
             let mut in_flight = self.inner.in_flight.lock().unwrap();
             let to_fetch: Vec<String> = missing.iter().filter(|m| !in_flight.contains_key(*m)).cloned().collect();
             if !to_fetch.is_empty() {
-                let request = fetch_prices(self.inner.clone(), to_fetch.clone(), api_key).boxed().shared();
+                // Spawned so the fetch (and its cache fill) finishes even if every
+                // waiting request is dropped, like the TypeScript promise.
+                let inner = self.inner.clone();
+                let mints = to_fetch.clone();
+                let task = tokio::spawn(async move {
+                    let _done = Settled { inner: inner.clone(), mints: mints.clone() };
+                    fetch_prices(inner, mints, api_key).await
+                });
+                let request = async move { task.await.unwrap_or_else(|error| Err(format!("Price fetch failed: {error}"))) }
+                    .boxed()
+                    .shared();
                 for mint in to_fetch {
-                    let inner = self.inner.clone();
-                    let key = mint.clone();
                     let request = request.clone();
-                    let entry: BoxFuture<'static, Result<Option<f64>, String>> = async move {
-                        let result = request.await.map(|prices| prices.get(&key).copied());
-                        inner.in_flight.lock().unwrap().remove(&key);
-                        result
-                    }
-                    .boxed();
+                    let key = mint.clone();
+                    let entry: BoxFuture<'static, Result<Option<f64>, String>> =
+                        async move { request.await.map(|prices| prices.get(&key).copied()) }.boxed();
                     in_flight.insert(mint, entry.shared());
                 }
             }
@@ -176,6 +181,21 @@ impl JupiterTokenPriceResolver {
             }
         }
         Ok(prices)
+    }
+}
+
+/// Clears the in-flight entries when a fetch ends, even by panicking.
+struct Settled {
+    inner: Arc<Inner>,
+    mints: Vec<String>,
+}
+
+impl Drop for Settled {
+    fn drop(&mut self) {
+        let mut in_flight = self.inner.in_flight.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        for mint in &self.mints {
+            in_flight.remove(mint);
+        }
     }
 }
 
@@ -272,6 +292,58 @@ mod tests {
         let with_c = vec!["C".to_string()];
         assert!(r.prices(&with_c, false).await.unwrap_err().to_string().contains("valid price for C"));
         assert!(r.prices(&with_c, true).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn finishes_fetches_whose_callers_went_away() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(tokio::sync::Notify::new());
+        let fetcher: PriceFetcher = {
+            let (calls, release) = (calls.clone(), release.clone());
+            Arc::new(move |_, _| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let release = release.clone();
+                async move {
+                    release.notified().await;
+                    Ok((200, json!({"A": {"usdPrice": 4}})))
+                }
+                .boxed()
+            })
+        };
+        let r = JupiterTokenPriceResolver::with_fetcher(Some("k".into()), "", fetcher, Arc::new(|| 0));
+        let mints = vec!["A".to_string()];
+        // The caller gives up (client disconnect) while the request is in flight.
+        assert!(tokio::time::timeout(Duration::from_millis(20), r.prices(&mints, false)).await.is_err());
+        release.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !r.inner.in_flight.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(r.prices(&mints, false).await.unwrap()["A"], 4.0);
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "the second call is served from the cache");
+    }
+
+    #[tokio::test]
+    async fn reports_a_panicking_fetch_and_retries_next_time() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fetcher: PriceFetcher = {
+            let calls = calls.clone();
+            Arc::new(move |_, _| {
+                let first = calls.fetch_add(1, Ordering::SeqCst) == 0;
+                async move {
+                    assert!(!first, "fetcher bug");
+                    Ok((200, json!({"A": {"usdPrice": 1}})))
+                }
+                .boxed()
+            })
+        };
+        let r = JupiterTokenPriceResolver::with_fetcher(Some("k".into()), "", fetcher, Arc::new(|| 0));
+        let error = r.prices(&["A".into()], false).await.unwrap_err().to_string();
+        assert!(error.starts_with("Price fetch failed"), "{error}");
+        assert_eq!(r.prices(&["A".into()], false).await.unwrap()["A"], 1.0);
     }
 
     #[tokio::test]
