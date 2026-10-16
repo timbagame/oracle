@@ -8,6 +8,7 @@ pub mod http;
 pub mod indexed_events;
 pub mod metrics;
 pub mod program_client;
+pub mod server;
 pub mod solana;
 pub mod token;
 pub mod types;
