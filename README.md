@@ -121,7 +121,8 @@ the quadlet `EnvironmentFile=`. Other subcommands are listed by
 `timba-oracle --help`: `admin`, `attempt-completion`, `inspect-game`,
 `inspect-oracle`, `audit-random`, `manual-shutdown`, `import-indexer` and
 `healthcheck`. The opt-in EVM oracle is the separate `timba-evm-oracle` binary,
-configured by `EVM_CONFIG_FILE`.
+configured by `EVM_CONFIG_FILE`; its API is documented in
+[`crates/evm-oracle/README.md`](crates/evm-oracle/README.md).
 
 ## ⚙️ Configuration
 
