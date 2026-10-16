@@ -3,6 +3,7 @@
 pub mod config;
 pub mod core;
 pub mod db;
+pub mod http;
 pub mod indexed_events;
 pub mod metrics;
 pub mod program_client;

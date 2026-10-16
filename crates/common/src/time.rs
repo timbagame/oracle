@@ -1,4 +1,19 @@
+use std::sync::OnceLock;
+use std::time::Instant;
+
 use chrono::{SecondsFormat, TimeZone, Utc};
+
+static PROCESS_START: OnceLock<Instant> = OnceLock::new();
+
+/// Records the process start; call first thing in `main`.
+pub fn mark_process_start() {
+    PROCESS_START.get_or_init(Instant::now);
+}
+
+/// Seconds since [`mark_process_start`] (Node's `process.uptime()`).
+pub fn uptime_secs() -> f64 {
+    PROCESS_START.get_or_init(Instant::now).elapsed().as_secs_f64()
+}
 
 /// JavaScript `new Date().toISOString()`.
 pub fn now_iso() -> String {

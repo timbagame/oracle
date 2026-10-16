@@ -727,6 +727,11 @@ impl OracleService {
         None
     }
 
+    /// [`Self::queue_game_completion`] for callers holding a plain reference.
+    pub fn queue_completion(&self, game_address: &str) -> Option<CompletionResult> {
+        self.weak_self.upgrade().and_then(|service| service.queue_game_completion(game_address))
+    }
+
     pub fn requeue_game(&self, game_address: &str) -> Result<(), RequeueFailure> {
         let normalized = game_address.trim();
         if normalized.is_empty() {
