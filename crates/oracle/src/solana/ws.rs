@@ -11,6 +11,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 const PING_INTERVAL: Duration = Duration::from_secs(5);
 const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Silence after which a socket counts as dead (three missed pings).
 const PONG_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, PartialEq)]
@@ -89,6 +91,15 @@ async fn open_subscription(ws_url: &str, mentions: &Address) -> Result<Socket, S
 /// Opens the websocket and waits until the node acknowledges the
 /// subscription, like kit's `subscribe()`.
 pub async fn subscribe_logs(ws_url: &str, mentions: &Address) -> Result<LogsSubscription, String> {
+    subscribe_logs_with(ws_url, mentions, PING_INTERVAL, PONG_TIMEOUT).await
+}
+
+async fn subscribe_logs_with(
+    ws_url: &str,
+    mentions: &Address,
+    ping_interval: Duration,
+    pong_timeout: Duration,
+) -> Result<LogsSubscription, String> {
     // Bound the connect and TLS handshake too: a stalled endpoint must not hang the
     // caller (and the subscription lock it holds) forever.
     let mut socket = tokio::time::timeout(SUBSCRIBE_TIMEOUT, open_subscription(ws_url, mentions))
@@ -96,7 +107,7 @@ pub async fn subscribe_logs(ws_url: &str, mentions: &Address) -> Result<LogsSubs
         .map_err(|_| "Timed out waiting for logsSubscribe acknowledgement".to_string())??;
     let (sender, receiver) = mpsc::channel(256);
     let task = tokio::spawn(async move {
-        let mut ping = tokio::time::interval(PING_INTERVAL);
+        let mut ping = tokio::time::interval(ping_interval);
         ping.tick().await;
         // Any frame (pongs included) proves the socket is alive; a half-open TCP
         // connection otherwise goes unnoticed until the OS gives up retransmitting.
@@ -104,7 +115,7 @@ pub async fn subscribe_logs(ws_url: &str, mentions: &Address) -> Result<LogsSubs
         loop {
             tokio::select! {
                 _ = ping.tick() => {
-                    if last_seen.elapsed() > PONG_TIMEOUT {
+                    if last_seen.elapsed() > pong_timeout {
                         let _ = sender.send(Err("WebSocket stopped answering pings".into())).await;
                         return;
                     }
@@ -251,7 +262,7 @@ mod tests {
         assert_eq!(err, "Timed out waiting for logsSubscribe acknowledgement");
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn ends_the_stream_when_pings_go_unanswered() {
         let url = ws_server(|mut ws| async move {
             ws.next().await;
@@ -261,7 +272,12 @@ mod tests {
             std::future::pending::<()>().await;
         })
         .await;
-        let mut sub = subscribe_logs(&url, &Address([1; 32])).await.unwrap();
+        // Real time with short intervals: paused time would also fire the subscribe
+        // timeout while the handshake is still in flight on a loaded machine.
+        let mut sub =
+            subscribe_logs_with(&url, &Address([1; 32]), Duration::from_millis(20), Duration::from_millis(100))
+                .await
+                .unwrap();
         assert_eq!(sub.next().await.unwrap().unwrap_err(), "WebSocket stopped answering pings");
     }
 

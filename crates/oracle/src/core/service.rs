@@ -3,6 +3,7 @@
 //! `oracle-service.ts`).
 
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -821,12 +822,30 @@ impl OracleService {
             }
             Admission::Cooldown(_) | Admission::Denied => return futures::future::ready(None).boxed(),
         }
+        // The guard exists before the future is first polled, so a run dropped
+        // unpolled (runtime shutdown) still releases its slot for close().
         self.active_runs.send_modify(|n| *n += 1);
+        let guard = RunGuard(self.clone());
         let service = self.clone();
         async move {
-            let _guard = RunGuard(service.clone());
+            let _guard = guard;
+            let game_address = options.game_address.clone();
             let game_key = options.game_key;
-            service.run_auto_complete_attempt(options, game_key, trigger, retry_attempt, mode).await
+            let run = service.clone().run_auto_complete_attempt(options, game_key, trigger, retry_attempt, mode);
+            match AssertUnwindSafe(run).catch_unwind().await {
+                Ok(result) => result,
+                Err(_) => {
+                    // Without this the Active retry entry would deny every later
+                    // trigger for the game until a restart.
+                    error!("Auto-completion attempt for {game_address} panicked");
+                    service.cancel_completion_retry(&game_address);
+                    log_db_error(
+                        service.db.increment_completion_attempts(&game_address),
+                        "Failed to increment completion attempts",
+                    );
+                    None
+                }
+            }
         }
         .boxed()
     }
@@ -898,7 +917,13 @@ impl OracleService {
             // callbacks cannot start a second retry burst.
             return Admission::Denied;
         }
-        self.retries.lock().unwrap().insert(
+        // The map was unlocked for the database reads above; another trigger may
+        // have been admitted meanwhile, and only one lifecycle may own the game.
+        let mut retries = self.retries.lock().unwrap();
+        if retries.contains_key(game_address) {
+            return Admission::Denied;
+        }
+        retries.insert(
             game_address.to_string(),
             CompletionRetry {
                 phase: RetryPhase::Active,
@@ -2076,6 +2101,65 @@ mod tests {
         h.service.db.mark_game_completed(&racing).unwrap();
         assert_eq!(attempt.await, None);
         assert!(!h.service.retries.lock().unwrap().contains_key(&racing));
+    }
+
+    #[tokio::test]
+    async fn a_panicking_attempt_releases_the_game() {
+        let h = harness();
+        let (game, _) = ready_game(&h);
+        // A bug in a log formatter panics inside the attempt.
+        let options = AttemptOptions {
+            success_log: Some(Arc::new(|_: &str, _: Option<&str>| -> String { panic!("simulated bug in a log hook") })),
+            ..AttemptOptions::new(&game)
+        };
+        let attempt = h.service.start_automatic_completion_attempt(
+            options,
+            "player joined".into(),
+            0,
+            false,
+            RetryMode::Transient,
+        );
+        assert_eq!(attempt.await, None);
+        assert!(!h.service.retries.lock().unwrap().contains_key(&game), "retry entry released");
+        assert_eq!(*h.service.active_runs.borrow(), 0);
+        assert_eq!(h.service.db.get_completion_attempt_state(&game).unwrap().completion_attempts, 1);
+    }
+
+    #[tokio::test]
+    async fn dropping_an_unpolled_attempt_releases_its_run_slot() {
+        let h = harness();
+        let game = pending_game(&h);
+        let attempt = h.service.start_automatic_completion_attempt(
+            AttemptOptions::new(&game),
+            "player joined".into(),
+            0,
+            false,
+            RetryMode::Transient,
+        );
+        assert_eq!(*h.service.active_runs.borrow(), 1);
+        drop(attempt);
+        assert_eq!(*h.service.active_runs.borrow(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_triggers_admit_one_lifecycle() {
+        for _ in 0..20 {
+            let h = harness();
+            let game = pending_game(&h);
+            let barrier = Arc::new(std::sync::Barrier::new(8));
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    let (service, game, barrier) = (h.service.clone(), game.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        service.admit_automatic_completion(&game, None, "player joined", 0, RetryMode::Transient)
+                    })
+                })
+                .collect();
+            let allowed =
+                handles.into_iter().map(|h| h.join().unwrap()).filter(|a| matches!(a, Admission::Allowed)).count();
+            assert_eq!(allowed, 1);
+        }
     }
 
     #[tokio::test]
