@@ -401,7 +401,7 @@ mod tests {
             format!("Program {other} invoke [2]"),
             format!("Program data: {payload}"),
             format!("Program {other} success"),
-            format!("Program data: AAAA"),
+            "Program data: AAAA".to_string(),
             format!("Program data: {payload}"),
             format!("Program {program} success"),
             format!("Program data: {payload}"),
