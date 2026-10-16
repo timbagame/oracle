@@ -233,18 +233,19 @@ impl CompletionManager {
                 ResolveOptions { context, readiness, require_on_chain: true, ..ResolveOptions::default() },
             )
             .await?;
-        let (context, readiness) = match state {
-            ReadinessResolution::MissingContext => {
+        let (context, game) = match state {
+            ReadinessResolution::Resolved { ready: false, .. } => return Ok(CompletionResult::not_ready()),
+            ReadinessResolution::Resolved {
+                context, readiness: Readiness { game_account: Some(game), .. }, ..
+            } => (context, game),
+            // Requiring the game on-chain means a resolution always carries its
+            // account; one that does not is as unusable as a missing context.
+            ReadinessResolution::MissingContext | ReadinessResolution::Resolved { .. } => {
                 return Ok(self.record_fatal(game_address, NO_SECRET_KEY_MESSAGE));
             }
-            ReadinessResolution::Resolved { ready: false, .. } => return Ok(CompletionResult::not_ready()),
-            ReadinessResolution::Resolved { context, readiness, .. } => (context, readiness),
         };
-        if readiness.game_account.is_none() {
-            return Ok(self.record_fatal(game_address, "On-chain game account unavailable"));
-        }
 
-        let details = match self.resolve_winner_details(game_address, &readiness, &context).await? {
+        let details = match self.resolve_winner_details(game_address, game, &context).await? {
             Ok(details) => details,
             Err(result) => return Ok(result),
         };
@@ -270,12 +271,9 @@ impl CompletionManager {
     async fn resolve_winner_details(
         &self,
         game_address: &str,
-        readiness: &Readiness,
+        game: GameAccount,
         context: &GameContext,
     ) -> anyhow::Result<Result<WinnerDetails, CompletionResult>> {
-        let Some(game) = readiness.game_account.clone() else {
-            return Ok(Err(self.record_fatal(game_address, "On-chain game account unavailable")));
-        };
         // A damaged row must not be revealed as a zero-padded secret, which the
         // program rejects only after the transaction fee is spent.
         let secret = match hex::decode(&context.secret.secret_key) {
@@ -288,10 +286,8 @@ impl CompletionManager {
             Err(message) => return Ok(Err(self.record_fatal(game_address, message))),
         };
         let winner_index = self.calculate_winner_index(&secret, game.last_slot, players.len() as u64)?;
-        let Some(winner) = players.get(winner_index as usize) else {
-            return Ok(Err(self.record_fatal(game_address, "Unable to determine winner")));
-        };
-        let Ok(winner) = Address::parse(winner) else {
+        // The registry holds at least one player and the draw is below the player count.
+        let Ok(winner) = Address::parse(&players[winner_index as usize]) else {
             return Ok(Err(self.record_fatal(game_address, "Winner address is invalid")));
         };
         let mut secret_key = [0u8; 32];
@@ -567,7 +563,7 @@ pub fn is_game_ready(game: &GameAccount, evaluated_at: i64) -> bool {
 mod tests {
     use super::*;
     use crate::core::registry::{RecoverPlayerRegistry, RecoverRequest};
-    use crate::core::testing::{account_value, game_account};
+    use crate::core::testing::{account_value, fail_updates, game_account};
     use crate::db::SecretKeyData;
     use crate::metrics::CompletionOutcome;
     use crate::solana::pool::testing::FakeTransport;
@@ -980,6 +976,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failures_are_returned_even_when_the_database_rejects_them() {
+        let h = harness(None);
+        h.db.track_game("no-secret", None, false).unwrap();
+        fail_updates(
+            h._dir.path(),
+            "no_failures",
+            "game_tracking",
+            "NEW.completion_attempts <> OLD.completion_attempts",
+        );
+        let result = h.manager.complete_game("no-secret", None, None).await;
+        assert_eq!(result, CompletionResult::failure(NO_SECRET_KEY_MESSAGE));
+        assert_eq!(h.db.get_completion_attempt_state("no-secret").unwrap().completion_attempts, 0);
+    }
+
+    #[tokio::test]
+    async fn a_landed_completion_succeeds_even_if_the_database_cannot_record_it() {
+        let h = harness(None);
+        let (address, _, _) = store_game(&h, [0x32; 32]);
+        h.db.replace_game_players(&address, &players(1)).unwrap();
+        serve_game(&h, Some(game_account(1, 1, 1, 0, 60)));
+        serve_submission(&h);
+        fail_updates(h._dir.path(), "no_completion", "game_tracking", "NEW.status = 'completed'");
+        let result = h.manager.complete_game(&address, None, None).await;
+        assert!(result.success, "{result:?}");
+        assert_eq!(result.tx_hash.as_deref(), Some("landed-sig"));
+        // The failed finalization rolled back as a whole, so the game stays pending.
+        assert_eq!(h.db.get_game_status(&address).as_deref(), Some("pending"));
+    }
+
+    #[tokio::test]
     async fn not_ready_games_are_not_recorded() {
         let h = harness(None);
         let (address, _, _) = store_game(&h, [0x27; 32]);
@@ -1140,6 +1166,24 @@ mod tests {
         assert_eq!(
             h.metrics.completion_records(),
             vec![CompletionRecord { game_address: address, outcome: CompletionOutcome::NotReady, error: None }]
+        );
+    }
+
+    #[tokio::test]
+    async fn attempts_without_log_hooks_still_record_failures() {
+        let h = harness(None);
+        let (address, _, _) = store_game(&h, [0x33; 32]);
+        h.db.replace_game_players(&address, &["bad".to_string()]).unwrap();
+        serve_game(&h, Some(game_account(1, 1, 1, 0, 60)));
+        let result = h.manager.attempt_game_completion(AttemptOptions::new(&address)).await.unwrap();
+        assert_eq!(result, Some(CompletionResult::failure("Winner address is invalid")));
+        assert_eq!(
+            h.metrics.completion_records(),
+            vec![CompletionRecord {
+                game_address: address,
+                outcome: CompletionOutcome::Error,
+                error: Some("Winner address is invalid".into())
+            }]
         );
     }
 

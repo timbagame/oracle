@@ -122,3 +122,19 @@ pub async fn ws_node() -> String {
     });
     url
 }
+
+/// Makes updates of `table` matching the SQL condition `when` fail in the
+/// database stored in `dir` (a harness directory), whatever connection
+/// issues them.
+pub fn fail_updates(dir: &std::path::Path, trigger: &str, table: &str, when: &str) {
+    let conn = rusqlite::Connection::open(dir.join("o.sqlite")).unwrap();
+    conn.execute_batch(&format!(
+        "CREATE TRIGGER {trigger} BEFORE UPDATE ON {table} WHEN {when} BEGIN SELECT RAISE(ABORT, 'disk full'); END;"
+    ))
+    .unwrap();
+}
+
+/// Condition for [`fail_updates`] matching updates that leave a game's
+/// status and completion failure bookkeeping alone (pure `last_checked` touches).
+pub const TOUCH_ONLY: &str = "NEW.status = OLD.status AND NEW.completion_attempts = OLD.completion_attempts \
+     AND NEW.completion_failure_kind IS OLD.completion_failure_kind";

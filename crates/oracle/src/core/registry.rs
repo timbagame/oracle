@@ -485,6 +485,7 @@ fn has_duplicates(players: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::testing::fail_updates;
 
     #[test]
     fn analyzes_registry_state() {
@@ -956,6 +957,33 @@ mod tests {
         let result = h.manager.ensure_players_in_sync("zero", &game_context(), 0).await;
         assert_eq!(result, Err("No ticket entries available for completion"));
         assert_eq!(h.db.get_game_status("zero").as_deref(), Some("desynced"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_desync_mark_still_reports_the_mismatch() {
+        let h = manager_with(None, None, 0);
+        h.db.track_game("zero", None, false).unwrap();
+        fail_updates(h._dir.path(), "no_desync", "game_tracking", "NEW.status = 'desynced'");
+        let result = h.manager.ensure_players_in_sync("zero", &game_context(), 0).await;
+        assert_eq!(result, Err("No ticket entries available for completion"));
+        assert_eq!(h.db.get_game_status("zero").as_deref(), Some("pending"));
+    }
+
+    #[tokio::test]
+    async fn cached_analyses_are_recomputed_when_the_roster_changes() {
+        let h = manager_with(recovering(|_| Ok(None)), None, 0);
+        track(&h, "grow", &["p1"]);
+        assert_eq!(h.manager.ensure_players_in_sync("grow", &game_context(), 1).await, Ok(vec!["p1".into()]));
+        // A second ticket sold: the cached analysis for one player no longer applies.
+        track(&h, "grow", &["p1", "p2"]);
+        let players = h.manager.ensure_players_in_sync("grow", &game_context(), 2).await;
+        assert_eq!(players, Ok(vec!["p1".to_string(), "p2".to_string()]));
+        // A different expectation for the same roster is analysed afresh as well.
+        assert_eq!(
+            h.manager.ensure_players_in_sync("grow", &game_context(), 3).await,
+            Err("Ticket registry out of sync")
+        );
+        assert_eq!(h.calls.load(Ordering::SeqCst), 1, "only the mismatching roster needed recovery");
     }
 
     #[tokio::test]

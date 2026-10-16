@@ -331,6 +331,7 @@ fn log_scan_results(stats: &CompletionStats) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::testing::{fail_updates, TOUCH_ONLY};
     use crate::core::types::{GameContext, Readiness};
     use crate::db::SecretKeyData;
     use std::sync::Mutex;
@@ -507,15 +508,6 @@ mod tests {
         assert!(again.is_err(), "a second loop starts instead of failing with 'already running'");
     }
 
-    /// Makes statements matching `when` fail on the runner's database.
-    fn fail_updates(dir: &tempfile::TempDir, trigger: &str, table: &str, when: &str) {
-        let conn = rusqlite::Connection::open(dir.path().join("o.sqlite")).unwrap();
-        conn.execute_batch(&format!(
-            "CREATE TRIGGER {trigger} BEFORE UPDATE ON {table} WHEN {when} BEGIN SELECT RAISE(ABORT, 'disk full'); END;"
-        ))
-        .unwrap();
-    }
-
     fn last_checked(dir: &tempfile::TempDir, game: &str) -> i64 {
         let conn = rusqlite::Connection::open(dir.path().join("o.sqlite")).unwrap();
         conn.query_row("SELECT last_checked FROM game_tracking WHERE game_address = ?", [game], |r| r.get(0)).unwrap()
@@ -525,9 +517,6 @@ mod tests {
         let conn = rusqlite::Connection::open(dir.path().join("o.sqlite")).unwrap();
         conn.execute("UPDATE game_tracking SET last_checked = 1", []).unwrap();
     }
-
-    const SAME_FAILURE_STATE: &str = "NEW.status = OLD.status AND NEW.completion_attempts = OLD.completion_attempts \
-         AND NEW.completion_failure_kind IS OLD.completion_failure_kind";
 
     #[tokio::test]
     async fn the_scan_adapter_for_the_completion_manager_delegates_attempts() {
@@ -664,7 +653,7 @@ mod tests {
         track(&db, "g2", true);
         age_checks(&dir);
         // Even when the push-back itself fails the scan carries on.
-        fail_updates(&dir, "no_touch", "game_tracking", SAME_FAILURE_STATE);
+        fail_updates(dir.path(), "no_touch", "game_tracking", TOUCH_ONLY);
         let started = tokio::time::Instant::now();
         let stats = runner.scan_and_complete_active_games(None).await;
         assert_eq!(stats.errors, 2);
@@ -700,9 +689,9 @@ mod tests {
         );
         track(&db, "patient", true);
         track(&db, "orphan", false);
-        fail_updates(&dir, "no_increment", "game_tracking", "NEW.completion_attempts <> OLD.completion_attempts");
-        fail_updates(&dir, "no_touch", "game_tracking", SAME_FAILURE_STATE);
-        fail_updates(&dir, "no_desync", "game_tracking", "NEW.status = 'desynced'");
+        fail_updates(dir.path(), "no_increment", "game_tracking", "NEW.completion_attempts <> OLD.completion_attempts");
+        fail_updates(dir.path(), "no_touch", "game_tracking", TOUCH_ONLY);
+        fail_updates(dir.path(), "no_desync", "game_tracking", "NEW.status = 'desynced'");
         let stats = runner.scan_and_complete_active_games(None).await;
         assert_eq!(stats, CompletionStats { completed: 0, errors: 1, not_ready: 1 });
         // Nothing was persisted, but both outcomes are still reported.
