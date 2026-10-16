@@ -16,8 +16,8 @@ use timba_common::error;
 use super::database::{Clock, IndexerDatabase, LeaderboardPeriod};
 use super::pricing::TokenUsdPrices;
 use super::schema::{
-    address_param, array, coerce_int, enum_param, js_number, js_string, normalize_number, parse, InvalidQuery,
-    QueryParams, Schema,
+    address_param, array, coerce_int, enum_param, js_number, js_string, normalize_number, parse, to_js_json,
+    InvalidQuery, QueryParams, Schema,
 };
 use super::types::Row;
 
@@ -379,7 +379,7 @@ impl IndexerApi {
         match self.route(&path, &query).await {
             Ok(Outcome::Error(message, status)) => error_response(message, status),
             Ok(Outcome::Json { schema, value, cache }) => match parse(schema, &value) {
-                Ok(parsed) => response(StatusCode::OK, parsed.to_string(), cache),
+                Ok(parsed) => response(StatusCode::OK, to_js_json(&parsed), cache),
                 Err(e) => {
                     error!("Indexer API failed for {path}: {e}");
                     error_response("Internal server error", StatusCode::INTERNAL_SERVER_ERROR)

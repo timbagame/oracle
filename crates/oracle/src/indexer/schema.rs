@@ -352,7 +352,8 @@ pub fn js_string(value: &Value) -> Value {
     Value::String(match value {
         Value::Null => "null".into(),
         Value::Bool(b) => b.to_string(),
-        Value::Number(_) => normalize_number_value(value).to_string(),
+        Value::Number(n) if n.is_f64() => js_number_to_string(n.as_f64().unwrap_or(f64::NAN)),
+        Value::Number(n) => n.to_string(),
         Value::String(s) => s.clone(),
         other => other.to_string(),
     })
@@ -424,6 +425,61 @@ pub fn enum_param(value: Option<&str>, values: &[&str], default: Option<&str>) -
     }
 }
 
+// ---------------------------------------------------------------------------
+// JSON output
+// ---------------------------------------------------------------------------
+
+/// JavaScript `Number.prototype.toString()` (`String(number)`).
+pub fn js_number_to_string(value: f64) -> String {
+    if value.is_nan() {
+        return "NaN".into();
+    }
+    if value.is_infinite() {
+        return if value > 0.0 { "Infinity" } else { "-Infinity" }.into();
+    }
+    if value == 0.0 {
+        return "0".into();
+    }
+    let sign = if value < 0.0 { "-" } else { "" };
+    // `{:e}` yields the shortest round-trip digits, like ECMAScript's Number::toString.
+    let scientific = format!("{:e}", value.abs());
+    let (mantissa, exponent) = scientific.split_once('e').expect("exponent");
+    let exponent: i32 = exponent.parse().expect("exponent");
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let k = digits.len() as i32;
+    let n = exponent + 1;
+    let body = if k <= n && n <= 21 {
+        format!("{digits}{}", "0".repeat((n - k) as usize))
+    } else if 0 < n && n <= 21 {
+        format!("{}.{}", &digits[..n as usize], &digits[n as usize..])
+    } else if -6 < n && n <= 0 {
+        format!("0.{}{digits}", "0".repeat((-n) as usize))
+    } else {
+        let mantissa = if k == 1 { digits } else { format!("{}.{}", &digits[..1], &digits[1..]) };
+        let e = n - 1;
+        format!("{mantissa}e{}{}", if e < 0 { '-' } else { '+' }, e.abs())
+    };
+    format!("{sign}{body}")
+}
+
+struct JsFormatter;
+
+impl serde_json::ser::Formatter for JsFormatter {
+    fn write_f64<W: ?Sized + std::io::Write>(&mut self, writer: &mut W, value: f64) -> std::io::Result<()> {
+        writer.write_all(js_number_to_string(value).as_bytes())
+    }
+}
+
+/// `JSON.stringify(value)`: like `serde_json::to_string`, but floats use the
+/// JavaScript number formatting (`0.000004`, not `4e-6`).
+pub fn to_js_json(value: &Value) -> String {
+    use serde::Serialize;
+    let mut output = Vec::new();
+    let mut serializer = serde_json::Serializer::with_formatter(&mut output, JsFormatter);
+    value.serialize(&mut serializer).expect("JSON values always serialize");
+    String::from_utf8(output).expect("JSON output is UTF-8")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,5 +548,30 @@ mod tests {
         assert_eq!(js_string(&json!(5)), json!("5"));
         assert_eq!(js_string(&json!(5.0)), json!("5"));
         assert_eq!(js_string(&json!(null)), json!("null"));
+        assert_eq!(js_string(&json!(0.000004)), json!("0.000004"));
+    }
+
+    #[test]
+    fn numbers_format_like_javascript() {
+        for (value, expected) in [
+            (0.000004, "0.000004"),
+            (0.000001, "0.000001"),
+            (1e-7, "1e-7"),
+            (1.5e-7, "1.5e-7"),
+            (0.1, "0.1"),
+            (1.0, "1"),
+            (-2.5, "-2.5"),
+            (123456.5, "123456.5"),
+            (1e20, "100000000000000000000"),
+            (1e21, "1e+21"),
+            (1.2345e22, "1.2345e+22"),
+            (-0.0, "0"),
+        ] {
+            assert_eq!(js_number_to_string(value), expected);
+        }
+        assert_eq!(
+            to_js_json(&json!({"a": 0.000004, "b": [1, 2.5e-5], "c": "x"})),
+            r#"{"a":0.000004,"b":[1,0.000025],"c":"x"}"#
+        );
     }
 }
