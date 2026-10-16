@@ -72,8 +72,11 @@ fn compute_retry_delay_ms(attempt: usize, retry_after_ms: Option<u64>) -> u64 {
     let base = RPC_RETRY_BASE_DELAY_MS as f64 * 2f64.powi(exponent);
     let jitter = rand::random::<f64>() * RPC_RETRY_BASE_DELAY_MS as f64;
     let computed = RPC_RETRY_MAX_DELAY_MS.min(base + jitter);
+    // Honour Retry-After, but never sleep past the backoff cap: a huge value (an
+    // exhausted monthly quota, a far-future date) would otherwise stall the scan
+    // loop or a completion for hours before it tries the next endpoint.
     match retry_after_ms {
-        Some(retry) => (retry as f64).max(computed) as u64,
+        Some(retry) => (retry as f64).min(RPC_RETRY_MAX_DELAY_MS).max(computed) as u64,
         None => computed as u64,
     }
 }
@@ -451,5 +454,36 @@ mod tests {
         );
         assert_eq!(pool.get_slot().await.unwrap(), 1);
         assert!(waited.lock().unwrap()[0] >= 2_000);
+    }
+
+    #[tokio::test]
+    async fn caps_retry_after_and_backs_off_without_it() {
+        let transport = FakeTransport::new();
+        transport.push("getSlot", Err(RpcError::http(429, "Too Many Requests", Some(u64::MAX))));
+        transport.push("getSlot", Err(RpcError::http(429, "Too Many Requests", None)));
+        transport.push("getSlot", Ok(json!(7)));
+        let waited = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let w = waited.clone();
+        let endpoints = ["https://a".into(), "https://b".into(), "https://c".into()];
+        let pool = RpcPool::with_transport(&endpoints, transport).unwrap().with_delay(move |ms| {
+            w.lock().unwrap().push(ms);
+            Box::pin(async {})
+        });
+        assert_eq!(pool.get_slot().await.unwrap(), 7);
+        let waited = waited.lock().unwrap().clone();
+        assert_eq!(waited[0], RPC_RETRY_MAX_DELAY_MS as u64, "Retry-After is capped");
+        // Second attempt without Retry-After: base 500ms * 2^1 plus up to 500ms jitter.
+        assert!((1_000..1_500).contains(&waited[1]), "{waited:?}");
+    }
+
+    #[test]
+    fn retry_delay_never_exceeds_the_cap() {
+        for attempt in 0..20 {
+            for retry_after in [None, Some(0), Some(1), Some(29_999), Some(30_001), Some(u64::MAX)] {
+                let delay = compute_retry_delay_ms(attempt, retry_after);
+                assert!(delay <= RPC_RETRY_MAX_DELAY_MS as u64, "{attempt} {retry_after:?} -> {delay}");
+                assert!(delay >= retry_after.unwrap_or(0).min(RPC_RETRY_MAX_DELAY_MS as u64));
+            }
+        }
     }
 }

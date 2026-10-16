@@ -120,7 +120,8 @@ fn parse_retry_after(value: Option<&str>) -> Option<u64> {
         return None;
     }
     if trimmed.bytes().all(|b| b.is_ascii_digit()) {
-        return trimmed.parse::<u64>().ok().map(|s| s * 1000);
+        // Digits beyond u64 still mean "a very long time"; the pool caps the wait.
+        return Some(trimmed.parse::<u64>().unwrap_or(u64::MAX).saturating_mul(1000));
     }
     let date = chrono::DateTime::parse_from_rfc2822(trimmed).ok()?;
     Some((date.timestamp_millis() - timba_common::time::now_ms()).max(0) as u64)
@@ -366,6 +367,10 @@ mod tests {
         assert_eq!(parse_retry_after(Some("3")), Some(3000));
         assert_eq!(parse_retry_after(Some(" ")), None);
         assert_eq!(parse_retry_after(Some("Wed, 21 Oct 2015 07:28:00 GMT")), Some(0));
+        assert_eq!(parse_retry_after(Some("18446744073709552")), Some(u64::MAX));
+        assert_eq!(parse_retry_after(Some("99999999999999999999999")), Some(u64::MAX));
+        assert_eq!(parse_retry_after(Some("Fri, 01 Jan 9999 00:00:00 GMT")).map(|ms| ms > 86_400_000), Some(true));
+        assert_eq!(parse_retry_after(Some("soon")), None);
     }
 
     #[test]
