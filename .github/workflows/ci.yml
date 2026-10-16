@@ -15,8 +15,8 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  CARGO_LLVM_COV_VERSION: "0.9.1"
-  CARGO_AUDIT_VERSION: "0.22.2"
+  CARGO_LLVM_COV_VERSION: "0.9.1" # cargo-llvm-cov
+  CARGO_AUDIT_VERSION: "0.22.2" # cargo-audit
   CARGO_TERM_COLOR: always
 
 concurrency:
