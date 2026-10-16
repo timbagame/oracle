@@ -13,10 +13,11 @@ Volume=%h/timba/evm/oracle.json:/config/evm.json:ro,Z
 Volume=%h/timba/evm/secrets/operator:/run/secrets/evm_operator:ro,Z
 Volume=%h/timba/evm/secrets/api-token:/run/secrets/evm_api_token:ro,z
 Volume=%h/timba/evm/oracle-data:/data:Z
-Exec=bun run start:evm
+Exec=/usr/local/bin/timba-evm-oracle
 NoNewPrivileges=true
 DropCapability=all
 PidsLimit=128
+StopTimeout=30
 
 [Service]
 Restart=always

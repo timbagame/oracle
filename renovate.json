@@ -1,11 +1,4 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", "group:all"],
-  "hostRules": [
-    {
-      "matchHost": "https://npm.pkg.github.com/",
-      "hostType": "npm",
-      "token": "{{ secrets.GH_PACKAGES_TOKEN }}"
-    }
-  ]
+  "extends": ["config:recommended", "group:all", "docker:pinDigests"]
 }

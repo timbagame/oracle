@@ -1,0 +1,43 @@
+[package]
+name = "timba-oracle"
+description = "Timba Solana oracle: commitments, game completion, indexer and web API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "timba-oracle"
+path = "src/main.rs"
+
+[dependencies]
+timba-protocol.workspace = true
+timba-common.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+base64.workspace = true
+bs58.workspace = true
+chrono.workspace = true
+clap.workspace = true
+ed25519-dalek.workspace = true
+futures.workspace = true
+hex.workspace = true
+indexmap.workspace = true
+rand.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tower = { workspace = true, features = ["util"] }
+url.workspace = true
+num-bigint = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }

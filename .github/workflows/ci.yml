@@ -15,6 +15,9 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
+  CARGO_LLVM_COV_VERSION: "0.9.1"
+  CARGO_AUDIT_VERSION: "0.22.2"
+  CARGO_TERM_COLOR: always
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -53,36 +56,47 @@ jobs:
     if: ${{ !cancelled() && needs.reviewed.outputs.tested != 'true' }}
     name: Validate
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.3
-      - name: Restore Bun cache
+      - name: Install Rust toolchain
+        # Installs the channel and components pinned in rust-toolchain.toml.
+        run: rustup toolchain install
+      - name: Restore Cargo cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.bun/install/cache
-          key: bun-install-${{ runner.os }}-${{ hashFiles('bun.lock', 'package.json') }}
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            bun-install-${{ runner.os }}-
-      - name: Install dependencies
-        env:
-          NODE_AUTH_TOKEN: ${{ github.token }}
-        run: bun install --frozen-lockfile
+            cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
+      - name: Install Cargo tools
+        run: |
+          # A cache hit restores ~/.cargo/bin, so only install when the pinned version is missing.
+          cargo llvm-cov --version 2>/dev/null | grep -qF "$CARGO_LLVM_COV_VERSION" \
+            || cargo install cargo-llvm-cov --locked --force --version "$CARGO_LLVM_COV_VERSION"
+          cargo audit --version 2>/dev/null | grep -qF "$CARGO_AUDIT_VERSION" \
+            || cargo install cargo-audit --locked --force --version "$CARGO_AUDIT_VERSION"
       - name: Audit dependencies
-        run: bun audit
+        run: cargo audit
       - name: Check formatting
-        run: bun run format:check
+        run: cargo fmt --all --check
       - name: Lint
-        run: bun run lint
-      - name: Typecheck
-        run: bun x tsc -p tsconfig.json --noEmit
-      - name: Tests
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests with coverage
         id: tests
-        run: bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage
-      - name: Enforce 100% line coverage
-        run: bun run scripts/check-coverage.ts coverage-scope.json coverage/lcov.info
+        run: |
+          python3 scripts/test-check-coverage.py
+          mkdir -p coverage
+          cargo llvm-cov --workspace --locked --lcov --output-path coverage/lcov.info
+          cargo llvm-cov report --summary-only
+          python3 scripts/check-coverage.py coverage/lcov.info coverage-scope.json
       - name: Upload coverage
         if: ${{ always() && steps.tests.outcome != 'skipped' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -90,6 +104,12 @@ jobs:
           name: coverage
           path: coverage/
           if-no-files-found: error
+
+      - name: Build OCI image
+        run: |
+          command -v podman >/dev/null || { sudo apt-get update && sudo apt-get install --yes podman; }
+          podman build --build-arg VCS_REF="${GITHUB_SHA}" --format oci --file Containerfile --tag oracle:ci .
+          scripts/smoke-image.sh oracle:ci
 
       - name: Record the tree that passed validation
         if: github.event_name == 'pull_request'
@@ -104,6 +124,35 @@ jobs:
           path: tested-source-tree/tree
           if-no-files-found: error
           retention-days: 90
+
+  branch-coverage:
+    # Informational: branch coverage needs a nightly compiler, so it cannot gate.
+    needs: reviewed
+    if: ${{ !cancelled() && needs.reviewed.outputs.tested != 'true' }}
+    name: Branch coverage (nightly, informational)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    continue-on-error: true
+    env:
+      NIGHTLY: nightly-2026-10-01
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install nightly toolchain
+        run: rustup toolchain install "$NIGHTLY" --profile minimal --component llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        run: cargo +"$NIGHTLY" install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
+      - name: Branch coverage
+        run: |
+          mkdir -p coverage
+          cargo +"$NIGHTLY" llvm-cov --branch --workspace --locked --lcov --output-path coverage/branch-lcov.info
+          cargo +"$NIGHTLY" llvm-cov report --branch --summary-only
+      - name: Upload branch coverage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: branch-coverage
+          path: coverage/
+          if-no-files-found: ignore
 
   publish:
     name: Publish OCI image
@@ -151,9 +200,7 @@ jobs:
           echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
 
       - name: Build OCI image
-        env:
-          PACKAGE_TOKEN: ${{ github.token }}
-        run: podman build --build-arg VCS_REF="${GITHUB_SHA}" --secret=id=npm_token,env=PACKAGE_TOKEN --platform linux/amd64 --format oci --file Containerfile --tag "${IMAGE_TAG}" .
+        run: podman build --build-arg VCS_REF="${GITHUB_SHA}" --platform linux/amd64 --format oci --file Containerfile --tag "${IMAGE_TAG}" .
 
       - name: Push OCI image
         run: podman push --digestfile /tmp/image-digest "${IMAGE_TAG}"

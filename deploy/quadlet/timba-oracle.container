@@ -14,21 +14,26 @@ Environment=ORACLE_PORT=3001
 Environment=ORACLE_API_TOKEN_FILE=/run/secrets/oracle_api_token
 Environment=JUPITER_API_KEY_FILE=/run/secrets/jupiter_api_key
 Environment=OPERATOR_KEYPAIR_PATH=/run/secrets/operator_keypair.json
-Environment=INDEXER_DATABASE_FILE=/app/indexer.sqlite
+# SQLite keeps its -wal/-shm files next to each database, so mount the directory:
+# with single-file mounts they lived in the container layer and a kill lost
+# every commit since the last checkpoint.
+Environment=DATABASE_FILE=/app/data/oracle.sqlite
+Environment=INDEXER_DATABASE_FILE=/app/data/indexer.sqlite
 Volume=%h/timba/oracle/operator-keypair.json:/run/secrets/operator_keypair.json:ro,Z
 Volume=%h/timba/oracle/secrets/oracle-api-token:/run/secrets/oracle_api_token:ro,Z
 Volume=%h/timba/oracle/secrets/jupiter-api-key:/run/secrets/jupiter_api_key:ro,Z
-Volume=%h/timba/oracle/oracle.sqlite:/app/oracle.sqlite:Z
-Volume=%h/timba/oracle/indexer.sqlite:/app/indexer.sqlite:Z
+Volume=%h/timba/oracle/data:/app/data:Z
 NoNewPrivileges=true
 DropCapability=all
 PidsLimit=256
-HealthCmd=bun -e process.exit\(\(await\(fetch\(String.fromCharCode\(104,116,116,112,58,47,47,49,50,55,46,48,46,48,46,49,58,51,48,48,49,47,104,101,97,108,116,104\)\)\)\).ok?0:1\)
+HealthCmd=/usr/local/bin/timba-oracle healthcheck
 HealthInterval=30s
 HealthTimeout=5s
 HealthRetries=3
 HealthStartPeriod=20s
 HealthOnFailure=kill
+# Shutdown is bounded to three 5s steps; leave room for the final WAL checkpoint.
+StopTimeout=30
 
 [Service]
 Restart=always

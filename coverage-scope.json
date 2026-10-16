@@ -1,28 +1,4 @@
 {
-  "roots": ["."],
-  "extensions": [".ts"],
-  "exclude": [
-    "tests/*",
-    "*.d.ts",
-    "*.test.ts",
-    "*.spec.ts",
-    "*/tests/*",
-    "*/fixtures/*",
-    "indexer/types.ts",
-    "types/contract.ts",
-    "types/timba.ts",
-    "web-api/types.ts",
-    "web-api/verify-types.ts",
-    "web-api/connection.ts"
-  ],
-  "exclusionReasons": {
-    "tests/*, */tests/*, */fixtures/*, *.test.ts, *.spec.ts": "Test code and fixtures, not shipped source.",
-    "*.d.ts": "Ambient type declarations; erased at runtime.",
-    "indexer/types.ts": "Type-only module; erased at runtime, so it has no executable lines.",
-    "types/contract.ts": "Type-only module; erased at runtime, so it has no executable lines.",
-    "types/timba.ts": "Type-only module; erased at runtime, so it has no executable lines.",
-    "web-api/types.ts": "Type-only re-exports; erased at runtime, so it has no executable lines.",
-    "web-api/verify-types.ts": "Type-only re-export; erased at runtime, so it has no executable lines.",
-    "web-api/connection.ts": "Type-only re-export; erased at runtime, so it has no executable lines."
-  }
+  "exclude": [],
+  "exclusionReasons": {}
 }
