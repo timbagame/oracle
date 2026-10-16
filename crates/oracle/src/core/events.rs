@@ -94,8 +94,8 @@ struct RegistryEntry {
     queue: VecDeque<RegistrySyncRequest>,
     running: bool,
     timer: Option<JoinHandle<()>>,
+    /// The request a scheduled retry will run; set exactly while its timer waits.
     retry_pending: Option<RegistrySyncRequest>,
-    timer_pending: bool,
     failures: u32,
 }
 
@@ -692,14 +692,11 @@ impl EventProcessor {
             running: false,
             timer: None,
             retry_pending: None,
-            timer_pending: false,
             failures: 0,
         });
-        if entry.timer_pending {
-            if let Some(pending) = entry.retry_pending.take() {
-                entry.retry_pending = Some(merge_requests(pending, request));
-                return;
-            }
+        if let Some(pending) = entry.retry_pending.take() {
+            entry.retry_pending = Some(merge_requests(pending, request));
+            return;
         }
         match entry.queue.pop_back() {
             Some(last) => entry.queue.push_back(merge_requests(last, request)),
@@ -786,7 +783,6 @@ impl EventProcessor {
                     return;
                 }
                 entry.running = false;
-                entry.timer_pending = true;
                 entry.retry_pending = Some(match entry.retry_pending.take() {
                     Some(pending) => merge_requests(pending, next),
                     None => next,
@@ -799,7 +795,6 @@ impl EventProcessor {
                     {
                         let mut entries = processor.registry.lock().unwrap();
                         let Some(current) = entries.get_mut(&address).filter(|e| e.id == id) else { return };
-                        current.timer_pending = false;
                         current.timer = None;
                         if let Some(pending) = current.retry_pending.take() {
                             current.queue.push_front(pending);
@@ -1274,6 +1269,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stopping_cancels_buffered_joins_and_debounced_auto_completes() {
+        let h = harness_with(Settings {
+            player_flush_debounce_ms: 60_000,
+            auto_complete_debounce_ms: 60_000,
+            ws_endpoint: Some(crate::core::testing::ws_node().await),
+            ..Settings::default()
+        });
+        let game = tracked(&h);
+        h.processor.start_listening().await.unwrap();
+        h.processor.handle_player_event(join(&game, "p1", 0, 2)).await;
+        let other = Address([8; 32]).to_base58();
+        assert!(h.processor.schedule_auto_complete(&other, None, Some("joined".into())).is_none());
+        assert!(h.processor.buffers.lock().unwrap().contains_key(&game));
+        assert!(h.processor.auto_completes.lock().unwrap().contains_key(&other));
+
+        h.processor.stop_listening().await;
+        assert!(h.processor.buffers.lock().unwrap().is_empty());
+        assert!(h.processor.auto_completes.lock().unwrap().is_empty());
+        assert!(h.db.get_game_players(&game).is_empty(), "the buffered join was dropped, not flushed");
+        assert!(h.hooks.auto_completes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn events_after_the_processor_is_dropped_are_ignored() {
+        let h =
+            harness_with(Settings { ws_endpoint: Some(crate::core::testing::ws_node().await), ..Settings::default() });
+        let game = tracked(&h);
+        h.processor.start_listening().await.unwrap();
+        let Harness { processor, db, hooks, _dir } = h;
+        let program = processor.program.clone();
+        drop(processor);
+        program.dispatch(ProgramDispatch::PlayerMembership(join(&game, "p1", 0, 2))).await;
+        assert!(db.get_game_players(&game).is_empty());
+        assert!(hooks.auto_completes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn auto_completes_after_the_service_is_gone_only_clear_their_state() {
+        let Harness { processor, hooks, _dir, db: _db } = harness(0);
+        drop(hooks);
+        let attempt = processor.schedule_auto_complete(&game(), None, Some("joined".into())).unwrap();
+        attempt.await;
+        assert!(!processor.auto_completes.lock().unwrap().contains_key(&game()));
+    }
+
+    #[tokio::test]
     async fn a_failed_subscription_registers_no_listeners() {
         let refused = format!("ws://{}", std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap());
         let h = harness_with(Settings { ws_endpoint: Some(refused), ..Settings::default() });
@@ -1438,7 +1479,8 @@ mod tests {
         let h = harness(0);
         h.hooks.fail_syncs.store(1, Ordering::SeqCst);
         h.processor.schedule_registry_sync(sync_request(&game(), "first"));
-        wait_until(|| h.processor.registry.lock().unwrap().get(&game()).is_some_and(|e| e.timer_pending)).await;
+        wait_until(|| h.processor.registry.lock().unwrap().get(&game()).is_some_and(|e| e.retry_pending.is_some()))
+            .await;
         h.processor.schedule_registry_sync(sync_request(&game(), "second"));
         wait_until(|| !h.processor.has_pending_registry_sync(&game())).await;
         let triggers: Vec<String> = h.hooks.syncs.lock().unwrap().iter().map(|r| r.trigger.clone()).collect();
@@ -1481,12 +1523,13 @@ mod tests {
             Some(sync_request(&game(), "waiting"));
         h.hooks.hold_syncs.store(false, Ordering::SeqCst);
         h.hooks.release.notify_one();
-        wait_until(|| h.processor.registry.lock().unwrap().get(&game()).is_some_and(|e| e.timer_pending)).await;
+        wait_until(|| h.processor.registry.lock().unwrap().get(&game()).is_some_and(|e| e.timer.is_some())).await;
         let retry = h.processor.registry.lock().unwrap().get(&game()).unwrap().retry_pending.clone().unwrap();
         assert_eq!(retry.trigger, "first", "the newer request wins the merge");
         // A worker started meanwhile: the timer hands it the retry instead of starting another.
         h.processor.registry.lock().unwrap().get_mut(&game()).unwrap().running = true;
-        wait_until(|| h.processor.registry.lock().unwrap().get(&game()).is_some_and(|e| !e.timer_pending)).await;
+        wait_until(|| h.processor.registry.lock().unwrap().get(&game()).is_some_and(|e| e.retry_pending.is_none()))
+            .await;
         let entry_queue = h.processor.registry.lock().unwrap().get(&game()).unwrap().queue.len();
         assert_eq!(entry_queue, 1, "queued for the running worker");
         assert_eq!(h.hooks.syncs.lock().unwrap().len(), 1, "no second worker ran it");

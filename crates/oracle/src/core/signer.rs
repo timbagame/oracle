@@ -424,6 +424,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_a_legacy_message_cut_off_after_its_signers() {
+        // One empty signature, then a header and account key but no blockhash or instructions.
+        let mut bytes = vec![1u8];
+        bytes.extend([0u8; 64]);
+        bytes.extend([1u8, 0, 0, 1]);
+        bytes.extend([4u8; 32]);
+        let (_, operator) = fixture();
+        let hooks = Recorder::default();
+        let options = SignGameTransactionOptions {
+            contract_version: ContractVersion::V0_3_0,
+            program_id: timba_protocol::contracts::PROGRAM_ID,
+            operator: &operator,
+            hooks: &hooks,
+        };
+        let tx = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
+        let err = sign_game_transaction_with_policy(&tx, &options).await.unwrap_err();
+        assert_eq!(err.to_string(), "Invalid transaction payload");
+    }
+
+    #[tokio::test]
     async fn hook_rejections_stop_signing() {
         let reused = Recorder { reused: true, ..Default::default() };
         let err = sign_case("0.3.0 placeholder", &reused).await.unwrap_err();

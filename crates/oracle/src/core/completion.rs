@@ -286,8 +286,10 @@ impl CompletionManager {
             Err(message) => return Ok(Err(self.record_fatal(game_address, message))),
         };
         let winner_index = self.calculate_winner_index(&secret, game.last_slot, players.len() as u64)?;
-        // The registry holds at least one player and the draw is below the player count.
-        let Ok(winner) = Address::parse(&players[winner_index as usize]) else {
+        // The registry holds at least one player and the draw is below the player count; a
+        // broken invariant still records a fatal failure instead of panicking.
+        let drawn = players.get(winner_index as usize).map_or("", String::as_str);
+        let Ok(winner) = Address::parse(drawn) else {
             return Ok(Err(self.record_fatal(game_address, "Winner address is invalid")));
         };
         let mut secret_key = [0u8; 32];
