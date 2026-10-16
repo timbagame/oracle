@@ -31,5 +31,14 @@
       "datasourceTemplate": "crate",
       "versioningTemplate": "semver"
     }
+  ],
+  "packageRules": [
+    {
+      "description": "Quadlet images follow their tag through podman auto-update (AutoUpdate=registry); a pinned digest would freeze them",
+      "matchFileNames": [
+        "deploy/quadlet/**"
+      ],
+      "pinDigests": false
+    }
   ]
 }
