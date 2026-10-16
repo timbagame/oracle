@@ -703,6 +703,11 @@ mod tests {
         assert!(is_transient_completion_failure(Some("Transaction sig expired before confirmation")));
         assert!(!is_transient_completion_failure(Some("Ticket registry out of sync")));
         assert!(!is_transient_completion_failure(Some(NO_SECRET_KEY_MESSAGE)));
+        // A failed preflight is permanent unless the node blames the blockhash.
+        let simulation = "Transaction simulation failed: Error processing Instruction 0: custom program error: 0x1771";
+        assert!(!is_transient_completion_failure(Some(&RpcError::json_rpc(-32002, simulation).to_string())));
+        let stale = "Transaction simulation failed: Blockhash not found";
+        assert!(is_transient_completion_failure(Some(&RpcError::json_rpc(-32002, stale).to_string())));
     }
 
     #[test]

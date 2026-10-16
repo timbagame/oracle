@@ -51,14 +51,18 @@ impl RpcError {
         }
     }
 
+    /// Formats node errors the way `@solana/errors` does: protocol-level codes
+    /// (-32700..=-32600) read `JSON-RPC error: ...`, while server errors such as a
+    /// failed preflight (-32002) carry only the node's own text. Completion retry
+    /// classification matches on these words, so a failed simulation must not
+    /// mention "RPC" or it would be retried forever as a transient failure.
     pub fn json_rpc(code: i64, message: &str) -> Self {
-        Self {
-            kind: RpcErrorKind::JsonRpc,
-            message: format!("JSON-RPC error {code}: {message}"),
-            status: None,
-            code: Some(code),
-            retry_after_ms: None,
-        }
+        let message = if (-32700..=-32600).contains(&code) {
+            format!("JSON-RPC error {code}: {message}")
+        } else {
+            format!("{message} (code {code})")
+        };
+        Self { kind: RpcErrorKind::JsonRpc, message, status: None, code: Some(code), retry_after_ms: None }
     }
 
     pub fn decode(message: impl Into<String>) -> Self {
@@ -367,7 +371,7 @@ mod tests {
     #[test]
     fn unwraps_errors() {
         let err = unwrap_response(json!({"error": {"code": -32002, "message": "Blockhash not found"}})).unwrap_err();
-        assert_eq!(err.message, "JSON-RPC error -32002: Blockhash not found");
+        assert_eq!(err.message, "Blockhash not found (code -32002)");
         assert_eq!(unwrap_response(json!({"result": 5})).unwrap(), json!(5));
     }
 

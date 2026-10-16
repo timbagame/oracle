@@ -2010,10 +2010,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_simulations_count_as_permanent_failures() {
+        let h = harness();
+        let (game, _) = ready_game(&h);
+        let simulation = "Transaction simulation failed: Error processing Instruction 0: custom program error: 0x1771";
+        h.transport.push("sendTransaction", Err(RpcError::json_rpc(-32002, simulation)));
+        let result = h.service.complete_game_now(&game).await.unwrap();
+        assert!(!result.success && !result.not_ready, "{result:?}");
+        assert!(result.error.as_deref().unwrap().contains("custom program error"), "{result:?}");
+        assert!(!is_transient_completion_failure(result.error.as_deref()), "{result:?}");
+        assert!(h.service.retries.lock().unwrap().is_empty());
+        let state = h.service.db.get_completion_attempt_state(&game).unwrap();
+        assert_eq!(state.completion_attempts, 1);
+        assert_eq!(state.completion_failure_kind, Some(CompletionFailureKind::Permanent));
+    }
+
+    #[tokio::test]
     async fn permanent_errors_stop_retrying() {
         let h = harness();
         let game = tracked_game(&h);
-        // JSON-RPC errors mention "RPC" and therefore count as transient.
+        // Protocol-level JSON-RPC errors stay transient, as in the TypeScript oracle.
         assert!(is_transient_completion_failure(Some(&RpcError::json_rpc(-32602, "invalid param").to_string())));
         serve_game(&h, token_account_value(&PROGRAM_ID, vec![0; 3]));
         let result = h.service.complete_game_now(&game).await.unwrap();
