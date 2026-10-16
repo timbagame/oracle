@@ -272,6 +272,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn treats_a_failed_request_as_a_cached_miss() {
+        let token = mint(6);
+        let (fetcher, calls) = fake(|_| Err("connection refused".into()));
+        let prices = TokenUsdPrices::with_fetcher(fetcher, Arc::new(|| 0));
+        assert!(prices.get(std::slice::from_ref(&token), Some("key")).await.is_empty());
+        assert!(prices.get(std::slice::from_ref(&token), Some("key")).await.is_empty());
+        assert_eq!(calls.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_shared_instance_serves_only_cached_prices_without_a_key() {
+        assert!(Arc::ptr_eq(&TokenUsdPrices::global(), &TokenUsdPrices::global()));
+        assert!(get_token_usd_prices(&[mint(99)], None).await.is_empty());
+        assert!(TokenUsdPrices::default().get(&[mint(99)], Some("")).await.is_empty());
+    }
+
+    #[tokio::test]
     async fn uses_the_configured_price_url() {
         let (fetcher, calls) = fake(|_| Ok((200, json!({}))));
         let prices = TokenUsdPrices::with_fetcher(fetcher, Arc::new(|| 0)).with_price_url("https://prices.example/v9");

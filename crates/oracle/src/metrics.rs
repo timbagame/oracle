@@ -122,4 +122,48 @@ mod tests {
         metrics.reset();
         assert!(metrics.completion_records().is_empty());
     }
+
+    fn scan(completed: u64) -> ScanCycleRecord {
+        ScanCycleRecord { duration_ms: 1.5, completed, errors: 0, not_ready: 0, pending: 0 }
+    }
+
+    fn cleanup(deleted_games: u64) -> CleanupRecord {
+        CleanupRecord { hours_old: 48, deleted_secrets: 0, deleted_games, deleted_players: 0 }
+    }
+
+    #[test]
+    fn trims_scan_and_cleanup_history_independently() {
+        let metrics = OracleMetrics::new(2);
+        for i in 0..3 {
+            metrics.record_scan_cycle(scan(i));
+        }
+        metrics.record_cleanup_sweep(cleanup(7));
+        let scans = metrics.scan_cycles();
+        assert_eq!(scans.iter().map(|s| s.completed).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(metrics.cleanup_sweeps(), vec![cleanup(7)]);
+        assert!(metrics.completion_records().is_empty());
+        metrics.reset();
+        assert!(metrics.scan_cycles().is_empty() && metrics.cleanup_sweeps().is_empty());
+    }
+
+    #[test]
+    fn a_zero_limit_falls_back_to_the_default_history_size() {
+        for metrics in [OracleMetrics::new(0), OracleMetrics::default()] {
+            for i in 0..(DEFAULT_MAX_HISTORY as u64 + 3) {
+                metrics.record_scan_cycle(scan(i));
+            }
+            let scans = metrics.scan_cycles();
+            assert_eq!(scans.len(), DEFAULT_MAX_HISTORY);
+            assert_eq!(scans[0].completed, 3);
+        }
+    }
+
+    #[test]
+    fn the_global_instance_is_shared() {
+        let first = OracleMetrics::global();
+        let second = OracleMetrics::global();
+        assert!(std::ptr::eq(first, second));
+        first.record_cleanup_sweep(cleanup(424_242));
+        assert!(second.cleanup_sweeps().contains(&cleanup(424_242)));
+    }
 }

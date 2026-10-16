@@ -574,4 +574,160 @@ mod tests {
             r#"{"a":0.000004,"b":[1,0.000025],"c":"x"}"#
         );
     }
+
+    fn rejection(schema: &Schema, value: Value) -> String {
+        parse(schema, &value).unwrap_err().message
+    }
+
+    #[test]
+    fn string_schemas_reject_malformed_values() {
+        let address = bs58::encode([7u8; 32]).into_string();
+        let signature = bs58::encode([7u8; 64]).into_string();
+        assert_eq!(parse(&Schema::Address, &json!(address)).unwrap(), json!(address));
+        assert_eq!(parse(&Schema::Signature, &json!(signature)).unwrap(), json!(signature));
+        assert_eq!(rejection(&Schema::Address, json!("not-an-address")), "invalid Solana address");
+        assert_eq!(rejection(&Schema::Address, json!(5)), "expected string");
+        assert_eq!(rejection(&Schema::Signature, json!(address)), "invalid Solana signature");
+        let hex = "ab".repeat(32);
+        assert_eq!(parse(&Schema::Hex32, &json!(hex)).unwrap(), json!(hex));
+        assert_eq!(rejection(&Schema::Hex32, json!("ab")), "invalid hex32");
+        assert_eq!(rejection(&Schema::Hex32, json!("zz".repeat(32))), "invalid hex32");
+        assert_eq!(parse(&Schema::U64String, &json!("18446744073709551615")).unwrap(), json!("18446744073709551615"));
+        assert_eq!(rejection(&Schema::U64String, json!("18446744073709551616")), "invalid u64 string");
+        assert_eq!(rejection(&Schema::U64String, json!("-1")), "invalid u64 string");
+        assert_eq!(parse(&Schema::NonEmptyString, &json!("x")).unwrap(), json!("x"));
+        assert_eq!(rejection(&Schema::NonEmptyString, json!("")), "expected a non-empty string");
+        assert_eq!(parse(&Schema::Url, &json!("https://example.com/a")).unwrap(), json!("https://example.com/a"));
+        assert_eq!(rejection(&Schema::Url, json!("not a url")), "invalid URL");
+    }
+
+    #[test]
+    fn literal_and_enum_schemas_only_accept_listed_values() {
+        assert_eq!(parse(&Schema::Bool, &json!(false)).unwrap(), json!(false));
+        assert_eq!(rejection(&Schema::Bool, json!(0)), "expected boolean");
+        assert_eq!(parse(&Schema::Literal("ok"), &json!("ok")).unwrap(), json!("ok"));
+        assert_eq!(rejection(&Schema::Literal("ok"), json!("no")), "expected literal ok");
+        let ints = Schema::IntLiterals(&[1, 2]);
+        assert_eq!(parse(&ints, &json!(2.0)).unwrap(), json!(2));
+        assert_eq!(rejection(&ints, json!(3)), "unexpected literal");
+        assert_eq!(rejection(&ints, json!("1")), "unexpected literal");
+        let colors = Schema::Enum(&["red", "blue"]);
+        assert_eq!(parse(&colors, &json!("blue")).unwrap(), json!("blue"));
+        assert_eq!(rejection(&colors, json!("green")), "invalid enum value");
+        assert_eq!(rejection(&colors, json!(1)), "invalid enum value");
+    }
+
+    #[test]
+    fn number_schemas_enforce_safe_integer_ranges() {
+        assert_eq!(parse(&Schema::PositiveInteger, &json!(3)).unwrap(), json!(3));
+        assert_eq!(rejection(&Schema::PositiveInteger, json!(0)), "expected a positive integer");
+        assert_eq!(rejection(&Schema::PositiveInteger, json!(1.5)), "expected a positive integer");
+        assert_eq!(rejection(&Schema::NonNegativeInteger, json!(-1)), "expected a non-negative integer");
+        // Integers beyond 2^53 are not representable as JavaScript numbers.
+        assert_eq!(
+            rejection(&Schema::NonNegativeInteger, json!(9_007_199_254_740_993i64)),
+            "expected a non-negative integer"
+        );
+        assert_eq!(rejection(&Schema::NonNegativeInteger, json!(u64::MAX)), "expected a non-negative integer");
+        assert_eq!(rejection(&Schema::NonNegativeInteger, json!(1e300)), "expected a non-negative integer");
+        let range = Schema::IntegerRange(2, 4);
+        assert_eq!(parse(&range, &json!(4)).unwrap(), json!(4));
+        assert_eq!(rejection(&range, json!(1)), "integer out of range");
+        assert_eq!(rejection(&range, json!(5)), "integer out of range");
+        assert_eq!(parse(&Schema::NonNegativeNumber, &json!(2.5)).unwrap(), json!(2.5));
+        assert_eq!(parse(&Schema::NonNegativeNumber, &json!(4.0)).unwrap(), json!(4));
+        assert_eq!(rejection(&Schema::NonNegativeNumber, json!("1")), "expected a non-negative finite number");
+    }
+
+    #[test]
+    fn wrappers_and_collections_report_the_failing_path() {
+        let nullable = Schema::Nullable(&Schema::Bool);
+        assert_eq!(parse(&nullable, &Value::Null).unwrap(), Value::Null);
+        assert_eq!(parse(&nullable, &json!(true)).unwrap(), json!(true));
+        assert_eq!(rejection(&nullable, json!(1)), "expected boolean");
+        static LIST: Schema = array(&Schema::PositiveInteger);
+        assert_eq!(parse(&LIST, &json!([1, 2])).unwrap(), json!([1, 2]));
+        assert_eq!(parse(&LIST, &json!([])).unwrap(), json!([]));
+        assert_eq!(rejection(&LIST, json!("x")), "expected array");
+        let error = parse(&LIST, &json!([1, 0])).unwrap_err();
+        assert_eq!((error.path.as_str(), error.message.as_str()), ("1", "expected a positive integer"));
+        let bounded = Schema::Array { item: &Schema::Bool, min: 1, max: 2 };
+        assert_eq!(rejection(&bounded, json!([])), "array length out of range");
+        assert_eq!(rejection(&bounded, json!([true, true, true])), "array length out of range");
+        let error = parse(&SHAPE, &json!({})).unwrap_err();
+        assert_eq!((error.path.as_str(), error.message.as_str()), ("b", "required"));
+        assert_eq!(
+            parse(&SHAPE, &json!([])).unwrap_err().to_string(),
+            "Schema validation failed at <root>: expected object"
+        );
+    }
+
+    #[test]
+    fn normalizes_numbers_like_json_stringify() {
+        assert_eq!(normalize_number(f64::NAN), Value::Null);
+        assert_eq!(normalize_number(f64::INFINITY), Value::Null);
+        assert_eq!(normalize_number(3.0), json!(3));
+        assert_eq!(normalize_number(0.5), json!(0.5));
+        assert_eq!(normalize_number(1e19), json!(1e19));
+        // Non-numbers pass through the output normalizer untouched.
+        assert_eq!(normalize_number_value(&json!("x")), json!("x"));
+        assert_eq!(normalize_number_value(&json!(7.0)), json!(7));
+        assert_eq!(normalize_number_value(&json!(u64::MAX)), json!(u64::MAX));
+    }
+
+    #[test]
+    fn javascript_number_parsing_handles_edge_literals() {
+        assert_eq!(js_to_number("Infinity"), f64::INFINITY);
+        assert_eq!(js_to_number("+Infinity"), f64::INFINITY);
+        assert_eq!(js_to_number("0b101"), 5.0);
+        assert_eq!(js_to_number("0o17"), 15.0);
+        assert!(js_to_number("0xzz").is_nan());
+        assert!(js_to_number("0b102").is_nan());
+        assert_eq!(js_to_number("1e+2"), 100.0);
+        assert_eq!(js_to_number("1E-2"), 0.01);
+        assert!(js_to_number("1e+").is_nan());
+        assert!(js_to_number(".").is_nan());
+        // JavaScript trims Unicode spaces as well as ASCII ones.
+        assert_eq!(js_to_number("\u{a0}7\u{2003}"), 7.0);
+        assert_eq!(js_to_number("\u{feff}\u{3000}8\u{2028}"), 8.0);
+        assert_eq!(js_to_number("\u{1680}\u{202f}\u{205f}9\u{200a}"), 9.0);
+        assert!(js_to_number("1\u{200b}").is_nan());
+    }
+
+    #[test]
+    fn row_values_convert_like_javascript() {
+        assert_eq!(js_number(&json!(true)), json!(1));
+        assert_eq!(js_number(&json!(false)), json!(0));
+        assert_eq!(js_number(&json!(u64::MAX)), json!(u64::MAX));
+        assert_eq!(js_number(&json!("abc")), json!("NaN"));
+        assert_eq!(js_number(&json!("Infinity")), json!("NaN"));
+        assert_eq!(js_number(&json!([1])), json!("NaN"));
+        assert_eq!(js_number(&json!({})), json!("NaN"));
+        assert_eq!(js_string(&json!(true)), json!("true"));
+        assert_eq!(js_string(&json!("s")), json!("s"));
+        assert_eq!(js_string(&json!([1, "a"])), json!("[1,\"a\"]"));
+        assert_eq!(js_string(&json!(-7)), json!("-7"));
+    }
+
+    #[test]
+    fn query_parameters_are_validated_like_the_zod_schemas() {
+        let address = bs58::encode([9u8; 32]).into_string();
+        assert_eq!(address_param(Some(&address), true), Ok(Some(address.clone())));
+        assert_eq!(address_param(None, false), Ok(None));
+        assert_eq!(address_param(None, true), Err(InvalidQuery));
+        assert_eq!(address_param(Some("nope"), false), Err(InvalidQuery));
+        assert_eq!(enum_param(None, &["a", "b"], Some("a")), Ok(Some("a".into())));
+        assert_eq!(enum_param(None, &["a", "b"], None), Ok(None));
+        assert_eq!(enum_param(Some("b"), &["a", "b"], Some("a")), Ok(Some("b".into())));
+        assert_eq!(enum_param(Some("c"), &["a", "b"], Some("a")), Err(InvalidQuery));
+        assert_eq!(coerce_int(Some("9007199254740992"), 0, 0, None), Err(InvalidQuery));
+        assert_eq!(coerce_int(Some("Infinity"), 0, 0, None), Err(InvalidQuery));
+    }
+
+    #[test]
+    fn formats_special_floats_like_javascript() {
+        assert_eq!(js_number_to_string(f64::NAN), "NaN");
+        assert_eq!(js_number_to_string(f64::INFINITY), "Infinity");
+        assert_eq!(js_number_to_string(f64::NEG_INFINITY), "-Infinity");
+    }
 }
