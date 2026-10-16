@@ -18,7 +18,7 @@ Keep these files outside `.env` and set them to mode `600`:
 
 The API token must match the Bot repository copy. The configured keypair must be the Oracle operator stored on chain.
 
-The service uses two independent SQLite files. `oracle.sqlite` contains secrets and completion state. `indexer.sqlite` contains only public chain history and cached statistics. Never replace one with the other.
+The service uses two independent SQLite files in `~/timba/oracle/data`, mounted at `/app/data`. `oracle.sqlite` contains secrets and completion state. `indexer.sqlite` contains only public chain history and cached statistics. Never replace one with the other. SQLite keeps `-wal` and `-shm` files next to each database, so always mount and back up the whole directory, never a single file.
 
 After switching the Oracle to v0.3.0 and before activating Bot or Web game creation, define every supported mint in the durable Oracle database. A missing policy disables game creation for that mint:
 
@@ -60,8 +60,8 @@ Copy `timba-games.sql` to the VPS, stop the Oracle, and import it from the new O
 ```bash
 systemctl --user stop timba-oracle.service
 podman run --rm --volume "$PWD:/work:Z" --workdir /work ghcr.io/timbagame/oracle:main \
-  timba-oracle import-indexer /work/timba-games.sql /work/indexer.sqlite
-chmod 600 indexer.sqlite secrets/jupiter-api-key
+  timba-oracle import-indexer /work/timba-games.sql /work/data/indexer.sqlite
+chmod 600 data/indexer.sqlite secrets/jupiter-api-key
 systemctl --user start timba-oracle.service
 ```
 
@@ -73,6 +73,7 @@ The production checkout is expected at `~/timba/oracle`. Install the shared netw
 
 ```bash
 mkdir -p ~/.config/containers/systemd
+install -d -m 700 ~/timba/oracle/data
 cp deploy/quadlet/timba.network deploy/quadlet/timba-oracle.container ~/.config/containers/systemd/
 systemctl --user daemon-reload
 systemctl --user start timba-oracle.service
@@ -93,6 +94,61 @@ journalctl --user -u timba-oracle.service -f
 ```
 
 Do not publish port 3001 on the VPS host, run another service copy against the same databases, or use `sudo` for rootless Podman. If the checkout path changes, update the `%h/timba/oracle` paths in the installed Quadlet.
+
+## Moving a host from the TypeScript image
+
+Hosts installed before the Rust rewrite run Quadlets that probe health with
+`bun`, start the EVM oracle with `bun run start:evm` and mount each database
+as a single file. The image ships a small `bun` compatibility script, so an
+automatic update does not break those hosts, but switch them to the current
+Quadlets in one maintenance window:
+
+```bash
+cd ~/timba/oracle
+# 1. Record the running image so it can be restored, then pause automatic updates.
+podman inspect oracle --format '{{.ImageDigest}}' | tee rollback-image-digest
+systemctl --user stop podman-auto-update.timer
+# 2. Stop cleanly; the shutdown checkpoints both databases.
+systemctl --user stop timba-oracle.service
+# 3. Back up and move the databases into the data directory.
+install -d -m 700 backups data
+tar -czf "backups/sqlite-$(date -u +%Y%m%dT%H%M%SZ).tgz" oracle.sqlite* indexer.sqlite*
+mv oracle.sqlite* indexer.sqlite* data/
+# 4. Install the current Quadlets (also timba-evm-oracle.container if it is installed).
+cp deploy/quadlet/timba-oracle.container ~/.config/containers/systemd/
+systemctl --user daemon-reload
+podman pull ghcr.io/timbagame/oracle:main
+systemctl --user start timba-oracle.service
+# 5. Wait past the health start period and three probe intervals, then check.
+sleep 120
+podman inspect oracle --format '{{.State.Health.Status}}'   # healthy
+podman exec oracle timba-oracle healthcheck && echo healthy
+journalctl --user -u timba-oracle.service --since -5min
+systemctl --user start podman-auto-update.timer
+```
+
+Resume automatic updates only after the health status reads `healthy`.
+
+### Rollback
+
+The Rust and TypeScript releases share the SQLite schemas, so either can open
+the other's databases. To return to the recorded image:
+
+```bash
+cd ~/timba/oracle
+systemctl --user stop podman-auto-update.timer   # keep it stopped until main is fixed
+systemctl --user stop timba-oracle.service
+mv data/oracle.sqlite* data/indexer.sqlite* .
+git show <previous-release-tag>:deploy/quadlet/timba-oracle.container \
+  > ~/.config/containers/systemd/timba-oracle.container
+podman pull "ghcr.io/timbagame/oracle@$(cat rollback-image-digest)"
+podman tag "ghcr.io/timbagame/oracle@$(cat rollback-image-digest)" ghcr.io/timbagame/oracle:main
+systemctl --user daemon-reload
+systemctl --user start timba-oracle.service
+```
+
+While the timer is stopped, nothing replaces the pinned image. Re-enable it
+only once `ghcr.io/timbagame/oracle:main` carries a release you want to run.
 
 ## Private web access
 
@@ -130,6 +186,6 @@ podman exec oracle timba-oracle admin token-policy list
 podman exec oracle timba-oracle admin token-policy set <mint> <on|off>
 ```
 
-Monitor logs for subscription failures, `/stats` for completion activity, `/indexer/api/stats` for the public index, and the operator wallet balance for transaction fees. Back up both SQLite files.
+Monitor logs for subscription failures, `/stats` for completion activity, `/indexer/api/stats` for the public index, and the operator wallet balance for transaction fees. Back up the whole `data` directory. Copy it while the service is stopped, or use `sqlite3 data/oracle.sqlite ".backup <file>"`, so the backup includes commits still in the WAL.
 
 For coordinated deployment order, chain administration, upgrades, and incident procedures, use `operations/DEPLOYMENT.md` and the relevant Operations runbook.

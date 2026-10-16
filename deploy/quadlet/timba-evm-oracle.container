@@ -17,6 +17,7 @@ Exec=/usr/local/bin/timba-evm-oracle
 NoNewPrivileges=true
 DropCapability=all
 PidsLimit=128
+StopTimeout=30
 
 [Service]
 Restart=always
