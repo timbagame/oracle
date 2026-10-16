@@ -3813,9 +3813,14 @@ dependencies = [
 name = "timba-common"
 version = "1.0.0"
 dependencies = [
+ "axum",
  "chrono",
+ "futures",
+ "hyper",
+ "hyper-util",
  "tempfile",
  "tokio",
+ "tower",
 ]
 
 [[package]]

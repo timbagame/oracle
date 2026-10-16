@@ -22,6 +22,8 @@ curve25519-dalek = "4"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 futures = "0.3"
 hex = "0.4"
+hyper = { version = "1.12", features = ["http1", "server"] }
+hyper-util = { version = "0.1.21", features = ["http1", "server", "server-graceful", "service", "tokio"] }
 indexmap = "2"
 rand = "0.8"
 regex = "1"

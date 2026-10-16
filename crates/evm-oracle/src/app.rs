@@ -60,9 +60,9 @@ pub async fn run(config_file: Option<String>, shutdown: Shutdown) -> anyhow::Res
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], config.port))).await?;
     let server = {
         let shutdown = shutdown.clone();
-        tokio::spawn(async move {
-            axum::serve(listener, router).with_graceful_shutdown(async move { shutdown.wait().await }).await
-        })
+        tokio::spawn(
+            async move { timba_common::http::serve(listener, router, async move { shutdown.wait().await }).await },
+        )
     };
     println!(
         "EVM oracle listening on port {}, chain {}, proxy {}",

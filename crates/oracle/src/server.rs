@@ -58,9 +58,7 @@ pub async fn serve() -> anyhow::Result<i32> {
     let server_stop = Shutdown::new();
     let mut server_task: JoinHandle<std::io::Result<()>> = {
         let stop = server_stop.clone();
-        tokio::spawn(async move {
-            axum::serve(listener, app).with_graceful_shutdown(async move { stop.wait().await }).await
-        })
+        tokio::spawn(async move { timba_common::http::serve(listener, app, async move { stop.wait().await }).await })
     };
 
     let background = Shutdown::new();

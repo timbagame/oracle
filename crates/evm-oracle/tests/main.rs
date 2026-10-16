@@ -94,32 +94,54 @@ fn operator_key() -> String {
     OPERATOR_KEY.to_string()
 }
 
+/// Starts the oracle, retrying on a fresh port if another test grabbed the free one
+/// between `free_port` and the oracle's bind.
+async fn start(
+    rpc_urls: Vec<String>,
+) -> (Deployment, Shutdown, tokio::task::JoinHandle<anyhow::Result<()>>, reqwest::Response) {
+    let client = reqwest::Client::new();
+    for _ in 0..5 {
+        let deployment = deployment(rpc_urls.clone(), &operator_key());
+        let shutdown = Shutdown::new();
+        let running = tokio::spawn(app::run(Some(deployment.config_file.clone()), shutdown.clone()));
+        let health = format!("http://127.0.0.1:{}/evm/health", deployment.port);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while tokio::time::Instant::now() < deadline && !running.is_finished() {
+            if let Ok(response) = client.get(&health).send().await {
+                return (deployment, shutdown, running, response);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let error = running.await.unwrap().expect_err("the oracle stopped without an error");
+        assert!(error.to_string().contains("in use"), "oracle exited early: {error}");
+    }
+    panic!("no free port after 5 attempts");
+}
+
 #[tokio::test]
 async fn serves_the_api_and_ticks_until_shutdown() {
     let chain = FakeChain::new();
     let url = rpc_endpoint(chain.clone()).await;
     // The first endpoint refuses connections; the fallback moves on to the second.
-    let deployment = deployment(vec!["http://127.0.0.1:1".into(), url], &operator_key());
-    let shutdown = Shutdown::new();
-    let running = tokio::spawn(app::run(Some(deployment.config_file.clone()), shutdown.clone()));
+    let (deployment, shutdown, running, unauthorized) = start(vec!["http://127.0.0.1:1".into(), url]).await;
 
     let client = reqwest::Client::new();
-    let health = format!("http://127.0.0.1:{}/evm/health", deployment.port);
-    let unauthorized = loop {
-        if let Ok(response) = client.get(&health).send().await {
-            break response;
-        }
-        assert!(!running.is_finished(), "oracle exited early");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    };
+    let base = format!("http://127.0.0.1:{}", deployment.port);
     assert_eq!(unauthorized.status(), 401);
-    let healthy = loop {
-        let response = client.get(&health).bearer_auth("evm-token").send().await.unwrap();
-        if response.status() == 200 {
-            break response.json::<Value>().await.unwrap();
+    // Oversized bodies are refused before the bearer check, as Bun's maxRequestBodySize does.
+    let oversized = client.post(format!("{base}/evm/authorize")).body(vec![b'x'; 16 * 1024 + 1]).send().await.unwrap();
+    assert_eq!(oversized.status(), 413);
+    let healthy = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let response = client.get(format!("{base}/evm/health")).bearer_auth("evm-token").send().await.unwrap();
+            if response.status() == 200 {
+                break response.json::<Value>().await.unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    };
+    })
+    .await
+    .expect("the oracle becomes healthy");
     assert_eq!(healthy["status"], "healthy");
     assert!(chain.calls("eth_chainId").len() >= 2, "validated at start and every cycle");
 
