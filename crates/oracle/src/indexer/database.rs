@@ -67,11 +67,12 @@ impl LeaderboardPeriod {
         }
     }
 
-    fn seconds(self) -> i64 {
+    /// The length of the rolling window, or `None` for the all-time leaderboard.
+    fn window_seconds(self) -> Option<i64> {
         match self {
-            Self::Day => 86_400,
-            Self::Week => 7 * 86_400,
-            Self::All => 0,
+            Self::Day => Some(86_400),
+            Self::Week => Some(7 * 86_400),
+            Self::All => None,
         }
     }
 }
@@ -743,8 +744,7 @@ impl IndexerDatabase {
     }
 
     fn rebuild_caches_in(&self, conn: &Connection, cache: &mut CacheState) -> Result<()> {
-        cache.dirty = false;
-        cache.last_rebuild_at = Some((self.clock)());
+        let started_at = (self.clock)();
         cache.leaderboard_windows.clear();
         cache.generation += 1;
         let now = self.now_seconds();
@@ -804,6 +804,9 @@ impl IndexerDatabase {
          last_indexed_signature=?, updated_at=? WHERE id=1",
             params![sql_bind(&total_games), sql_bind(&unique_players), sql_bind(&last_signature), now],
         )?;
+        // Only a rebuild that completed clears the flag; a failed one is retried by the next flush.
+        cache.dirty = false;
+        cache.last_rebuild_at = Some(started_at);
         Ok(())
     }
 
@@ -925,8 +928,8 @@ impl IndexerDatabase {
     }
 
     pub fn get_leaderboard(&self, limit: i64, token_mint: Option<&str>, period: LeaderboardPeriod) -> Result<Vec<Row>> {
-        if period != LeaderboardPeriod::All {
-            return self.get_windowed_leaderboard(limit, period, token_mint);
+        if let Some(window_seconds) = period.window_seconds() {
+            return self.get_windowed_leaderboard(limit, period, window_seconds, token_mint);
         }
         // `tokenMint ?? "*"`: an empty string is a (never matching) scope.
         let scope = token_mint.unwrap_or("*");
@@ -946,6 +949,7 @@ impl IndexerDatabase {
         &self,
         limit: i64,
         period: LeaderboardPeriod,
+        window_seconds: i64,
         token_mint: Option<&str>,
     ) -> Result<Vec<Row>> {
         let take = |rows: &[Row]| -> Vec<Row> {
@@ -962,7 +966,7 @@ impl IndexerDatabase {
             }
             cache.generation
         };
-        let since = now.div_euclid(1000) - period.seconds();
+        let since = now.div_euclid(1000) - window_seconds;
         // Served by idx_games_token (token_mint, timestamp) or idx_games_timestamp.
         let result = self.with_conn(|conn| {
             Ok(match non_empty(token_mint) {
@@ -1083,27 +1087,9 @@ impl IndexerDatabase {
              WHERE l.game_key IN ({PLAYER_GAME_KEYS_SQL})"
         );
         self.with_conn(|conn| {
-            let summary = match query_one(conn, &summary_sql, params![player, player, player, player, player, player])?
-            {
-                Some(summary) => summary,
-                None => {
-                    let mut empty = Row::new();
-                    for key in [
-                        "related_games",
-                        "created_games",
-                        "played_games",
-                        "active_games",
-                        "completed_games",
-                        "cancelled_games",
-                        "wins",
-                        "losses",
-                    ] {
-                        empty.insert(key.into(), Value::from(0));
-                    }
-                    empty.insert("last_activity".into(), Value::Null);
-                    empty
-                }
-            };
+            // An aggregate without GROUP BY always yields exactly one row.
+            let summary = query_one(conn, &summary_sql, params![player, player, player, player, player, player])?
+                .ok_or_else(|| anyhow!("Player summary query returned no row"))?;
             let tokens = query_all(
                 conn,
                 "SELECT l.token_mint, COUNT(*) games_played,
@@ -1198,4 +1184,157 @@ fn migrate_legacy_schema(conn: &Connection) -> Result<()> {
         conn.execute_batch("DROP INDEX IF EXISTS idx_active_player")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn memory() -> IndexerDatabase {
+        IndexerDatabase::open(":memory:").unwrap()
+    }
+
+    #[test]
+    fn parses_and_names_leaderboard_periods() {
+        for (text, period) in
+            [("24h", LeaderboardPeriod::Day), ("7d", LeaderboardPeriod::Week), ("all", LeaderboardPeriod::All)]
+        {
+            assert_eq!(LeaderboardPeriod::parse(text), Some(period));
+            assert_eq!(period.as_str(), text);
+        }
+        assert_eq!(LeaderboardPeriod::parse("bogus"), None);
+        assert_eq!(LeaderboardPeriod::parse(""), None);
+        assert_eq!(LeaderboardPeriod::default(), LeaderboardPeriod::All);
+    }
+
+    #[test]
+    fn only_rolling_periods_have_a_window() {
+        assert_eq!(LeaderboardPeriod::Day.window_seconds(), Some(86_400));
+        assert_eq!(LeaderboardPeriod::Week.window_seconds(), Some(604_800));
+        assert_eq!(LeaderboardPeriod::All.window_seconds(), None);
+    }
+
+    #[test]
+    fn reads_every_sqlite_type_as_json() {
+        let rows = memory()
+            .with_conn(|conn| Ok(query_all(conn, "SELECT NULL n, 7 i, 1.0 whole, 1.5 f, 'text' t, x'0aff' b", [])?))
+            .unwrap();
+        assert_eq!(
+            Value::from(rows[0].clone().into_iter().collect::<serde_json::Map<_, _>>()),
+            serde_json::json!({ "n": null, "i": 7, "whole": 1, "f": 1.5, "t": "text", "b": [10, 255] })
+        );
+    }
+
+    #[test]
+    fn binds_json_values_as_the_matching_sqlite_types() {
+        assert_eq!(sql_bind(&Value::Null), SqlValue::Null);
+        assert_eq!(sql_bind(&Value::Bool(true)), SqlValue::Integer(1));
+        assert_eq!(sql_bind(&Value::Bool(false)), SqlValue::Integer(0));
+        assert_eq!(sql_bind(&Value::from(-7)), SqlValue::Integer(-7));
+        assert_eq!(sql_bind(&Value::from(1.5)), SqlValue::Real(1.5));
+        // Beyond the signed 64-bit range a number can only be bound as a float.
+        assert_eq!(sql_bind(&Value::from(u64::MAX)), SqlValue::Real(u64::MAX as f64));
+        assert_eq!(sql_bind(&Value::from("text")), SqlValue::Text("text".into()));
+        assert_eq!(sql_bind(&serde_json::json!([1, "a"])), SqlValue::Text("[1,\"a\"]".into()));
+        assert_eq!(sql_bind(&serde_json::json!({ "k": 1 })), SqlValue::Text("{\"k\":1}".into()));
+    }
+
+    /// A file database whose connection is made to fail at close time.
+    fn file_db() -> (tempfile::TempDir, std::path::PathBuf, IndexerDatabase) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("indexer.sqlite");
+        let db = IndexerDatabase::open(&path).unwrap();
+        db.save_verified_game("kept", "payload").unwrap();
+        (dir, path, db)
+    }
+
+    fn kept_after_reopening(path: &Path) -> Option<String> {
+        IndexerDatabase::open(path).unwrap().get_verified_game("kept").unwrap()
+    }
+
+    #[test]
+    fn closing_survives_a_failed_checkpoint_and_keeps_committed_data() {
+        let (_dir, path, db) = file_db();
+        // An open transaction makes the WAL checkpoint fail.
+        db.conn.lock().unwrap().as_ref().unwrap().execute_batch("BEGIN IMMEDIATE").unwrap();
+        db.close();
+        assert!(!db.is_open());
+        assert_eq!(kept_after_reopening(&path).as_deref(), Some("payload"));
+    }
+
+    #[test]
+    fn closing_survives_a_connection_that_refuses_to_close() {
+        let (_dir, path, db) = file_db();
+        {
+            let guard = db.conn.lock().unwrap();
+            // An unfinalized statement makes `sqlite3_close` report the handle busy.
+            std::mem::forget(guard.as_ref().unwrap().prepare("SELECT 1").unwrap());
+        }
+        db.close();
+        assert!(!db.is_open());
+        assert_eq!(kept_after_reopening(&path).as_deref(), Some("payload"));
+    }
+
+    #[test]
+    fn surfaces_a_failure_while_collecting_frequent_players() {
+        let db = memory();
+        let initialized = GameInitializedEvent {
+            game_key: "g".into(),
+            creator: "me".into(),
+            game_type: "coinflip".into(),
+            ticket_amount: 1,
+            total_amount: 2,
+            max_tickets: 2,
+            min_tickets: 2,
+            token_mint: "m".into(),
+            is_private: false,
+            created_at: 1,
+            timeout: 1,
+            signature: "s0".into(),
+            slot: 1,
+        };
+        let joined = |player: &str, ticket_index| PlayerMembershipEvent {
+            kind: MembershipKind::Joined,
+            game_key: "g".into(),
+            player: player.into(),
+            tickets_count: 1,
+            ticket_index,
+            moved_participant: None,
+            timestamp: 2,
+            signature: "s1".into(),
+            slot: 2,
+        };
+        let completed = GameCompletedEvent {
+            game_key: "g".into(),
+            winner: "me".into(),
+            tickets_count: 2,
+            winner_amount: 3,
+            fee_amount: 0,
+            timestamp: 3,
+            signature: "s2".into(),
+            slot: 3,
+        };
+        let opponent = "o".repeat(600);
+        let events = IndexedEvents {
+            initialized: vec![initialized],
+            membership: vec![joined("me", 0), joined(&opponent, 1)],
+            completed: vec![completed],
+            closed: vec![],
+        };
+        db.apply(&events, &IndexerCursor { signature: "s2".into(), slot: 3 }).unwrap();
+        let profile = db.get_player_profile("me").unwrap();
+        assert_eq!(profile.frequent_players.len(), 1);
+
+        // Reading the opponent's oversized row now fails, after the summary and
+        // token queries (which only read the player's own rows) succeeded.
+        db.with_conn(|conn| {
+            // SAFETY: the connection is alive and locked for the whole call.
+            unsafe { rusqlite::ffi::sqlite3_limit(conn.handle(), rusqlite::ffi::SQLITE_LIMIT_LENGTH, 400) };
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(db.get_player_games("me", 10, 0).unwrap().len(), 1);
+        let error = db.get_player_profile("me").unwrap_err();
+        assert!(error.to_string().to_lowercase().contains("too big"), "{error:#}");
+    }
 }

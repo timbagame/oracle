@@ -13,7 +13,7 @@ use timba_protocol::address::Address;
 use tower::ServiceExt;
 
 use super::api::router_with_clock;
-use super::database::{IndexerDatabase, IndexerDatabaseOptions, LeaderboardPeriod};
+use super::database::{IndexerDatabase, IndexerDatabaseOptions, LeaderboardPeriod, BACKFILL_NAME, DEFAULT_TOKEN_MINT};
 use super::pricing::TokenUsdPrices;
 use super::types::{
     GameClosedEvent, GameCompletedEvent, GameInitializedEvent, IndexedEvents, IndexerCursor, MembershipKind,
@@ -72,7 +72,11 @@ fn initialized_event(game_key: &str, creator: &str, mint: &str, sig: &str, slot:
 }
 
 fn fixture(options: IndexerDatabaseOptions) -> Fixture {
-    let db = Arc::new(IndexerDatabase::open_with_options(":memory:", options).unwrap());
+    fixture_at(":memory:", options)
+}
+
+fn fixture_at(path: &str, options: IndexerDatabaseOptions) -> Fixture {
+    let db = Arc::new(IndexerDatabase::open_with_options(path, options).unwrap());
     let (game_key, creator, player, mint) = (key(1), key(2), key(3), key(4));
     let initialized_signature = "1".repeat(64);
     let completed_signature = format!("{}2", "1".repeat(63));
@@ -988,4 +992,379 @@ async fn hides_database_failures_behind_a_500() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(headers["content-type"], "application/json");
     assert_eq!(body, json!({ "error": "Internal server error" }));
+}
+
+// -- failure paths ------------------------------------------------------------
+//
+// A second connection to the database file installs triggers that abort one kind
+// of write, or drops a table, while every other statement keeps working.
+
+fn file_fixture() -> (tempfile::TempDir, String, Fixture) {
+    file_fixture_with(Default::default())
+}
+
+fn file_fixture_with(options: IndexerDatabaseOptions) -> (tempfile::TempDir, String, Fixture) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("indexer.sqlite").to_str().unwrap().to_string();
+    let f = fixture_at(&path, options);
+    (dir, path, f)
+}
+
+fn sabotage(path: &str, sql: &str) {
+    rusqlite::Connection::open(path).unwrap().execute_batch(sql).unwrap();
+}
+
+fn count(path: &str, table: &str) -> i64 {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+        .unwrap()
+}
+
+fn abort_on(event: &str, table: &str, condition: &str) -> String {
+    format!(
+        "CREATE TRIGGER fail_write BEFORE {event} ON {table} {condition} BEGIN SELECT RAISE(ABORT, 'disk full'); END;"
+    )
+}
+
+fn closed_event(game_key: &str) -> GameClosedEvent {
+    GameClosedEvent { game_key: game_key.into(), timestamp: 1_003, operator: false, signature: signature(9), slot: 13 }
+}
+
+const WRITTEN_TABLES: [&str; 12] = [
+    "games",
+    "active_games",
+    "active_game_players",
+    "game_players",
+    "gameplay_events",
+    "game_initializations",
+    "game_closures",
+    "game_lifecycle",
+    "verification_jobs",
+    "token_stats_cache",
+    "token_summary_cache",
+    "leaderboard_cache",
+];
+
+#[test]
+fn rolls_back_a_whole_batch_when_any_write_in_it_fails() {
+    let failing_writes = [
+        ("INSERT", "game_initializations", ""),
+        ("INSERT", "gameplay_events", ""),
+        ("INSERT", "active_games", ""),
+        ("INSERT", "game_lifecycle", ""),
+        ("INSERT", "game_players", ""),
+        ("INSERT", "active_game_players", ""),
+        ("UPDATE", "active_games", ""),
+        ("INSERT", "games", ""),
+        ("INSERT", "game_closures", ""),
+        ("DELETE", "active_game_players", ""),
+        ("DELETE", "active_games", ""),
+        ("INSERT", "verification_jobs", ""),
+        ("INSERT", "indexer_state", ""),
+        ("INSERT", "token_stats_cache", ""),
+        ("INSERT", "token_summary_cache", ""),
+        ("INSERT", "leaderboard_cache", "WHEN NEW.scope = '*'"),
+        ("INSERT", "leaderboard_cache", "WHEN NEW.scope != '*'"),
+        ("UPDATE", "stats_cache", ""),
+    ];
+    for (event, table, condition) in failing_writes {
+        let (_dir, path, mut f) = file_fixture();
+        f.events.closed.push(closed_event(&key(9)));
+        sabotage(&path, &abort_on(event, table, condition));
+        let error = f.db.apply(&f.events, &cursor(&f.completed_signature, 12)).unwrap_err();
+        assert!(format!("{error:#}").contains("disk full"), "{event} {table} {condition}: {error:#}");
+        assert_eq!(f.db.get_cursor().unwrap(), None, "{event} {table} {condition}");
+        for written in WRITTEN_TABLES {
+            assert_eq!(count(&path, written), 0, "{event} {table} {condition}: {written} was not rolled back");
+        }
+    }
+}
+
+#[test]
+fn keeps_the_previous_state_when_re_indexing_a_game_fails() {
+    let (_dir, path, f) = file_fixture();
+    let first = cursor(&f.completed_signature, 12);
+    f.db.apply(&f.events, &first).unwrap();
+    // Re-indexing a completed game rewrites its token on the finished row.
+    sabotage(&path, &abort_on("UPDATE", "games", ""));
+    let error = f.db.apply(&f.events, &cursor(&f.completed_signature, 13)).unwrap_err();
+    assert!(format!("{error:#}").contains("disk full"), "{error:#}");
+    assert_eq!(f.db.get_cursor().unwrap(), Some(first));
+}
+
+#[test]
+fn reads_fail_cleanly_when_their_tables_are_gone() {
+    type Read = fn(&IndexerDatabase, &Fixture) -> bool;
+    let reads: [(&str, Read); 13] = [
+        ("verification_jobs", |db, _| db.next_verification_job().is_err()),
+        ("games", |db, _| db.get_games(10, 0, None).is_err()),
+        ("games", |db, f| db.get_games(10, 0, Some(&f.mint)).is_err()),
+        ("games", |db, f| db.get_game(&f.game_key).is_err()),
+        ("games", |db, _| db.assert_d1_import_ready().is_err()),
+        ("games", |db, _| db.get_leaderboard(10, None, LeaderboardPeriod::Day).is_err()),
+        ("games", |db, f| db.get_leaderboard(10, Some(&f.mint), LeaderboardPeriod::Week).is_err()),
+        ("leaderboard_cache", |db, _| db.get_leaderboard(10, None, LeaderboardPeriod::All).is_err()),
+        ("token_summary_cache", |db, _| db.get_tokens().is_err()),
+        ("token_summary_cache", |db, f| db.get_stats(Some(&f.mint)).is_err()),
+        ("active_games", |db, _| db.get_active_games(None).is_err()),
+        ("active_games", |db, f| db.get_active_games(Some(&f.player)).is_err()),
+        ("game_players", |db, f| db.get_player_profile(&f.player).is_err()),
+    ];
+    for (index, (table, read)) in reads.into_iter().enumerate() {
+        // Uncached, so the windowed leaderboards read the database every time.
+        let (_dir, path, f) =
+            file_fixture_with(IndexerDatabaseOptions { leaderboard_cache_ttl_ms: Some(0), ..Default::default() });
+        // Leave the game open so the active tables hold rows too.
+        f.db.apply(&initialized_only(&f.events), &cursor(&f.completed_signature, 12)).unwrap();
+        sabotage(
+            &path,
+            &format!("INSERT INTO historical_backfill (name, complete, updated_at) VALUES ('{BACKFILL_NAME}', 1, 0)"),
+        );
+        assert!(!read(&f.db, &f), "read {index} failed before the table was dropped");
+        sabotage(&path, &format!("DROP TABLE {table}"));
+        assert!(read(&f.db, &f), "read {index} did not fail without {table}");
+    }
+}
+
+#[test]
+fn surfaces_job_cursor_and_verified_game_write_failures() {
+    let (_dir, path, f) = file_fixture();
+    f.db.queue_verification("queued").unwrap();
+    sabotage(
+        &path,
+        &[
+            abort_on("INSERT", "verification_jobs", "").replace("fail_write", "fail_queue"),
+            abort_on("UPDATE", "verification_jobs", "").replace("fail_write", "fail_retry"),
+            abort_on("INSERT", "verified_games", "").replace("fail_write", "fail_save"),
+            abort_on("INSERT", "indexer_state", "").replace("fail_write", "fail_cursor"),
+        ]
+        .join("\n"),
+    );
+    let message = |result: anyhow::Result<()>| format!("{:#}", result.unwrap_err());
+    assert!(message(f.db.queue_verification("another")).contains("disk full"));
+    assert!(message(f.db.retry_verification_job("queued", 1)).contains("disk full"));
+    assert!(message(f.db.save_verified_game("key", "payload")).contains("disk full"));
+    assert!(message(f.db.set_cursor(&cursor(&f.completed_signature, 5))).contains("disk full"));
+    assert_eq!(count(&path, "verification_jobs"), 1);
+    assert_eq!(f.db.get_verified_game("key").unwrap(), None);
+    assert_eq!(f.db.get_cursor().unwrap(), None);
+}
+
+#[test]
+fn backs_off_retries_with_negative_attempts_by_a_fraction_of_a_minute() {
+    let now: ManualClock = Arc::new(AtomicI64::new(1_000_000));
+    let db = jobs_db(&now);
+    db.queue_verification("sig-a").unwrap();
+    now.fetch_add(60_000, Ordering::SeqCst);
+
+    // 2 ** -3 of the one minute base, like `2 ** attempts` in JavaScript.
+    db.retry_verification_job("sig-a", -3).unwrap();
+    now.fetch_add(7_500 - 1, Ordering::SeqCst);
+    assert_eq!(db.next_verification_job().unwrap(), None);
+    now.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(db.next_verification_job().unwrap(), job("sig-a", -2));
+
+    // The exponent is clamped, so a huge negative count is due immediately.
+    db.retry_verification_job("sig-a", i64::MIN).unwrap();
+    assert_eq!(db.next_verification_job().unwrap(), job("sig-a", i64::MIN + 1));
+}
+
+#[test]
+fn rejects_an_import_that_fails_and_keeps_the_database_unchanged() {
+    let f = fixture(Default::default());
+    f.db.import_sql("INSERT INTO verified_games (cache_key, payload) VALUES ('before', 'x');").unwrap();
+    assert_eq!(f.db.get_verified_game("before").unwrap().as_deref(), Some("x"));
+    let error =
+        f.db.import_sql(
+            "INSERT INTO verified_games (cache_key, payload) VALUES ('half', 'y'); INSERT INTO missing VALUES (1);",
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("no such table"), "{error:#}");
+    assert_eq!(f.db.get_verified_game("half").unwrap(), None);
+}
+
+#[test]
+fn retries_a_failed_cache_rebuild_instead_of_forgetting_it() {
+    let (_dir, path, f) = file_fixture();
+    // A rebuild is due immediately, then the next one is throttled for 30 seconds.
+    f.db.apply(&initialized_only(&f.events), &cursor(&f.completed_signature, 10)).unwrap();
+    f.db.apply(&f.events, &cursor(&f.completed_signature, 12)).unwrap();
+    assert!(f.db.has_pending_cache_rebuild());
+
+    sabotage(&path, &abort_on("INSERT", "token_stats_cache", ""));
+    assert!(f.db.flush_caches(true).is_err());
+    // The failed rebuild changed nothing, so the pending flag must survive for the next flush.
+    assert!(f.db.has_pending_cache_rebuild());
+    assert!(f.db.ms_until_cache_flush().is_some());
+
+    sabotage(&path, "DROP TRIGGER fail_write");
+    assert!(f.db.flush_caches(true).unwrap());
+    assert!(!f.db.has_pending_cache_rebuild());
+    assert_eq!(f.db.get_stats(None).unwrap().total_games, json!(1));
+}
+
+#[test]
+fn flushes_immediately_when_a_change_arrived_before_any_rebuild_succeeded() {
+    let (_dir, path, f) = file_fixture();
+    sabotage(&path, &abort_on("INSERT", "token_stats_cache", ""));
+    // The batch is rolled back with its failed rebuild, but the caches are marked
+    // for a rebuild that has never run.
+    assert!(f.db.apply(&f.events, &cursor(&f.completed_signature, 12)).is_err());
+    assert!(f.db.has_pending_cache_rebuild());
+    assert_eq!(f.db.ms_until_cache_flush(), Some(0));
+}
+
+#[test]
+fn rolls_back_a_rebuild_whose_stats_query_fails() {
+    let (_dir, path, f) = file_fixture();
+    f.db.apply(&f.events, &cursor(&f.completed_signature, 12)).unwrap();
+    // Reading the events fails with an integer overflow once the leaderboard is populated,
+    // which only happens after the earlier rebuild steps succeeded.
+    sabotage(
+        &path,
+        "DELETE FROM leaderboard_cache;
+         ALTER TABLE gameplay_events RENAME TO gameplay_events_real;
+         CREATE VIEW gameplay_events AS SELECT * FROM gameplay_events_real
+           WHERE (SELECT CASE WHEN COUNT(*) > 0 THEN abs(-9223372036854775808) ELSE 1 END FROM leaderboard_cache) > 0;",
+    );
+    let error = f.db.rebuild_caches().unwrap_err();
+    assert!(error.to_string().contains("integer overflow"), "{error:#}");
+    assert_eq!(count(&path, "leaderboard_cache"), 0);
+    assert_eq!(f.db.get_stats(None).unwrap().total_games, json!(1));
+}
+
+#[test]
+fn rejects_a_cache_rebuild_when_the_stats_row_cannot_be_updated() {
+    let (_dir, path, f) = file_fixture();
+    f.db.apply(&f.events, &cursor(&f.completed_signature, 12)).unwrap();
+    sabotage(&path, &abort_on("UPDATE", "stats_cache", ""));
+    assert!(f.db.rebuild_caches().is_err());
+    assert_eq!(count(&path, "token_stats_cache"), 1);
+}
+
+#[test]
+fn reports_no_biggest_win_for_tokens_imported_without_one() {
+    let (_dir, path, f) = file_fixture();
+    f.db.apply(&f.events, &cursor(&f.completed_signature, 12)).unwrap();
+    sabotage(&path, "UPDATE token_stats_cache SET biggest_win_winner = NULL");
+    let stats = f.db.get_stats(None).unwrap();
+    assert_eq!(stats.financials.len(), 1);
+    assert_eq!(stats.financials[0].biggest_win, None);
+    assert_eq!(stats.financials[0].total_volume, json!(200));
+}
+
+#[test]
+fn completes_games_of_databases_that_stored_no_token_mint() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy.sqlite").to_str().unwrap().to_string();
+    // An older export without the NOT NULL constraint on the token of a game.
+    sabotage(
+        &path,
+        "CREATE TABLE game_initializations (
+           game_key TEXT PRIMARY KEY, signature TEXT NOT NULL, creator TEXT NOT NULL,
+           game_type TEXT NOT NULL, ticket_amount INTEGER NOT NULL, total_amount INTEGER NOT NULL,
+           max_tickets INTEGER NOT NULL, min_tickets INTEGER NOT NULL, token_mint TEXT,
+           is_private INTEGER NOT NULL, created_at INTEGER NOT NULL, timeout INTEGER NOT NULL,
+           slot INTEGER NOT NULL, indexed_at INTEGER NOT NULL);
+         CREATE TABLE game_lifecycle (
+           game_key TEXT PRIMARY KEY, signature TEXT NOT NULL, token_mint TEXT, status TEXT NOT NULL,
+           creator TEXT, game_type TEXT, ticket_amount INTEGER, total_amount INTEGER, max_tickets INTEGER,
+           min_tickets INTEGER, is_private INTEGER, created_at INTEGER, timestamp INTEGER NOT NULL,
+           slot INTEGER NOT NULL, indexed_at INTEGER NOT NULL);",
+    );
+    let f = fixture_at(&path, Default::default());
+    sabotage(
+        &path,
+        "INSERT INTO game_initializations VALUES ('legacy', 's', 'c', 'coinflip', 1, 2, 2, 2, NULL, 0, 1, 1, 1, 1)",
+    );
+    let completed = IndexedEvents {
+        completed: vec![GameCompletedEvent { game_key: "legacy".into(), ..f.events.completed[0].clone() }],
+        ..Default::default()
+    };
+    f.db.apply(&completed, &cursor(&f.completed_signature, 12)).unwrap();
+    let page = f.db.get_games(10, 0, None).unwrap();
+    assert_eq!(page.games.len(), 1);
+    assert_eq!(page.games[0]["token_mint"], json!(DEFAULT_TOKEN_MINT));
+}
+
+#[test]
+fn removes_no_active_games_without_touching_the_database() {
+    let f = fixture(Default::default());
+    f.db.close();
+    f.db.remove_stale_active_games(&[]).unwrap();
+    assert!(f.db.remove_stale_active_games(&[key(1)]).is_err());
+}
+
+#[test]
+fn clears_cached_windows_when_the_cache_is_full() {
+    let now: ManualClock = Arc::new(AtomicI64::new(1_000_000));
+    let f = fixture(IndexerDatabaseOptions {
+        leaderboard_cache_ttl_ms: Some(30_000),
+        now: Some(clock_of(&now)),
+        ..Default::default()
+    });
+    let stale = vec![json!({ "player": "stale", "games_won": 9 }).as_object().unwrap().clone()];
+    let generation = f.db.cache_generation();
+    f.db.store_window("24h:*".into(), generation, 1_000_000, &stale);
+    assert_eq!(f.db.get_leaderboard(10, None, LeaderboardPeriod::Day).unwrap(), stale);
+    for index in 0..254 {
+        f.db.store_window(format!("filler:{index}"), generation, 1_000_000, &stale);
+    }
+    // Still within the limit: the window is served from memory.
+    assert_eq!(f.db.get_leaderboard(10, None, LeaderboardPeriod::Day).unwrap(), stale);
+    f.db.store_window("filler:last".into(), generation, 1_000_000, &stale);
+    f.db.store_window("one-more".into(), generation, 1_000_000, &stale);
+    // The full cache was dropped and re-read from the database.
+    assert!(f.db.get_leaderboard(10, None, LeaderboardPeriod::Day).unwrap().is_empty());
+}
+
+#[test]
+fn fails_to_open_a_database_with_a_damaged_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("damaged.sqlite");
+    {
+        let db = IndexerDatabase::open(&path).unwrap();
+        db.close();
+    }
+    // Keep the header, wreck the schema table on the first page.
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes[100..400].fill(0xff);
+    std::fs::write(&path, bytes).unwrap();
+    assert!(IndexerDatabase::open(&path).is_err());
+}
+
+#[test]
+fn fails_a_player_profile_whose_winnings_overflow() {
+    let (_dir, path, f) = file_fixture();
+    let mut events = IndexedEvents::default();
+    for (seed, game) in [(21u8, key(21)), (22, key(22))] {
+        events.initialized.push(initialized_event(&game, &key(2), &f.mint, &signature(seed), 10));
+        events.membership.push(PlayerMembershipEvent {
+            kind: MembershipKind::Joined,
+            game_key: game.clone(),
+            player: f.player.clone(),
+            tickets_count: 1,
+            ticket_index: 0,
+            moved_participant: None,
+            timestamp: 1_001,
+            signature: signature(seed),
+            slot: 11,
+        });
+        events.completed.push(GameCompletedEvent {
+            game_key: game,
+            winner: f.player.clone(),
+            tickets_count: 2,
+            winner_amount: 1,
+            fee_amount: 0,
+            timestamp: 1_002,
+            signature: signature(seed + 10),
+            slot: 12,
+        });
+    }
+    f.db.apply(&events, &cursor(&signature(31), 12)).unwrap();
+    assert_eq!(f.db.get_player_profile(&f.player).unwrap().tokens[0]["won_amount"], json!(2));
+    sabotage(&path, "UPDATE games SET winner_amount = 9223372036854775807");
+    let error = f.db.get_player_profile(&f.player).unwrap_err();
+    assert!(error.to_string().contains("integer overflow"), "{error:#}");
 }
