@@ -561,6 +561,36 @@ mod tests {
         assert_eq!(completion.attempts.lock().unwrap().len(), 1);
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn an_abort_while_waiting_between_games_ends_the_scan() {
+        let (dir, db, completion, metrics, _) =
+            setup(vec![Ok(resolved(true)), Ok(resolved(true))], CompletionResult::default());
+        let runner = ScanLoopRunner::new(ScanLoopRunnerOptions {
+            db: db.clone(),
+            metrics,
+            completion: completion.clone(),
+            inter_game_delay_ms: 60_000,
+            max_completion_attempts: 2,
+            cleanup_old_records: Arc::new(|_| Ok(())),
+        });
+        track(&db, "g1", true);
+        track(&db, "g2", true);
+        let signal = Shutdown::new();
+        let trigger = signal.clone();
+        // The first attempt fails, so the scan waits before the next game; shut down during that wait.
+        *completion.on_attempt.lock().unwrap() = Some(Box::new(move || {
+            let trigger = trigger.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                trigger.trigger();
+            });
+        }));
+        let stats = runner.scan_and_complete_active_games(Some(&signal)).await;
+        assert_eq!(stats, CompletionStats { completed: 0, errors: 1, not_ready: 0 });
+        assert_eq!(completion.attempts.lock().unwrap().len(), 1, "the second game is left for the next cycle");
+        drop(dir);
+    }
+
     #[tokio::test]
     async fn attempt_outcomes_update_stats_and_check_times() {
         let results = vec![

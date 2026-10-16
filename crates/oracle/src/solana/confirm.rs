@@ -223,6 +223,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expired_transactions_are_resent_when_the_node_has_never_seen_them() {
+        let transport = FakeTransport::new();
+        let pool = expired_pool(&transport);
+        // Unknown while confirming and still unknown after the expiry.
+        transport.push("getSignatureStatuses", Ok(json!({"value": [null]})));
+        transport.push("getSignatureStatuses", Ok(json!({"value": [null]})));
+        transport.on(|_, m, _| (m == "getSignatureStatuses").then(|| Ok(confirmed())));
+        assert_eq!(submit_transaction(&pool, |_| Ok("wire".into()), None).await.unwrap(), "sig");
+        assert_eq!(transport.calls_for("sendTransaction").len(), 2);
+    }
+
+    #[tokio::test]
     async fn expired_transactions_are_resent_when_their_status_is_unavailable() {
         let transport = FakeTransport::new();
         let pool = expired_pool(&transport);
