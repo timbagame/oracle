@@ -1397,4 +1397,439 @@ mod tests {
         db.close();
         assert!(!db.is_open());
     }
+
+    // -- failure paths --------------------------------------------------------
+    //
+    // A second connection to the same file installs triggers that abort one
+    // kind of write (or views that block a schema change) while every other
+    // statement keeps working.
+
+    fn file_db() -> (tempfile::TempDir, String, OracleDatabase) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("oracle.sqlite").to_str().unwrap().to_string();
+        let db = OracleDatabase::open(&path).unwrap();
+        (dir, path, db)
+    }
+
+    fn sabotage(path: &str, sql: &str) {
+        Connection::open(path).unwrap().execute_batch(sql).unwrap();
+    }
+
+    fn count(path: &str, sql: &str) -> i64 {
+        Connection::open(path).unwrap().query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    fn abort_on(event: &str, table: &str, condition: &str) -> String {
+        format!(
+            "CREATE TRIGGER fail_{table}_{} BEFORE {event} ON {table} {condition} BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+            event.to_lowercase()
+        )
+    }
+
+    #[test]
+    fn failure_kinds_have_stable_names() {
+        assert_eq!(ResetFailure::NotFound.as_str(), "not-found");
+        assert_eq!(ResetFailure::Finalized.as_str(), "finalized");
+        assert_eq!(ResetFailure::Unchanged.as_str(), "unchanged");
+        assert_eq!(ToggleFailure::InvalidAddress.as_str(), "invalid-address");
+        assert_eq!(ToggleFailure::NotFound.as_str(), "not-found");
+        assert_eq!(ToggleFailure::Finalized.as_str(), "finalized");
+        assert_eq!(ToggleFailure::Unchanged.as_str(), "unchanged");
+    }
+
+    #[test]
+    fn reports_its_file_and_open_state() {
+        let (_dir, path, db) = file_db();
+        assert_eq!(db.file(), path);
+        assert!(db.is_open());
+        db.close();
+        assert!(!db.is_open());
+        // Closed handles fail instead of panicking, and closing twice is harmless.
+        assert_eq!(db.save_secret_key("g", "s", "h").unwrap_err().to_string(), "Database is closed");
+        assert_eq!(db.get_game_status("g"), None);
+        db.close();
+    }
+
+    #[test]
+    fn refuses_to_open_a_file_that_is_not_a_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("garbage.sqlite");
+        std::fs::write(&path, "this is not a sqlite database. ".repeat(200)).unwrap();
+        let error = OracleDatabase::open(path.to_str().unwrap()).err().unwrap();
+        assert!(format!("{error:#}").contains("Failed to ensure secret_keys table"), "{error:#}");
+        assert!(OracleDatabase::open(dir.path().to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn marks_a_secret_key_as_used() {
+        let db = db();
+        db.save_secret_key("g", "s", "h").unwrap();
+        db.mark_secret_key_used("g").unwrap();
+        assert!(db.get_secret_key("g").is_none());
+        assert!(db.get_secret_key_info("g").unwrap().used);
+        db.mark_secret_key_used("unknown").unwrap();
+    }
+
+    #[test]
+    fn surfaces_write_failures_with_their_context() {
+        let (_dir, path, db) = file_db();
+        db.save_secret_key("g", "s", "h").unwrap();
+        db.track_game("g", Some("coinflip"), false).unwrap();
+        sabotage(
+            &path,
+            &[
+                abort_on("UPDATE", "secret_keys", ""),
+                abort_on("INSERT", "secret_keys", ""),
+                abort_on("DELETE", "secret_keys", ""),
+                abort_on("INSERT", "token_policies", ""),
+            ]
+            .join("\n"),
+        );
+        let error = db.mark_secret_key_used("g").unwrap_err();
+        assert_eq!(error.to_string(), "Failed to mark secret key as used");
+        assert!(format!("{error:#}").contains("disk full"));
+        assert_eq!(db.save_secret_key("h", "s", "h").unwrap_err().to_string(), "Failed to save secret key for game h");
+        assert_eq!(db.delete_secret_key("g").unwrap_err().to_string(), "Failed to delete secret key");
+        assert_eq!(db.reactivate_secret_key("g").unwrap_err().to_string(), "Failed to reactivate secret key");
+        assert_eq!(db.mark_secret_key_signed("g").unwrap_err().to_string(), "Failed to mark secret key as signed");
+        // The committed marker is part of finalizing, so nothing is finalized.
+        assert!(db.finalize_completed_game("g").is_err());
+        assert_eq!(db.get_game_status("g").as_deref(), Some("pending"));
+        let mint = "So11111111111111111111111111111111111111112";
+        let error = db.set_token_policy(mint, true, 9).unwrap_err();
+        assert_eq!(error.to_string(), format!("Failed to update token policy for {mint}"));
+        assert!(db.get_token_policy(mint).unwrap().is_none());
+    }
+
+    #[test]
+    fn surfaces_game_tracking_write_failures() {
+        let (_dir, path, db) = file_db();
+        db.track_game("g", Some("coinflip"), false).unwrap();
+        sabotage(&path, &abort_on("UPDATE", "game_tracking", ""));
+        let message = |result: Result<()>| result.unwrap_err().to_string();
+        assert_eq!(message(db.mark_game_desynced("g")), "Failed to mark game as desynced");
+        assert_eq!(message(db.mark_game_completed("g")), "Failed to mark game as completed");
+        assert_eq!(message(db.mark_game_closed("g")), "Failed to mark game as closed");
+        assert_eq!(message(db.increment_completion_attempts("g")), "Failed to increment completion attempts");
+        assert_eq!(
+            message(db.record_transient_completion_failure("g")),
+            "Failed to record transient completion failure"
+        );
+        assert_eq!(message(db.clear_completion_retry_after("g")), "Failed to clear completion retry cooldown");
+        assert_eq!(message(db.touch_game_check("g")), "Failed to update last_checked for pending game");
+        assert_eq!(
+            db.set_completion_retry_after("g", now_ms() + 1).unwrap_err().to_string(),
+            "Failed to set completion retry cooldown"
+        );
+        assert_eq!(
+            db.set_auto_complete_disabled("g", true).unwrap_err().to_string(),
+            "Failed to update auto-complete state"
+        );
+        assert_eq!(
+            db.reset_completion_attempts("g", false).unwrap_err().to_string(),
+            "Failed to reset completion attempts"
+        );
+        assert_eq!(message(db.track_game("g", Some("giveaway"), false)), "Failed to track game");
+        assert_eq!(db.get_game_status("g").as_deref(), Some("pending"));
+        assert_eq!(db.get_game_type("g").as_deref(), Some("coinflip"));
+    }
+
+    #[test]
+    fn keeps_finalized_games_unless_the_type_changes() {
+        let (_dir, path, db) = file_db();
+        db.track_game("g", Some("coinflip"), false).unwrap();
+        db.mark_game_completed("g").unwrap();
+        // Same type, or no type at all: nothing to write, and the status is kept.
+        db.track_game("g", Some("coinflip"), true).unwrap();
+        db.track_game("g", None, true).unwrap();
+        db.track_game("g", Some(""), true).unwrap();
+        assert_eq!(db.get_game_status("g").as_deref(), Some("completed"));
+        assert_eq!(db.get_game_type("g").as_deref(), Some("coinflip"));
+        // A pending game is simply re-tracked with the new type.
+        db.track_game("p", Some("coinflip"), false).unwrap();
+        db.track_game("p", Some("giveaway"), true).unwrap();
+        assert_eq!(db.get_game_status("p").as_deref(), Some("pending"));
+        assert_eq!(db.get_game_type("p").as_deref(), Some("giveaway"));
+        // A failed metadata update is reported and leaves the type alone.
+        sabotage(&path, &abort_on("UPDATE", "game_tracking", "WHEN NEW.game_type = 'giveaway'"));
+        let error = db.track_game("g", Some("giveaway"), true).unwrap_err();
+        assert_eq!(error.to_string(), "Failed to update finalized game metadata");
+        assert_eq!(db.get_game_type("g").as_deref(), Some("coinflip"));
+    }
+
+    #[test]
+    fn ignores_blank_addresses_when_reading_game_state() {
+        let db = db();
+        assert_eq!(db.is_auto_complete_disabled(" \t"), None);
+        assert_eq!(db.is_auto_complete_disabled("unknown"), None);
+        assert_eq!(db.get_completion_attempt_state(""), None);
+        assert_eq!(db.get_completion_attempt_state("unknown"), None);
+    }
+
+    #[test]
+    fn resets_finalized_games_only_when_allowed() {
+        let db = db();
+        db.track_game("g", None, false).unwrap();
+        db.mark_game_completed("g").unwrap();
+        assert_eq!(db.reset_completion_attempts("g", false).unwrap(), Err(ResetFailure::Finalized));
+        assert_eq!(db.get_game_status("g").as_deref(), Some("completed"));
+        assert_eq!(db.reset_completion_attempts("g", true).unwrap(), Ok(()));
+        assert_eq!(db.get_game_status("g").as_deref(), Some("pending"));
+    }
+
+    #[test]
+    fn treats_a_lost_reset_race_by_the_state_it_left_behind() {
+        let (_dir, path, db) = file_db();
+        db.track_game("fresh", None, false).unwrap();
+        db.track_game("busy", None, false).unwrap();
+        db.increment_completion_attempts("busy").unwrap();
+        // Another writer won: the reset statement matches no row to change.
+        sabotage(&path, "CREATE TRIGGER skip_updates BEFORE UPDATE ON game_tracking BEGIN SELECT RAISE(IGNORE); END;");
+        // Already reset by the winner: success.
+        assert_eq!(db.reset_completion_attempts("fresh", false).unwrap(), Ok(()));
+        // Still holding failures: the caller is told nothing changed.
+        assert_eq!(db.reset_completion_attempts("busy", false).unwrap(), Err(ResetFailure::Unchanged));
+        assert_eq!(db.get_completion_attempt_state("busy").unwrap().completion_attempts, 1);
+    }
+
+    #[test]
+    fn lists_pending_games_below_the_attempt_limit() {
+        let db = db();
+        for game in ["a", "b", "c"] {
+            db.track_game(game, None, false).unwrap();
+        }
+        db.increment_completion_attempts("b").unwrap();
+        db.increment_completion_attempts("b").unwrap();
+        db.mark_game_completed("c").unwrap();
+        let addresses = |games: Vec<PendingGame>| games.into_iter().map(|g| g.game_address).collect::<Vec<_>>();
+        let mut all = addresses(db.get_pending_games(None));
+        all.sort();
+        assert_eq!(all, vec!["a", "b"]);
+        assert_eq!(addresses(db.get_pending_games(Some(2))), vec!["a"]);
+        let limited = db.get_pending_games(Some(3));
+        assert_eq!(limited.iter().map(|g| g.completion_attempts).sum::<i64>(), 2);
+    }
+
+    #[test]
+    fn returns_defaults_when_reads_fail() {
+        let (_dir, path, db) = file_db();
+        db.save_secret_key("g", "s", "h").unwrap();
+        db.track_game("g", Some("coinflip"), false).unwrap();
+        db.add_player_to_game("g", "p", 0).unwrap();
+        sabotage(&path, "DROP TABLE game_players; DROP TABLE secret_keys; DROP TABLE game_tracking;");
+        assert!(db.get_secret_key("g").is_none());
+        assert!(db.get_secret_key_info("g").is_none());
+        assert_eq!(db.get_game_type("g"), None);
+        assert_eq!(db.get_game_status("g"), None);
+        assert_eq!(db.get_game_players("g"), Vec::<String>::new());
+        assert_eq!(db.get_player_ticket_stats("g"), PlayerTicketStats::default());
+        assert!(db.get_pending_games(None).is_empty());
+        assert!(db.get_active_pending_games(Some(3)).is_empty());
+        assert_eq!(db.get_stats(), DatabaseStats::default());
+        assert_eq!(db.get_completion_attempt_state("g"), None);
+        assert_eq!(db.is_auto_complete_disabled("g"), None);
+        assert_eq!(db.cleanup_old_records(1), CleanupCounts::default());
+        assert_eq!(db.cleanup_unsigned_commitments(1), 0);
+        // A failed lookup is not mistaken for an untracked game.
+        assert!(db.set_auto_complete_disabled("g", true).unwrap().is_err());
+        assert!(db.reset_completion_attempts("g", false).unwrap().is_err());
+        // Tracking proceeds past a failed status lookup and then reports the write failure.
+        assert!(db.track_game("g", Some("coinflip"), true).is_err());
+    }
+
+    #[test]
+    fn rolls_back_unsigned_commitment_cleanup_on_any_failure() {
+        for table in ["game_players", "game_tracking", "secret_keys"] {
+            let (_dir, path, db) = file_db();
+            db.save_secret_key("g", "s", "h").unwrap();
+            db.track_game("g", None, false).unwrap();
+            db.add_player_to_game("g", "p", 0).unwrap();
+            sabotage(&path, "UPDATE secret_keys SET created_at = 0");
+            sabotage(&path, &abort_on("DELETE", table, ""));
+            assert_eq!(db.cleanup_unsigned_commitments(10), 0, "{table}");
+            for kept in ["secret_keys", "game_tracking", "game_players"] {
+                assert_eq!(
+                    count(&path, &format!("SELECT COUNT(*) FROM {kept}")),
+                    1,
+                    "{table} failed but {kept} changed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rolls_back_old_record_cleanup_on_any_failure() {
+        for table in ["secret_keys", "game_players", "game_tracking"] {
+            let (_dir, path, db) = file_db();
+            db.save_secret_key("g", "s", "h").unwrap();
+            db.track_game("g", None, false).unwrap();
+            db.add_player_to_game("g", "p", 0).unwrap();
+            db.mark_game_completed("g").unwrap();
+            sabotage(&path, "UPDATE secret_keys SET created_at = 0; UPDATE game_tracking SET completed_at = 0;");
+            sabotage(&path, &abort_on("DELETE", table, ""));
+            assert_eq!(db.cleanup_old_records(48), CleanupCounts::default(), "{table}");
+            for kept in ["secret_keys", "game_tracking", "game_players"] {
+                assert_eq!(
+                    count(&path, &format!("SELECT COUNT(*) FROM {kept}")),
+                    1,
+                    "{table} failed but {kept} changed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn adds_and_removes_single_players() {
+        let db = db();
+        db.add_player_to_game("g", "a", 0).unwrap();
+        db.add_player_to_game("g", "b", 1).unwrap();
+        db.add_player_to_game("g", "c", 2).unwrap();
+        assert_eq!(db.get_game_players("g"), vec!["a", "b", "c"]);
+        db.remove_player_from_game("g", 1).unwrap();
+        assert_eq!(db.get_game_players("g"), vec!["a", "c"]);
+        db.remove_player_address_from_game("g", "a").unwrap();
+        assert_eq!(db.get_game_players("g"), vec!["c"]);
+        // Re-adding a ticket index replaces its holder.
+        db.add_player_to_game("g", "d", 2).unwrap();
+        assert_eq!(db.get_game_players("g"), vec!["d"]);
+    }
+
+    #[test]
+    fn surfaces_player_write_failures() {
+        let (_dir, path, db) = file_db();
+        db.add_player_to_game("g", "a", 0).unwrap();
+        sabotage(&path, &abort_on("INSERT", "game_players", ""));
+        sabotage(&path, &abort_on("DELETE", "game_players", ""));
+        let message = |result: Result<()>| result.unwrap_err().to_string();
+        assert_eq!(message(db.add_player_to_game("g", "b", 1)), "Failed to add player to game");
+        assert_eq!(message(db.remove_player_from_game("g", 0)), "Failed to remove player from game");
+        assert_eq!(
+            message(db.remove_player_address_from_game("g", "a")),
+            "Failed to remove moved player from its previous index"
+        );
+        assert_eq!(message(db.clear_stale_players_for_game("g")), "Failed to clear stale players for game");
+        assert_eq!(db.get_game_players("g"), vec!["a"]);
+    }
+
+    #[test]
+    fn applies_no_player_mutations_without_touching_the_database() {
+        let db = db();
+        db.close();
+        db.apply_player_mutations("g", &[]).unwrap();
+    }
+
+    #[test]
+    fn rolls_back_player_mutations_that_fail_part_way() {
+        let joined =
+            |player: &str, ticket_index| PlayerMutation::Joined { player_address: player.into(), ticket_index };
+        let unjoined = |ticket_index, moved: &str| PlayerMutation::Unjoined {
+            ticket_index,
+            moved_participant: Some(moved.into()),
+        };
+        let cases = [
+            (
+                "joining a player",
+                abort_on("INSERT", "game_players", "WHEN NEW.player_address = 'b'"),
+                "Failed to add player to game",
+            ),
+            (
+                "removing the unjoined ticket",
+                abort_on("DELETE", "game_players", "WHEN OLD.player_address = 'a'"),
+                "Failed to remove player from game",
+            ),
+            (
+                "clearing the moved participant",
+                abort_on("DELETE", "game_players", "WHEN OLD.player_address = 'c'"),
+                "Failed to remove moved player from its previous index",
+            ),
+            (
+                "moving the participant",
+                abort_on("INSERT", "game_players", "WHEN NEW.player_address = 'c' AND NEW.ticket_index = 0"),
+                "Failed to move player after unjoin",
+            ),
+        ];
+        for (what, trigger, message) in cases {
+            let (_dir, path, db) = file_db();
+            db.add_player_to_game("g", "z", 9).unwrap();
+            sabotage(&path, &trigger);
+            let operations = [joined("a", 0), joined("b", 1), joined("c", 2), unjoined(0, "c")];
+            let error = db.apply_player_mutations("g", &operations).unwrap_err();
+            assert!(
+                error.to_string().starts_with("Failed to apply player mutations for game g")
+                    && format!("{error:#}").contains(message),
+                "{what}: {error:#}"
+            );
+            assert_eq!(db.get_game_players("g"), vec!["z"], "{what} was not rolled back");
+        }
+    }
+
+    #[test]
+    fn rolls_back_a_registry_replacement_that_fails_part_way() {
+        let (_dir, path, db) = file_db();
+        db.replace_game_players("g", &["a".into(), "b".into()]).unwrap();
+        sabotage(&path, &abort_on("INSERT", "game_players", "WHEN NEW.player_address = 'bad'"));
+        let error = db.replace_game_players("g", &["x".into(), "bad".into()]).unwrap_err();
+        assert!(format!("{error:#}").contains("Failed to replace player during registry synchronization"));
+        assert_eq!(db.get_game_players("g"), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn closing_survives_a_failed_checkpoint_and_keeps_the_data() {
+        let (_dir, path, db) = file_db();
+        db.save_secret_key("g", "s", "h").unwrap();
+        // An open transaction makes the WAL checkpoint fail.
+        db.conn.lock().unwrap().as_ref().unwrap().execute_batch("BEGIN IMMEDIATE").unwrap();
+        db.close();
+        assert!(!db.is_open());
+        assert_eq!(count(&path, "SELECT COUNT(*) FROM secret_keys"), 1);
+    }
+
+    #[test]
+    fn closing_survives_a_connection_that_refuses_to_close() {
+        let (_dir, path, db) = file_db();
+        db.save_secret_key("g", "s", "h").unwrap();
+        {
+            let guard = db.conn.lock().unwrap();
+            // An unfinalized statement makes `sqlite3_close` report the handle busy.
+            std::mem::forget(guard.as_ref().unwrap().prepare("SELECT 1").unwrap());
+        }
+        db.close();
+        assert!(!db.is_open());
+        assert_eq!(count(&path, "SELECT COUNT(*) FROM secret_keys"), 1);
+    }
+
+    #[test]
+    fn reports_the_step_that_blocks_a_schema_upgrade() {
+        let cases = [
+            ("CREATE VIEW secret_keys AS SELECT 'g' AS game_address", "Failed to add signed_at column to secret_keys"),
+            (
+                "CREATE VIEW secret_keys AS SELECT 'g' AS game_address, 1 AS signed_at",
+                "Failed to add committed_at column to secret_keys",
+            ),
+            (
+                "CREATE VIEW game_tracking AS SELECT 'g' AS game_address",
+                "Failed to add auto_complete_disabled column to game_tracking",
+            ),
+            (
+                "CREATE VIEW game_tracking AS SELECT 'g' AS game_address, 0 AS auto_complete_disabled",
+                "Failed to add completion_failure_kind column to game_tracking",
+            ),
+            (
+                "CREATE VIEW game_tracking AS SELECT 'g' AS game_address, 0 AS auto_complete_disabled, NULL AS completion_failure_kind",
+                "Failed to add completion_retry_after column to game_tracking",
+            ),
+            ("CREATE VIEW token_policies AS SELECT 'm' AS mint", "Failed to add decimals column to token_policies"),
+            (
+                "CREATE VIEW token_policies AS SELECT 'm' AS mint, 1 AS decimals",
+                "Failed to disable legacy token policies",
+            ),
+        ];
+        for (setup, message) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("blocked.sqlite");
+            sabotage(path.to_str().unwrap(), setup);
+            let error = OracleDatabase::open(path.to_str().unwrap()).err().unwrap();
+            assert_eq!(error.to_string(), message, "{setup}");
+        }
+    }
 }
