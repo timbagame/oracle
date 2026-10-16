@@ -14,6 +14,7 @@ use timba_protocol::address::Address;
 use tokio::sync::Notify;
 
 use super::database::{Clock, IndexerDatabase};
+use super::schema::js_string;
 use super::solana::{find_stale_active_games, get_events_since, get_program_head};
 use crate::solana::pool::RpcPool;
 
@@ -182,12 +183,15 @@ impl PublicIndexer {
         if games.is_empty() {
             return Ok(());
         }
+        // `String(game.game_key)`: the column is always selected, and a key that is not an
+        // address is reported as stale like any other.
         let keys: Vec<String> = games
             .iter()
-            .map(|game| match game.get("game_key") {
-                Some(serde_json::Value::String(key)) => key.clone(),
-                Some(other) => other.to_string(),
-                None => String::new(),
+            .map(|game| {
+                js_string(game.get("game_key").unwrap_or(&serde_json::Value::Null))
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
             })
             .collect();
         let stale = find_stale_active_games(&self.rpc, &self.program_id, &keys).await?;
@@ -548,5 +552,91 @@ mod tests {
         let result = indexer.run_once(true).await.unwrap();
         assert_eq!(result.transactions, 2);
         assert_eq!(db.get_active_games(None).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn exposes_the_database_it_indexes_into() {
+        let (_transport, db, indexer) = setup(IndexerDatabaseOptions::default());
+        assert!(Arc::ptr_eq(indexer.database(), &db));
+    }
+
+    #[tokio::test]
+    async fn initializes_the_cursor_without_reconciling_when_not_asked_to() {
+        let (transport, db, indexer) = setup(IndexerDatabaseOptions::default());
+        // An imported active game that a reconciliation would look up on chain.
+        db.import_sql(
+            "INSERT INTO active_games (game_key, creator, ticket_amount, total_amount, max_tickets, min_tickets,
+               token_mint, created_at, timeout, signature, slot, indexed_at)
+             VALUES ('imported', 'c', 1, 2, 2, 2, 'm', 1, 1, 's', 1, 1)",
+        )
+        .unwrap();
+        transport.push("getSignaturesForAddress", Ok(json!([{ "signature": "head", "slot": 77 }])));
+        let result = indexer.run_once(false).await.unwrap();
+        assert_eq!(result, RunOnceResult::default());
+        assert_eq!(db.get_cursor().unwrap(), Some(IndexerCursor { signature: "head".into(), slot: 77 }));
+        assert!(transport.calls_for("getMultipleAccounts").is_empty());
+        assert_eq!(db.get_active_games(None).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn leaves_the_cursor_unset_when_the_program_has_no_history() {
+        let (transport, db, indexer) = setup(IndexerDatabaseOptions::default());
+        transport.push("getSignaturesForAddress", Ok(json!([])));
+        assert_eq!(indexer.run_once(false).await.unwrap(), RunOnceResult::default());
+        assert_eq!(db.get_cursor().unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn refuses_to_start_a_second_loop_and_leaves_the_first_running() {
+        let indexer = indexer(60_000, 0);
+        let shutdown = Shutdown::new();
+        indexer.running.store(true, Ordering::SeqCst);
+        let cycles = AtomicUsize::new(0);
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            indexer.run_loop(&shutdown, |_| {
+                cycles.fetch_add(1, Ordering::SeqCst);
+                async { Ok(RunOnceResult::default()) }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(cycles.load(Ordering::SeqCst), 0);
+        assert!(indexer.running.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn reconciles_games_whose_stored_key_is_not_text() {
+        let (transport, db, indexer) = setup(IndexerDatabaseOptions::default());
+        let (live, gone) = (address(2), address(3));
+        seed_active(&db, &[live, gone]);
+        // A corrupt row whose key is a blob must not stop the other games from being checked.
+        db.import_sql(
+            "INSERT INTO active_games (game_key, creator, ticket_amount, total_amount, max_tickets, min_tickets,
+               token_mint, created_at, timeout, signature, slot, indexed_at)
+             VALUES (x'0102', 'c', 1, 2, 2, 2, 'm', 1, 1, 's', 1, 1)",
+        )
+        .unwrap();
+        transport.push("getSignaturesForAddress", Ok(json!([])));
+        let owner = address(1);
+        let live_key = live.to_base58();
+        transport.on(move |_, method, params| {
+            (method == "getMultipleAccounts").then(|| {
+                let value: Vec<Value> = params[0]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|key| if key.as_str() == Some(live_key.as_str()) { game_account(&owner) } else { Value::Null })
+                    .collect();
+                Ok(json!({ "value": value }))
+            })
+        });
+        indexer.run_once(true).await.unwrap();
+        let keys: Vec<Value> = db.get_active_games(None).unwrap().iter().map(|game| game["game_key"].clone()).collect();
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&json!(live.to_base58())));
+        assert!(!keys.contains(&json!(gone.to_base58())));
+        // Only the two real addresses were looked up.
+        assert_eq!(transport.calls_for("getMultipleAccounts")[0].1[0].as_array().unwrap().len(), 2);
     }
 }
