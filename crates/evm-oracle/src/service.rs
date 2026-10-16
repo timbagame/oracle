@@ -20,9 +20,9 @@ use crate::protocol::games::{
     game_lifecycle, observe_evm_game, transaction_progress, ActionProgress, EvmGameReference, ReceiptProgress,
 };
 use crate::protocol::schema::{parse_bytes32, parse_intent, parse_private_join, parse_uint};
-use crate::rpc::{contract_error, is_contract_revert, FallbackTransport, PublicClient, Transport};
+use crate::rpc::{contract_error, is_contract_revert, CallRequest, FallbackTransport, PublicClient, Transport};
 use crate::store::{EvmStore, IndexedEvent, PendingTransaction, StoredGame};
-use crate::wallet::{estimate_fees, OperatorWallet, PreparedTransaction};
+use crate::wallet::{estimate_fees, fill_transaction, OperatorWallet, PreparedTransaction};
 
 /// Milliseconds since the epoch (`Date.now`), injectable for tests.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -392,19 +392,39 @@ impl EvmService {
             .simulate_contract(operator, self.config.address, &completeGameCall { gameId: id, secret })
             .await?;
         let transaction = complete_game_transaction(&self.deployment, id, secret)?;
+        // viem prefers `eth_fillTransaction` and prepares each missing field itself otherwise.
+        let request = CallRequest {
+            from: Some(operator),
+            to: Some(transaction.to),
+            data: transaction.data.clone(),
+            ..CallRequest::default()
+        };
+        let filled = fill_transaction(&self.public_client, &request)
+            .await
+            .map_err(|error| contract_error(completeGameCall::SIGNATURE, error))?
+            .unwrap_or_default();
         let mut prepared = PreparedTransaction {
             chain_id: self.config.chain_id,
-            nonce: self.public_client.get_transaction_count(operator).await?,
+            nonce: match filled.nonce {
+                Some(nonce) => nonce,
+                None => self.public_client.get_transaction_count(operator).await?,
+            },
             to: transaction.to,
             data: transaction.data,
             gas: 0,
-            fees: estimate_fees(&self.public_client).await?,
+            fees: match filled.fees {
+                Some(fees) => fees,
+                None => estimate_fees(&self.public_client).await?,
+            },
         };
-        prepared.gas = self
-            .public_client
-            .estimate_gas(&prepared.call_request(operator))
-            .await
-            .map_err(|error| contract_error(completeGameCall::SIGNATURE, error))?;
+        prepared.gas = match filled.gas {
+            Some(gas) => gas,
+            None => self
+                .public_client
+                .estimate_gas(&prepared.call_request(operator))
+                .await
+                .map_err(|error| contract_error(completeGameCall::SIGNATURE, error))?,
+        };
         // The wallet signs only for the chain the RPC currently serves.
         if self.public_client.get_chain_id().await? != self.config.chain_id {
             anyhow::bail!("The current chain does not match the configured chain");

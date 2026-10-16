@@ -410,6 +410,79 @@ mod tick_settlement {
     }
 
     #[tokio::test]
+    async fn signs_what_eth_fill_transaction_returns_with_fee_headroom() {
+        let fake = setup();
+        seed(&fake, GAME_A, SECRET_A, None);
+        fake.chain.state().games.insert(GAME_A, fake_game());
+        fake.chain.on("eth_fillTransaction", |_| {
+            Ok(json!({ "raw": "0x", "tx": {
+                "type": "0x2", "nonce": "0xc", "gas": "0x1d4c0",
+                "maxFeePerGas": "0xb2d05e00", "maxPriorityFeePerGas": "0x3b9aca00"
+            }}))
+        });
+
+        fake.service.tick().await.unwrap();
+
+        let fill = &fake.chain.calls("eth_fillTransaction")[0][0];
+        let data = complete_game_transaction(&fake.service.deployment, GAME_A, SECRET_A).unwrap().data;
+        assert_eq!(fill["from"], operator().to_checksum(None));
+        assert_eq!((&fill["to"], &fill["data"]), (&json!(PROXY.to_checksum(None)), &json!(data.to_string())));
+        for method in ["eth_estimateGas", "eth_getTransactionCount", "eth_maxPriorityFeePerGas", "eth_gasPrice"] {
+            assert!(fake.chain.calls(method).is_empty(), "{method} was called");
+        }
+        let raw: Bytes = fake.service.store().pending().unwrap().unwrap().raw.parse().unwrap();
+        let TxEnvelope::Eip1559(signed) = TxEnvelope::decode_2718(&mut raw.as_ref()).unwrap() else {
+            panic!("expected an EIP-1559 transaction")
+        };
+        let tx = signed.tx();
+        assert_eq!((tx.nonce, tx.gas_limit), (12, 120_000));
+        // 1.2 x the node's 3 gwei cap; the tip is kept.
+        assert_eq!((tx.max_fee_per_gas, tx.max_priority_fee_per_gas), (3_600_000_000, 1_000_000_000));
+    }
+
+    #[tokio::test]
+    async fn fills_only_what_the_node_left_out() {
+        let fake = setup();
+        seed(&fake, GAME_A, SECRET_A, None);
+        fake.chain.state().games.insert(GAME_A, fake_game());
+        fake.chain.on("eth_fillTransaction", |_| Ok(json!({ "raw": "0x", "tx": { "type": "0x2", "nonce": "0x3" } })));
+
+        fake.service.tick().await.unwrap();
+
+        assert!(fake.chain.calls("eth_getTransactionCount").is_empty());
+        assert_eq!(fake.chain.calls("eth_estimateGas")[0][0]["nonce"], "0x3");
+        let raw: Bytes = fake.service.store().pending().unwrap().unwrap().raw.parse().unwrap();
+        let TxEnvelope::Eip1559(signed) = TxEnvelope::decode_2718(&mut raw.as_ref()).unwrap() else {
+            panic!("expected an EIP-1559 transaction")
+        };
+        assert_eq!((signed.tx().nonce, signed.tx().gas_limit), (3, 90_000));
+        assert_eq!(signed.tx().max_fee_per_gas, 2_200_000_000);
+    }
+
+    #[tokio::test]
+    async fn treats_a_reverting_fill_like_a_reverting_estimate() {
+        let fake = setup();
+        seed(&fake, GAME_A, SECRET_A, None);
+        seed(&fake, GAME_B, SECRET_B, None);
+        fake.chain.state().games.insert(GAME_A, fake_game());
+        fake.chain.state().games.insert(GAME_B, fake_game());
+        let mut fills = 0;
+        fake.chain.on("eth_fillTransaction", move |_| {
+            fills += 1;
+            if fills == 1 {
+                return Err(reverted());
+            }
+            Err(RpcError::Node { code: -32601, message: "method not found".into(), data: None })
+        });
+
+        fake.service.tick().await.unwrap();
+
+        assert_eq!(fake.chain.calls("eth_fillTransaction").len(), 2);
+        let pending = fake.service.store().pending().unwrap().unwrap();
+        assert_eq!(pending.game, simulations(&fake)[1].gameId.to_string());
+    }
+
+    #[tokio::test]
     async fn skips_reverted_simulations_so_one_bad_game_cannot_starve_the_others() {
         let fake = setup();
         seed(&fake, GAME_A, SECRET_A, None);

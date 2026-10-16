@@ -180,6 +180,14 @@ impl FakeChain {
             "eth_getTransactionCount" => json!("0x7"),
             "eth_maxPriorityFeePerGas" => json!("0x3b9aca00"),
             "eth_gasPrice" => json!("0x77359400"),
+            // Most public RPCs do not offer it (geth, anvil and some providers do).
+            "eth_fillTransaction" => {
+                return Err(RpcError::Node {
+                    code: -32601,
+                    message: "the method eth_fillTransaction does not exist/is not available".into(),
+                    data: None,
+                })
+            }
             "eth_getLogs" => Value::Array(state.logs.clone()),
             "eth_getTransactionReceipt" => state.receipt.clone().unwrap_or(Value::Null),
             "eth_sendRawTransaction" => {

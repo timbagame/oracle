@@ -2,7 +2,7 @@
 //! an ordered HTTP fallback transport (3 s per endpoint, no retries, no ranking),
 //! typed contract reads, revert classification and ERC-6492 signature verification.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,6 +38,29 @@ impl RpcError {
                     || message.contains("execution reverted")
                     || message.contains("gas required exceeds allowance")
             }
+            _ => false,
+        }
+    }
+
+    /// viem's `ExecutionRevertedError` node match (code 3 or a revert message).
+    pub fn is_execution_reverted(&self) -> bool {
+        match self {
+            Self::Node { code, message, .. } => {
+                let message = message.to_lowercase();
+                *code == 3
+                    || message.contains("execution reverted")
+                    || message.contains("gas required exceeds allowance")
+            }
+            _ => false,
+        }
+    }
+
+    /// viem's `MethodNotFoundRpcError` / `MethodNotSupportedRpcError`, or a
+    /// "<method> is not available" message.
+    pub fn is_unsupported_method(&self, method: &str) -> bool {
+        match self {
+            Self::Node { code: -32601 | -32004, .. } => true,
+            Self::Node { message, .. } => message.contains(&format!("{method} is not available")),
             _ => false,
         }
     }
@@ -238,12 +261,12 @@ fn parse_quantity(value: &Value, field: &str) -> Result<U256, RpcError> {
         .ok_or_else(|| RpcError::InvalidResponse(format!("{field} is not a quantity")))
 }
 
-fn parse_u64(value: &Value, field: &str) -> Result<u64, RpcError> {
+pub(crate) fn parse_u64(value: &Value, field: &str) -> Result<u64, RpcError> {
     let number = parse_quantity(value, field)?;
     u64::try_from(number).map_err(|_| RpcError::InvalidResponse(format!("{field} is too large")))
 }
 
-fn parse_u128(value: &Value, field: &str) -> Result<u128, RpcError> {
+pub(crate) fn parse_u128(value: &Value, field: &str) -> Result<u128, RpcError> {
     let number = parse_quantity(value, field)?;
     u128::try_from(number).map_err(|_| RpcError::InvalidResponse(format!("{field} is too large")))
 }
@@ -307,11 +330,13 @@ fn parse_log(value: &Value) -> Result<RpcLog, RpcError> {
 #[derive(Clone)]
 pub struct PublicClient {
     transport: Arc<dyn Transport>,
+    /// Set once the node rejects `eth_fillTransaction` as unknown (viem `supportsFillTransaction`).
+    fill_unsupported: Arc<AtomicBool>,
 }
 
 impl PublicClient {
     pub fn new(transport: Arc<dyn Transport>) -> Self {
-        Self { transport }
+        Self { transport, fill_unsupported: Arc::default() }
     }
 
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, RpcError> {
@@ -404,6 +429,26 @@ impl PublicClient {
     pub async fn get_transaction_count(&self, address: Address) -> Result<u64, RpcError> {
         let params = json!([address.to_checksum(None), "pending"]);
         parse_u64(&self.request("eth_getTransactionCount", params).await?, "nonce")
+    }
+
+    /// `eth_fillTransaction`, or `None` when the node cannot fill. Unknown-method
+    /// rejections are remembered so later preparations skip straight to the
+    /// individual calls; other failures fall back once without being cached.
+    /// Reverts are returned, as viem rethrows them.
+    pub async fn fill_transaction(&self, request: &CallRequest) -> Result<Option<Value>, RpcError> {
+        if self.fill_unsupported.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        match self.request("eth_fillTransaction", json!([request.to_json()])).await {
+            Ok(response) => Ok(Some(response["tx"].clone())),
+            Err(error) if error.is_execution_reverted() => Err(error),
+            Err(error) => {
+                if error.is_unsupported_method("eth_fillTransaction") {
+                    self.fill_unsupported.store(true, Ordering::Relaxed);
+                }
+                Ok(None)
+            }
+        }
     }
 
     pub async fn get_gas_price(&self) -> Result<u128, RpcError> {

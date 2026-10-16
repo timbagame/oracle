@@ -7,7 +7,9 @@ use alloy_primitives::{Address, Bytes, TxKind, B256, U256};
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 
-use crate::rpc::{CallRequest, PublicClient};
+use serde_json::Value;
+
+use crate::rpc::{parse_u128, parse_u64, CallRequest, PublicClient, RpcError};
 
 /// Fee fields chosen during preparation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +77,44 @@ pub async fn estimate_fees(client: &PublicClient) -> anyhow::Result<Fees> {
     })
 }
 
+/// What `eth_fillTransaction` chose. Missing fields are filled the usual way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Filled {
+    pub nonce: Option<u64>,
+    pub gas: Option<u64>,
+    pub fees: Option<Fees>,
+}
+
+/// viem's `fillTransaction`: the node's nonce, gas and fees, with the node's fee
+/// cap (or gas price) raised by the 1.2 base fee multiplier. `Ok(None)` means
+/// the node cannot fill (or answered with an unreadable transaction), so every
+/// field is prepared individually. Reverts are errors.
+pub async fn fill_transaction(client: &PublicClient, request: &CallRequest) -> Result<Option<Filled>, RpcError> {
+    Ok(client.fill_transaction(request).await?.and_then(|tx| parse_filled(&tx).ok()))
+}
+
+fn parse_filled(tx: &Value) -> Result<Filled, RpcError> {
+    let field = |name: &str| tx.get(name).filter(|value| !value.is_null());
+    let fee = |name: &str| field(name).map(|value| parse_u128(value, name)).transpose();
+    let (max_fee, priority, gas_price) = (fee("maxFeePerGas")?, fee("maxPriorityFeePerGas")?, fee("gasPrice")?);
+    let legacy = match field("type").and_then(Value::as_str) {
+        Some(kind) => matches!(kind, "0x0" | "0x1"),
+        None => max_fee.is_none(),
+    };
+    let fees = match (legacy, max_fee, priority, gas_price) {
+        (false, Some(max_fee), Some(priority), _) => {
+            Some(Fees::Eip1559 { max_fee_per_gas: with_base_fee_margin(max_fee), max_priority_fee_per_gas: priority })
+        }
+        (true, _, _, Some(gas_price)) => Some(Fees::Legacy { gas_price: with_base_fee_margin(gas_price) }),
+        _ => None,
+    };
+    Ok(Filled {
+        nonce: field("nonce").map(|value| parse_u64(value, "nonce")).transpose()?,
+        gas: field("gas").map(|value| parse_u64(value, "gas")).transpose()?,
+        fees,
+    })
+}
+
 pub struct OperatorWallet {
     signer: PrivateKeySigner,
 }
@@ -128,5 +168,130 @@ impl OperatorWallet {
             }
         };
         Ok(envelope.encoded_2718().into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use futures::future::BoxFuture;
+    use serde_json::json;
+
+    use super::*;
+    use crate::rpc::Transport;
+
+    type Answer = Box<dyn Fn() -> Result<Value, RpcError> + Send + Sync>;
+
+    /// Answers every `eth_fillTransaction` with `answer` and counts the requests.
+    struct Filler {
+        answer: Answer,
+        calls: Mutex<Vec<Value>>,
+    }
+
+    impl Transport for Arc<Filler> {
+        fn request(&self, method: &str, params: Value) -> BoxFuture<'static, Result<Value, RpcError>> {
+            assert_eq!(method, "eth_fillTransaction");
+            self.calls.lock().unwrap().push(params);
+            let result = (self.answer)();
+            Box::pin(async move { result })
+        }
+    }
+
+    fn client(answer: impl Fn() -> Result<Value, RpcError> + Send + Sync + 'static) -> (PublicClient, Arc<Filler>) {
+        let filler = Arc::new(Filler { answer: Box::new(answer), calls: Mutex::new(Vec::new()) });
+        (PublicClient::new(Arc::new(filler.clone())), filler)
+    }
+
+    fn request() -> CallRequest {
+        CallRequest { from: Some(Address::repeat_byte(1)), to: Some(Address::repeat_byte(2)), ..CallRequest::default() }
+    }
+
+    fn node(code: i64, message: &str) -> RpcError {
+        RpcError::Node { code, message: message.into(), data: None }
+    }
+
+    #[tokio::test]
+    async fn raises_the_node_fee_cap_by_the_base_fee_multiplier() {
+        // geth fills maxFeePerGas = 2 x base fee + tip; viem signs 1.2 x that.
+        let (client, filler) = client(|| {
+            Ok(json!({ "raw": "0x", "tx": {
+                "type": "0x2", "nonce": "0x9", "gas": "0x5208",
+                "maxFeePerGas": "0xb2d05e00", "maxPriorityFeePerGas": "0x3b9aca00", "gasPrice": "0xb2d05e00"
+            }}))
+        });
+        let filled = fill_transaction(&client, &request()).await.unwrap().unwrap();
+        assert_eq!(
+            filled,
+            Filled {
+                nonce: Some(9),
+                gas: Some(21_000),
+                fees: Some(Fees::Eip1559 { max_fee_per_gas: 3_600_000_000, max_priority_fee_per_gas: 1_000_000_000 }),
+            }
+        );
+        let sent = &filler.calls.lock().unwrap()[0][0];
+        assert_eq!(sent["from"], Address::repeat_byte(1).to_checksum(None));
+        assert!(sent.get("nonce").is_none() && sent.get("gas").is_none() && sent.get("maxFeePerGas").is_none());
+    }
+
+    #[test]
+    fn reads_legacy_and_partial_fills() {
+        let legacy = parse_filled(&json!({ "type": "0x0", "gasPrice": "0x64", "maxFeePerGas": "0x1" })).unwrap();
+        assert_eq!(legacy.fees, Some(Fees::Legacy { gas_price: 120 }));
+        let untyped = parse_filled(&json!({ "gasPrice": "0x64" })).unwrap();
+        assert_eq!(untyped.fees, Some(Fees::Legacy { gas_price: 120 }));
+        let untyped_1559 = parse_filled(&json!({ "maxFeePerGas": "0x64", "maxPriorityFeePerGas": "0x1" })).unwrap();
+        assert_eq!(untyped_1559.fees, Some(Fees::Eip1559 { max_fee_per_gas: 120, max_priority_fee_per_gas: 1 }));
+        // A fee cap without a tip, or no fees at all, leaves fee estimation to the caller.
+        assert_eq!(parse_filled(&json!({ "type": "0x2", "maxFeePerGas": "0x64" })).unwrap().fees, None);
+        assert_eq!(parse_filled(&json!({ "type": "0x0", "nonce": null })).unwrap(), Filled::default());
+        assert!(parse_filled(&json!({ "gas": "12" })).is_err());
+        assert!(parse_filled(&json!({ "maxFeePerGas": 5 })).is_err());
+    }
+
+    #[tokio::test]
+    async fn falls_back_on_unreadable_fills() {
+        let (client, filler) = client(|| Ok(json!({ "tx": { "nonce": "nope" } })));
+        assert_eq!(fill_transaction(&client, &request()).await.unwrap(), None);
+        assert_eq!(fill_transaction(&client, &request()).await.unwrap(), None);
+        assert_eq!(filler.calls.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn remembers_nodes_without_the_method() {
+        for error in [
+            node(-32601, "method not found"),
+            node(-32004, "method not supported"),
+            node(-32000, "eth_fillTransaction is not available on this endpoint"),
+        ] {
+            let (client, filler) = client(move || Err(error.clone()));
+            assert_eq!(fill_transaction(&client, &request()).await.unwrap(), None);
+            assert_eq!(fill_transaction(&client.clone(), &request()).await.unwrap(), None);
+            assert_eq!(filler.calls.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn retries_the_fill_after_other_failures() {
+        for error in [RpcError::Http("HTTP status 502".into()), node(-32005, "limit exceeded")] {
+            let (client, filler) = client(move || Err(error.clone()));
+            assert_eq!(fill_transaction(&client, &request()).await.unwrap(), None);
+            assert_eq!(fill_transaction(&client, &request()).await.unwrap(), None);
+            assert_eq!(filler.calls.lock().unwrap().len(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn surfaces_reverts() {
+        for error in [
+            node(3, "execution reverted: GameNotSettleable"),
+            node(-32000, "Execution Reverted"),
+            node(-32000, "gas required exceeds allowance (0)"),
+        ] {
+            let (client, filler) = client(move || Err(error.clone()));
+            assert!(fill_transaction(&client, &request()).await.is_err());
+            assert!(fill_transaction(&client, &request()).await.is_err());
+            assert_eq!(filler.calls.lock().unwrap().len(), 2);
+        }
     }
 }
