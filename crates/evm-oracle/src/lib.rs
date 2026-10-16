@@ -3,6 +3,7 @@
 
 pub mod app;
 pub mod config;
+pub mod erc8010;
 pub mod protocol;
 pub mod rpc;
 pub mod server;

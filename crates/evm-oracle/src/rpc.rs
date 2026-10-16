@@ -11,7 +11,8 @@ use alloy_sol_types::{SolCall, SolValue};
 use futures::future::BoxFuture;
 use serde_json::{json, Value};
 
-use crate::protocol::abi::ERC6492_VALIDATOR_BYTECODE;
+use crate::erc8010::{self, SignedAuthorization, Wrapped, ERC1271_MAGIC};
+use crate::protocol::abi::{DEPLOYLESS_CALL_BYTECODE, ERC6492_VALIDATOR_BYTECODE, MULTICALL3_BYTECODE};
 
 /// Per-endpoint request timeout (`http(url, { timeout: 3_000 })`).
 pub const RPC_TIMEOUT: Duration = Duration::from_millis(3_000);
@@ -217,11 +218,16 @@ pub struct CallRequest {
     pub max_fee_per_gas: Option<u128>,
     pub max_priority_fee_per_gas: Option<u128>,
     pub eip1559: Option<bool>,
+    pub authorization_list: Vec<SignedAuthorization>,
 }
 
 impl CallRequest {
     fn to_json(&self) -> Value {
         let mut request = serde_json::Map::new();
+        if !self.authorization_list.is_empty() {
+            let list = self.authorization_list.iter().map(SignedAuthorization::to_rpc).collect();
+            request.insert("authorizationList".into(), Value::Array(list));
+        }
         request.insert("data".into(), json!(self.data.to_string()));
         if let Some(from) = self.from {
             request.insert("from".into(), json!(from.to_checksum(None)));
@@ -359,7 +365,11 @@ impl PublicClient {
 
     /// `eth_call` at the latest block; an empty result is `None`.
     pub async fn call(&self, request: &CallRequest) -> Result<Option<Bytes>, RpcError> {
-        let result = self.request("eth_call", json!([request.to_json(), "latest"])).await?;
+        self.call_at(request, "latest").await
+    }
+
+    pub async fn call_at(&self, request: &CallRequest, block: &str) -> Result<Option<Bytes>, RpcError> {
+        let result = self.request("eth_call", json!([request.to_json(), block])).await?;
         let data = parse_hex(&result, "call result")?;
         Ok((!data.is_empty()).then_some(data))
     }
@@ -459,18 +469,22 @@ impl PublicClient {
         parse_u128(&self.request("eth_maxPriorityFeePerGas", json!([])).await?, "max priority fee")
     }
 
-    /// viem `verifyHash`: universal ERC-6492/1271 validation through a deployless `eth_call`,
-    /// falling back to ECDSA recovery when the call fails or reports an invalid signature.
+    pub async fn get_code(&self, address: Address) -> Result<Bytes, RpcError> {
+        parse_hex(&self.request("eth_getCode", json!([address.to_checksum(None), "latest"])).await?, "code")
+    }
+
+    /// viem `verifyHash`: ERC-8010 wrapped signatures are checked by simulating the
+    /// delegated account, everything else by universal ERC-6492/1271 validation through
+    /// a deployless `eth_call`. Both fall back to ECDSA recovery.
     pub async fn verify_hash(&self, address: Address, hash: B256, signature: &Bytes) -> anyhow::Result<bool> {
-        let bytecode = hex::decode(ERC6492_VALIDATOR_BYTECODE.trim().trim_start_matches("0x"))
-            .expect("vendored validator bytecode is hex");
-        let mut data = bytecode;
-        data.extend((address, hash, signature.clone()).abi_encode_params());
-        let request = CallRequest { data: data.into(), ..CallRequest::default() };
-        // Any call failure is a verification failure (viem wraps it as `CallExecutionError`).
-        let outcome = match self.call(&request).await {
-            Ok(result) => decode_validator_result(result.as_ref().map(|data| data.as_ref())),
-            Err(_) => Ok(false),
+        let outcome = if erc8010::is_wrapped(signature) {
+            // RPC failures here are errors, as in viem; only failed checks are `false`.
+            match erc8010::unwrap(signature) {
+                Some(wrapped) => self.verify_erc8010(address, hash, &wrapped).await,
+                None => Ok(false),
+            }
+        } else {
+            self.verify_erc6492(address, hash, signature).await
         };
         if let Ok(true) = outcome {
             return Ok(true);
@@ -480,6 +494,52 @@ impl PublicClient {
         }
         outcome
     }
+
+    async fn verify_erc6492(&self, address: Address, hash: B256, signature: &Bytes) -> anyhow::Result<bool> {
+        let mut data = decode_bytecode(ERC6492_VALIDATOR_BYTECODE);
+        data.extend((address, hash, signature.clone()).abi_encode_params());
+        let request = CallRequest { data: data.into(), ..CallRequest::default() };
+        // Any call failure is a verification failure (viem wraps it as `CallExecutionError`).
+        match self.call(&request).await {
+            Ok(result) => decode_validator_result(result.as_ref().map(|data| data.as_ref())),
+            Err(_) => Ok(false),
+        }
+    }
+
+    async fn verify_erc8010(&self, address: Address, hash: B256, wrapped: &Wrapped) -> anyhow::Result<bool> {
+        let delegated = [&[0xef, 0x01, 0x00][..], wrapped.authorization.delegation.as_slice()].concat();
+        if self.get_code(address).await?.as_ref() == delegated.as_slice() {
+            return Ok(self.verify_erc1271(address, hash, &wrapped.signature).await);
+        }
+        if wrapped.authorization.authority() != Some(address) {
+            return Ok(false);
+        }
+        // Deployless Multicall3 (`toDeploylessCallViaBytecodeData`) with the authorization applied.
+        let mut data = decode_bytecode(DEPLOYLESS_CALL_BYTECODE);
+        let calls = erc8010::verification_calls(address, hash, wrapped);
+        data.extend((Bytes::from(decode_bytecode(MULTICALL3_BYTECODE)), calls).abi_encode_params());
+        let request = CallRequest {
+            data: data.into(),
+            authorization_list: vec![wrapped.authorization.clone()],
+            ..CallRequest::default()
+        };
+        let results = self.call_at(&request, "pending").await?.unwrap_or_default();
+        erc8010::verification_succeeded(&results)
+    }
+
+    /// viem `verifyErc1271`: any failed or unexpected answer means "not valid".
+    async fn verify_erc1271(&self, address: Address, hash: B256, signature: &Bytes) -> bool {
+        let call = erc8010::isValidSignatureCall { hash, signature: signature.clone() };
+        let request = CallRequest { to: Some(address), data: call.abi_encode().into(), ..CallRequest::default() };
+        match self.call(&request).await {
+            Ok(Some(result)) => result.len() >= 32 && result.starts_with(&ERC1271_MAGIC),
+            _ => false,
+        }
+    }
+}
+
+fn decode_bytecode(text: &str) -> Vec<u8> {
+    hex::decode(text.trim().trim_start_matches("0x")).expect("vendored bytecode is hex")
 }
 
 /// `hexToBool(data ?? "0x0")`: zero is false, one is true, anything else is an error.
@@ -548,5 +608,166 @@ mod tests {
     fn formats_quantities_without_padding() {
         assert_eq!(quantity(0u64), "0x0");
         assert_eq!(quantity(499u64), "0x1f3");
+    }
+
+    mod erc8010_verification {
+        use std::sync::Mutex;
+
+        use alloy_signer_local::PrivateKeySigner;
+
+        use super::*;
+        use crate::erc8010::{testing::wrap, unwrap};
+
+        fn fixture() -> Value {
+            serde_json::from_str(include_str!("../tests/fixtures/erc8010.json")).unwrap()
+        }
+
+        fn hex(value: &Value) -> Bytes {
+            value.as_str().unwrap().parse().unwrap()
+        }
+
+        type Answer = Box<dyn Fn(&str) -> Result<Value, RpcError> + Send + Sync>;
+
+        struct Scripted {
+            answer: Answer,
+            calls: Mutex<Vec<Value>>,
+        }
+
+        impl Transport for Arc<Scripted> {
+            fn request(&self, method: &str, params: Value) -> BoxFuture<'static, Result<Value, RpcError>> {
+                self.calls.lock().unwrap().push(json!({ "method": method, "params": params }));
+                let result = (self.answer)(method);
+                Box::pin(async move { result })
+            }
+        }
+
+        fn node_with(
+            code: &str,
+            call: impl Fn() -> Result<Value, RpcError> + Send + Sync + 'static,
+        ) -> (PublicClient, Arc<Scripted>) {
+            let code = json!(code);
+            let scripted = Arc::new(Scripted {
+                answer: Box::new(move |method| match method {
+                    "eth_getCode" => Ok(code.clone()),
+                    "eth_call" => call(),
+                    _ => unreachable!("{method}"),
+                }),
+                calls: Mutex::new(Vec::new()),
+            });
+            (PublicClient::new(Arc::new(scripted.clone())), scripted)
+        }
+
+        fn account() -> PrivateKeySigner {
+            fixture()["key"].as_str().unwrap().parse().unwrap()
+        }
+
+        fn hash() -> B256 {
+            fixture()["hash"].as_str().unwrap().parse().unwrap()
+        }
+
+        fn delegation() -> Address {
+            fixture()["delegation"].as_str().unwrap().parse().unwrap()
+        }
+
+        /// Addresses are checksummed here and lowercase in the fixture; nodes ignore case.
+        fn lowercase(requests: &[Value]) -> Value {
+            serde_json::from_str(&Value::Array(requests.to_vec()).to_string().to_lowercase()).unwrap()
+        }
+
+        #[test]
+        fn wraps_and_unwraps_like_ox() {
+            let fixture = fixture();
+            let inner = hex(&fixture["inner"]);
+            let init = (Address::repeat_byte(0x44), Bytes::from_static(&[0xde, 0xad, 0xbe, 0xef]));
+            assert_eq!(wrap(&account(), delegation(), &inner, Some(init.clone())), hex(&fixture["withInit"]));
+            assert_eq!(wrap(&account(), delegation(), &inner, None), hex(&fixture["plain"]));
+
+            let wrapped = unwrap(&hex(&fixture["withInit"])).unwrap();
+            assert_eq!((wrapped.signature, wrapped.init), (inner.clone(), Some(init)));
+            assert_eq!(wrapped.authorization.authority(), Some(account().address()));
+            let plain = unwrap(&hex(&fixture["plain"])).unwrap();
+            assert_eq!((plain.signature, plain.init), (inner, None));
+        }
+
+        #[tokio::test]
+        async fn matches_viem_requests_and_verdicts() {
+            let fixture = fixture();
+            let answers = fixture["answers"].clone();
+            let cases = [
+                ("deployless", "withInit", "0x".to_string(), answers["ok"].clone()),
+                ("rejected", "plain", "0x".to_string(), answers["bad"].clone()),
+                (
+                    "delegated",
+                    "plain",
+                    format!("0xef0100{}", hex::encode(delegation())),
+                    json!(format!("0x1626ba7e{}", "00".repeat(28))),
+                ),
+            ];
+            for (case, signature, code, answer) in cases {
+                let (client, scripted) = node_with(&code, move || Ok(answer.clone()));
+                let valid = client.verify_hash(account().address(), hash(), &hex(&fixture[signature])).await.unwrap();
+                assert_eq!(json!(valid), fixture[case]["valid"], "{case}");
+                let expected = fixture[case]["requests"].as_array().unwrap();
+                assert!(lowercase(&scripted.calls.lock().unwrap()) == lowercase(expected), "{case} requests differ");
+            }
+        }
+
+        #[tokio::test]
+        async fn failed_simulations_and_code_lookups_are_errors() {
+            let fixture = fixture();
+            assert_eq!(fixture["callFails"]["valid"], "error");
+            let plain = hex(&fixture["plain"]);
+            let (client, _) =
+                node_with("0x", || Err(RpcError::Node { code: -32000, message: "boom".into(), data: None }));
+            assert!(client.verify_hash(account().address(), hash(), &plain).await.is_err());
+            let (client, _) = node_with("0x", || Ok(json!("0x1234")));
+            assert!(client.verify_hash(account().address(), hash(), &plain).await.is_err());
+
+            let failing = Arc::new(Scripted {
+                answer: Box::new(|_| Err(RpcError::Http("down".into()))),
+                calls: Mutex::default(),
+            });
+            let client = PublicClient::new(Arc::new(failing));
+            assert!(client.verify_hash(account().address(), hash(), &plain).await.is_err());
+        }
+
+        #[tokio::test]
+        async fn rejects_without_simulating_when_the_authorization_is_not_the_signers() {
+            let plain = hex(&fixture()["plain"]);
+            let (client, scripted) = node_with("0x", || unreachable!("no simulation"));
+            assert!(!client.verify_hash(Address::repeat_byte(9), hash(), &plain).await.unwrap());
+            assert_eq!(scripted.calls.lock().unwrap().len(), 1);
+
+            // An already delegated account whose ERC-1271 check fails or reverts.
+            let code = format!("0xef0100{}", hex::encode(delegation()));
+            for answer in [Ok(json!("0xffffffff")), Ok(json!("0x1626ba7e")), Err(RpcError::Http("revert".into()))] {
+                let (client, _) = node_with(&code, move || answer.clone());
+                assert!(!client.verify_hash(account().address(), hash(), &plain).await.unwrap());
+            }
+        }
+
+        #[tokio::test]
+        async fn malformed_wrappers_are_invalid_without_any_request() {
+            let plain = hex(&fixture()["plain"]).to_vec();
+            let magic = &plain[plain.len() - 32..];
+            let mut huge_length = plain.clone();
+            let at = huge_length.len() - 64;
+            huge_length[at..at + 32].copy_from_slice(&[0xff; 32]);
+            let mut too_long = plain.clone();
+            too_long[at + 31] = 0xf0;
+            let mut garbage = vec![0u8; 32];
+            garbage.extend(U256::from(32).to_be_bytes::<32>());
+            garbage.extend(magic);
+            let mut bad_parity = plain.clone();
+            bad_parity[65 + 3 * 32 + 31] = 2;
+            let mut huge_nonce = plain.clone();
+            huge_nonce[65 + 2 * 32] = 1;
+            for signature in [magic.to_vec(), huge_length, too_long, garbage, huge_nonce] {
+                let (client, scripted) = node_with("0x", || unreachable!());
+                assert!(!client.verify_hash(account().address(), hash(), &signature.into()).await.unwrap());
+                assert!(scripted.calls.lock().unwrap().is_empty());
+            }
+            assert_eq!(unwrap(&bad_parity).unwrap().authorization.authority(), None);
+        }
     }
 }
