@@ -51,10 +51,10 @@ The Oracle service uses a hybrid approach with performance optimizations:
 All endpoints except `/health` and `/` require bearer authentication. Rootless Podman reads the token from the permission-checked `secrets/oracle-api-token` file; local development may use `ORACLE_API_TOKEN`. Administrative requeue, auto-complete, and token-policy controls are intentionally CLI-only:
 
 ```bash
-bun run admin requeue <game-address>
-bun run admin auto-complete <game-address> <on|off>
-bun run admin token-policy list
-bun run admin token-policy set <mint> <on|off>
+timba-oracle admin requeue <game-address>
+timba-oracle admin auto-complete <game-address> <on|off>
+timba-oracle admin token-policy list
+timba-oracle admin token-policy set <mint> <on|off>
 ```
 
 The Oracle supports the Timba v0.2.0 and v0.3.0 IDLs. `CONTRACT_VERSION`
@@ -82,24 +82,25 @@ operator pays that one-time account rent and transaction fee.
 
 ### Prerequisites
 
-- [Bun](https://bun.sh/) runtime
+- [Rust](https://rustup.rs/) 1.85 or newer (CI and the image use 1.97)
 - Solana operator keypair file
 - Access to a Solana RPC endpoint (mainnet-beta for production)
 
 ### Installation
 
-1. **Clone and install dependencies**
+1. **Clone and build**
 
    ```bash
    git clone <repository>
    cd oracle
-   bun install
+   cargo build --release
    ```
 
 2. **Configure environment**
 
    ```bash
-   cp .env.example .env
+   cp env.example .env
+   set -a; . ./.env; set +a
    # Edit .env with your configuration
    ```
 
@@ -112,8 +113,15 @@ operator pays that one-time account rent and transaction fee.
 
 4. **Start the Oracle**
    ```bash
-   bun start
+   cargo run --release --bin timba-oracle -- serve
    ```
+
+The binary does not read `.env` itself; export the variables (as above) or use
+the quadlet `EnvironmentFile=`. Other subcommands are listed by
+`timba-oracle --help`: `admin`, `attempt-completion`, `inspect-game`,
+`inspect-oracle`, `audit-random`, `manual-shutdown`, `import-indexer` and
+`healthcheck`. The opt-in EVM oracle is the separate `timba-evm-oracle` binary,
+configured by `EVM_CONFIG_FILE`.
 
 ## ⚙️ Configuration
 
@@ -294,28 +302,40 @@ This prevents normal "not ready" states from being reported as errors in logs an
 ### Code Structure
 
 ```
-├── oracle-service.ts    # Main Oracle service logic
-├── database.ts          # SQLite database management
-├── index.ts            # HTTP API server
-├── idl/               # Solana program IDL files
-└── README.md          # This file
+crates/
+├── protocol/    # timba-protocol: Solana codecs, contract accounts/instructions, shared schemas
+├── common/      # timba-common: logging, env/secret helpers, shutdown signal
+├── oracle/      # timba-oracle: oracle service, HTTP API, indexer, web API, CLI
+│   └── src/
+│       ├── core/       # completion, events, scan loop, registry sync, signer, service
+│       ├── http/       # authenticated oracle API router
+│       ├── indexer/    # public history index and /indexer API
+│       ├── web_api/    # /web blockchain API
+│       ├── cli/        # operator subcommands
+│       └── server.rs   # `serve`: API, listeners and supervised background workers
+└── evm-oracle/  # timba-evm-oracle: opt-in EVM oracle
 ```
 
 ### Testing
 
-Run the test suite, optionally with coverage, and TypeScript checks to verify changes:
+Run the same checks as CI:
 
 ```bash
-bun test
-bun test --coverage  # view coverage
-bun run typecheck
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo llvm-cov --workspace --summary-only  # coverage (cargo install cargo-llvm-cov)
 ```
+
+`crates/protocol/tests` compares Rust encodings byte-for-byte with fixtures
+generated from the previous TypeScript implementation; see
+`crates/protocol/tests/fixtures/README.md`.
 
 ### Key Improvements
 
 - **Constants Extraction**: All magic numbers and strings are now constants
 - **Error Handling**: Comprehensive error handling with proper logging
-- **Type Safety**: Full TypeScript interfaces for all data structures
+- **Type Safety**: Typed Rust structures for every account, request and response
 - **Method Organization**: Focused methods with single responsibilities
 - **Resource Management**: Proper cleanup and graceful shutdown
 

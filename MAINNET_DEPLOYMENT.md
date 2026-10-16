@@ -23,8 +23,8 @@ The service uses two independent SQLite files. `oracle.sqlite` contains secrets 
 After switching the Oracle to v0.3.0 and before activating Bot or Web game creation, define every supported mint in the durable Oracle database. A missing policy disables game creation for that mint:
 
 ```bash
-podman exec oracle bun run admin token-policy set <mint> on
-podman exec oracle bun run admin token-policy list
+podman exec oracle timba-oracle admin token-policy set <mint> on
+podman exec oracle timba-oracle admin token-policy list
 ```
 
 Oracle uses the mint decimals and a live Jupiter price to publish a USD 0.10
@@ -59,8 +59,8 @@ Copy `timba-games.sql` to the VPS, stop the Oracle, and import it from the new O
 
 ```bash
 systemctl --user stop timba-oracle.service
-bun install --frozen-lockfile
-bun run indexer:import /path/to/timba-games.sql ./indexer.sqlite
+podman run --rm --volume "$PWD:/work:Z" --workdir /work ghcr.io/timbagame/oracle:main \
+  timba-oracle import-indexer /work/timba-games.sql /work/indexer.sqlite
 chmod 600 indexer.sqlite secrets/jupiter-api-key
 systemctl --user start timba-oracle.service
 ```
@@ -118,17 +118,16 @@ Worker; do not bind the entire private network.
 ## Service Checks
 
 ```bash
-podman exec oracle \
-  bun -e "const r = await fetch('http://127.0.0.1:3001/health'); console.log(r.status, await r.text()); if (!r.ok) process.exit(1)"
+podman exec oracle timba-oracle healthcheck && echo healthy
 ```
 
 Administrative service commands also run inside the container:
 
 ```bash
-podman exec oracle bun run admin requeue <game-address>
-podman exec oracle bun run admin auto-complete <game-address> <on|off>
-podman exec oracle bun run admin token-policy list
-podman exec oracle bun run admin token-policy set <mint> <on|off>
+podman exec oracle timba-oracle admin requeue <game-address>
+podman exec oracle timba-oracle admin auto-complete <game-address> <on|off>
+podman exec oracle timba-oracle admin token-policy list
+podman exec oracle timba-oracle admin token-policy set <mint> <on|off>
 ```
 
 Monitor logs for subscription failures, `/stats` for completion activity, `/indexer/api/stats` for the public index, and the operator wallet balance for transaction fees. Back up both SQLite files.
