@@ -266,6 +266,26 @@ fn leaderboard_rows(rows: Vec<super::types::Row>) -> Value {
     Value::Array(rows.into_iter().map(Value::Object).collect())
 }
 
+#[test]
+fn a_window_queried_before_a_rebuild_is_not_cached_after_it() {
+    let now: ManualClock = Arc::new(AtomicI64::new(1_000_000));
+    let f = fixture(IndexerDatabaseOptions {
+        leaderboard_cache_ttl_ms: Some(30_000),
+        now: Some(clock_of(&now)),
+        ..Default::default()
+    });
+    let stale = vec![json!({ "player": "stale", "games_won": 9 }).as_object().unwrap().clone()];
+    // A query read the generation, then a rebuild ran before it stored its rows.
+    let before = f.db.cache_generation();
+    f.db.rebuild_caches().unwrap();
+    f.db.store_window("24h:*".into(), before, 1_000_000, &stale);
+    assert!(f.db.get_leaderboard(10, None, LeaderboardPeriod::Day).unwrap().is_empty());
+    // Without a rebuild in between, the rows are served from memory.
+    let current = f.db.cache_generation();
+    f.db.store_window("7d:*".into(), current, 1_000_000, &stale);
+    assert_eq!(f.db.get_leaderboard(10, None, LeaderboardPeriod::Week).unwrap(), stale);
+}
+
 #[tokio::test]
 async fn ranks_windowed_leaderboards_from_recent_games_and_caches_them_briefly() {
     let now_seconds: i64 = 20_000_000;

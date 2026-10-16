@@ -381,10 +381,13 @@ impl OracleDatabase {
         self.conn.lock().unwrap().is_some()
     }
 
+    /// Queries block the calling worker (see `timba_common::blocking`).
     fn with_conn<T>(&self, f: impl FnOnce(&mut Connection) -> Result<T>) -> Result<T> {
-        let mut guard = self.conn.lock().unwrap();
-        let conn = guard.as_mut().ok_or_else(|| anyhow!("Database is closed"))?;
-        f(conn)
+        timba_common::blocking::blocking(|| {
+            let mut guard = self.conn.lock().unwrap();
+            let conn = guard.as_mut().ok_or_else(|| anyhow!("Database is closed"))?;
+            f(conn)
+        })
     }
 
     fn transaction<T>(&self, message: &str, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {

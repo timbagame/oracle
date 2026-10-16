@@ -142,6 +142,8 @@ struct CacheState {
     dirty: bool,
     last_rebuild_at: Option<i64>,
     leaderboard_windows: HashMap<String, (i64, Vec<Row>)>,
+    /// Bumped by every rebuild, so a windowed query that raced one is not cached.
+    generation: u64,
 }
 
 pub struct IndexerDatabase {
@@ -244,10 +246,13 @@ impl IndexerDatabase {
         })
     }
 
+    /// Queries block the calling worker (see `timba_common::blocking`).
     fn with_conn<T>(&self, f: impl FnOnce(&mut Connection) -> Result<T>) -> Result<T> {
-        let mut guard = self.conn.lock().unwrap();
-        let conn = guard.as_mut().ok_or_else(|| anyhow!("Indexer database is closed"))?;
-        f(conn)
+        timba_common::blocking::blocking(|| {
+            let mut guard = self.conn.lock().unwrap();
+            let conn = guard.as_mut().ok_or_else(|| anyhow!("Indexer database is closed"))?;
+            f(conn)
+        })
     }
 
     fn transaction<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
@@ -741,6 +746,7 @@ impl IndexerDatabase {
         cache.dirty = false;
         cache.last_rebuild_at = Some((self.clock)());
         cache.leaderboard_windows.clear();
+        cache.generation += 1;
         let now = self.now_seconds();
         conn.execute_batch("DELETE FROM token_stats_cache")?;
         conn.execute_batch(
@@ -947,14 +953,15 @@ impl IndexerDatabase {
         };
         let key = format!("{}:{}", period.as_str(), token_mint.unwrap_or("*"));
         let now = (self.clock)();
-        {
+        let generation = {
             let cache = self.cache.lock().unwrap();
             if let Some((expires_at, rows)) = cache.leaderboard_windows.get(&key) {
                 if *expires_at > now {
                     return Ok(take(rows));
                 }
             }
-        }
+            cache.generation
+        };
         let since = now.div_euclid(1000) - period.seconds();
         // Served by idx_games_token (token_mint, timestamp) or idx_games_timestamp.
         let result = self.with_conn(|conn| {
@@ -976,14 +983,25 @@ impl IndexerDatabase {
                 )?,
             })
         })?;
+        self.store_window(key, generation, now, &result);
+        Ok(take(&result))
+    }
+
+    /// The cache generation a windowed query starts from.
+    pub(super) fn cache_generation(&self) -> u64 {
+        self.cache.lock().unwrap().generation
+    }
+
+    /// Caches a windowed result unless a rebuild ran since `generation` was read:
+    /// the rows may predate it, and the rebuild already cleared the windows.
+    pub(super) fn store_window(&self, key: String, generation: u64, now: i64, rows: &[Row]) {
         let mut cache = self.cache.lock().unwrap();
         if cache.leaderboard_windows.len() >= LEADERBOARD_CACHE_MAX_ENTRIES {
             cache.leaderboard_windows.clear();
         }
-        if self.leaderboard_cache_ttl_ms > 0 {
-            cache.leaderboard_windows.insert(key, (now + self.leaderboard_cache_ttl_ms, result.clone()));
+        if self.leaderboard_cache_ttl_ms > 0 && cache.generation == generation {
+            cache.leaderboard_windows.insert(key, (now + self.leaderboard_cache_ttl_ms, rows.to_vec()));
         }
-        Ok(take(&result))
     }
 
     pub fn get_tokens(&self) -> Result<Vec<Row>> {

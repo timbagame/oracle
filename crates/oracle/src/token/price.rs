@@ -154,9 +154,10 @@ impl JupiterTokenPriceResolver {
                     let _done = Settled { inner: inner.clone(), mints: mints.clone() };
                     fetch_prices(inner, mints, api_key).await
                 });
-                let request = async move { task.await.unwrap_or_else(|error| Err(format!("Price fetch failed: {error}"))) }
-                    .boxed()
-                    .shared();
+                let request =
+                    async move { task.await.unwrap_or_else(|error| Err(format!("Price fetch failed: {error}"))) }
+                        .boxed()
+                        .shared();
                 for mint in to_fetch {
                     let request = request.clone();
                     let key = mint.clone();
