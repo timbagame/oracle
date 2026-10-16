@@ -1,5 +1,7 @@
 //! Core oracle: completion, event processing, scanning and signing.
 
+pub mod completion;
+pub mod events;
 pub mod registry;
-pub mod types;
 pub mod signer;
+pub mod types;

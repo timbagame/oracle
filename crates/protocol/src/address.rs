@@ -7,10 +7,8 @@ use sha2::{Digest, Sha256};
 
 pub const SYSTEM_PROGRAM_ID: Address = Address([0; 32]);
 pub const TOKEN_PROGRAM_ID: Address = Address::from_static("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-pub const ASSOCIATED_TOKEN_PROGRAM_ID: Address =
-    Address::from_static("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
-pub const COMPUTE_BUDGET_PROGRAM_ID: Address =
-    Address::from_static("ComputeBudget111111111111111111111111111111");
+pub const ASSOCIATED_TOKEN_PROGRAM_ID: Address = Address::from_static("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+pub const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::from_static("ComputeBudget111111111111111111111111111111");
 pub const WRAPPED_SOL_MINT: Address = Address::from_static("So11111111111111111111111111111111111111112");
 
 const MAX_SEED_LENGTH: usize = 32;
@@ -47,9 +45,8 @@ impl Address {
     }
 
     pub fn from_slice(bytes: &[u8]) -> Result<Self, AddressError> {
-        let array: [u8; 32] = bytes
-            .try_into()
-            .map_err(|_| AddressError::Invalid(format!("expected 32 bytes, got {}", bytes.len())))?;
+        let array: [u8; 32] =
+            bytes.try_into().map_err(|_| AddressError::Invalid(format!("expected 32 bytes, got {}", bytes.len())))?;
         Ok(Self(array))
     }
 
@@ -66,9 +63,7 @@ impl Address {
         if value.len() < 32 || value.len() > 44 {
             return Err(AddressError::Invalid(value.to_string()));
         }
-        let decoded = bs58::decode(value)
-            .into_vec()
-            .map_err(|_| AddressError::Invalid(value.to_string()))?;
+        let decoded = bs58::decode(value).into_vec().map_err(|_| AddressError::Invalid(value.to_string()))?;
         Self::from_slice(&decoded).map_err(|_| AddressError::Invalid(value.to_string()))
     }
 

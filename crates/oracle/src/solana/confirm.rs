@@ -19,7 +19,8 @@ pub async fn confirm_transaction(rpc: &RpcPool, signature: &str, latest: &Latest
     let deadline = Instant::now() + CONFIRMATION_TIMEOUT;
     let signatures = [signature.to_string()];
     while Instant::now() < deadline {
-        let (statuses, block_height) = tokio::try_join!(rpc.get_signature_statuses(&signatures), rpc.get_block_height())?;
+        let (statuses, block_height) =
+            tokio::try_join!(rpc.get_signature_statuses(&signatures), rpc.get_block_height())?;
         if let Some(Some(status)) = statuses.first() {
             if let Some(err) = &status.err {
                 anyhow::bail!("Transaction {signature} failed: {}", serde_json::to_string(err).unwrap_or_default());
@@ -51,7 +52,11 @@ pub fn should_retry_after_expiry(message: &str) -> bool {
 /// Signs with a fresh blockhash, sends and confirms; retries once with a new
 /// blockhash when the first attempt expired, unless the expired transaction
 /// actually landed.
-pub async fn submit_transaction<S>(rpc: &RpcPool, mut sign: S, on_retry: Option<&(dyn Fn(&anyhow::Error) + Sync)>) -> anyhow::Result<String>
+pub async fn submit_transaction<S>(
+    rpc: &RpcPool,
+    mut sign: S,
+    on_retry: Option<&(dyn Fn(&anyhow::Error) + Sync)>,
+) -> anyhow::Result<String>
 where
     S: FnMut(&LatestBlockhash) -> anyhow::Result<String>,
 {
@@ -116,12 +121,18 @@ mod tests {
     async fn confirms_and_reports_failures() {
         let transport = FakeTransport::new();
         transport.on(|_, m, _| (m == "getBlockHeight").then(|| Ok(json!(10))));
-        transport.push("getSignatureStatuses", Ok(json!({"value": [{"slot": 1, "confirmationStatus": "confirmed", "err": null}]})));
+        transport.push(
+            "getSignatureStatuses",
+            Ok(json!({"value": [{"slot": 1, "confirmationStatus": "confirmed", "err": null}]})),
+        );
         let pool = RpcPool::with_transport(&["https://a".into()], transport.clone()).unwrap();
         let latest = LatestBlockhash { blockhash: timba_protocol::Address([1; 32]), last_valid_block_height: 100 };
         confirm_transaction(&pool, "sig", &latest).await.unwrap();
 
-        transport.push("getSignatureStatuses", Ok(json!({"value": [{"slot": 1, "err": {"InstructionError": [0, "Custom"]}}]})));
+        transport.push(
+            "getSignatureStatuses",
+            Ok(json!({"value": [{"slot": 1, "err": {"InstructionError": [0, "Custom"]}}]})),
+        );
         let err = confirm_transaction(&pool, "sig", &latest).await.unwrap_err();
         assert_eq!(err.to_string(), r#"Transaction sig failed: {"InstructionError":[0,"Custom"]}"#);
 
@@ -135,11 +146,15 @@ mod tests {
     async fn retries_once_after_expiry() {
         let transport = FakeTransport::new();
         transport.on(|_, m, _| (m == "getLatestBlockhash").then(|| Ok(blockhash())));
-        transport.push("sendTransaction", Err(RpcError::json_rpc(-32002, "Transaction simulation failed: Blockhash not found")));
+        transport.push(
+            "sendTransaction",
+            Err(RpcError::json_rpc(-32002, "Transaction simulation failed: Blockhash not found")),
+        );
         transport.push("sendTransaction", Ok(json!("sig2")));
         transport.on(|_, m, _| (m == "getBlockHeight").then(|| Ok(json!(1))));
         transport.on(|_, m, _| {
-            (m == "getSignatureStatuses").then(|| Ok(json!({"value": [{"slot": 1, "confirmationStatus": "finalized"}]})))
+            (m == "getSignatureStatuses")
+                .then(|| Ok(json!({"value": [{"slot": 1, "confirmationStatus": "finalized"}]})))
         });
         let pool = RpcPool::with_transport(&["https://a".into()], transport.clone()).unwrap();
         let signed = Arc::new(std::sync::atomic::AtomicUsize::new(0));

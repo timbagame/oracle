@@ -21,8 +21,7 @@ pub trait TokenPriceResolver: Send + Sync {
 }
 
 /// Performs one GET request and returns `(status, json body)`.
-pub type PriceFetcher =
-    Arc<dyn Fn(String, String) -> BoxFuture<'static, Result<(u16, Value), String>> + Send + Sync>;
+pub type PriceFetcher = Arc<dyn Fn(String, String) -> BoxFuture<'static, Result<(u16, Value), String>> + Send + Sync>;
 
 type PendingPrice = Shared<BoxFuture<'static, Result<Option<f64>, String>>>;
 
@@ -70,10 +69,7 @@ fn js_number(text: &str) -> Option<f64> {
 }
 
 pub fn http_price_fetcher() -> PriceFetcher {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .expect("reqwest client");
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(10)).build().expect("reqwest client");
     Arc::new(move |url: String, api_key: String| {
         let client = client.clone();
         async move {
@@ -88,7 +84,8 @@ pub fn http_price_fetcher() -> PriceFetcher {
             if !response.status().is_success() {
                 return Ok((status, Value::Null));
             }
-            let body = response.json::<Value>().await.map_err(|_| "Jupiter Price API returned invalid JSON".to_string())?;
+            let body =
+                response.json::<Value>().await.map_err(|_| "Jupiter Price API returned invalid JSON".to_string())?;
             Ok((status, body))
         }
         .boxed()
@@ -166,10 +163,9 @@ impl JupiterTokenPriceResolver {
             missing.iter().map(|m| (m.clone(), in_flight[m].clone())).collect()
         };
 
-        let resolved = futures::future::join_all(pending.into_iter().map(|(mint, future)| async move {
-            (mint, future.await)
-        }))
-        .await;
+        let resolved =
+            futures::future::join_all(pending.into_iter().map(|(mint, future)| async move { (mint, future.await) }))
+                .await;
         for (mint, result) in resolved {
             match result.map_err(anyhow::Error::msg)? {
                 Some(price) => {
@@ -183,7 +179,11 @@ impl JupiterTokenPriceResolver {
     }
 }
 
-async fn fetch_prices(inner: Arc<Inner>, mints: Vec<String>, api_key: String) -> Result<Arc<HashMap<String, f64>>, String> {
+async fn fetch_prices(
+    inner: Arc<Inner>,
+    mints: Vec<String>,
+    api_key: String,
+) -> Result<Arc<HashMap<String, f64>>, String> {
     let mut prices = HashMap::new();
     for chunk in mints.chunks(JUPITER_MAX_IDS) {
         let mut url = url::Url::parse(&inner.price_url).map_err(|error| error.to_string())?;
@@ -204,11 +204,10 @@ async fn fetch_prices(inner: Arc<Inner>, mints: Vec<String>, api_key: String) ->
         for mint in chunk {
             let Some(price) = read_positive_price(entries.get(mint)) else { continue };
             prices.insert(mint.clone(), price);
-            inner
-                .cache
-                .lock()
-                .unwrap()
-                .insert(mint.clone(), CachedPrice { price_usd: price, expires_at: (inner.now)() + TOKEN_PRICE_CACHE_TTL_MS });
+            inner.cache.lock().unwrap().insert(
+                mint.clone(),
+                CachedPrice { price_usd: price, expires_at: (inner.now)() + TOKEN_PRICE_CACHE_TTL_MS },
+            );
         }
     }
     Ok(Arc::new(prices))
@@ -254,7 +253,11 @@ mod tests {
     async fn caches_and_coalesces() {
         let calls = Arc::new(AtomicUsize::new(0));
         let now = Arc::new(AtomicI64::new(1_000));
-        let r = resolver(calls.clone(), now.clone(), json!({"A": {"usdPrice": 1.5}, "B": {"usdPrice": "2"}, "C": {"usdPrice": 0}}));
+        let r = resolver(
+            calls.clone(),
+            now.clone(),
+            json!({"A": {"usdPrice": 1.5}, "B": {"usdPrice": "2"}, "C": {"usdPrice": 0}}),
+        );
         let mints = vec!["A".to_string(), "B".to_string()];
         let (a, b) = tokio::join!(r.prices(&mints, false), r.prices(&mints, false));
         assert_eq!(a.unwrap()["A"], 1.5);

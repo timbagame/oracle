@@ -55,9 +55,8 @@ impl OracleConfig {
         let environment = environment_mode();
         let solana_networks = parse_rpc_endpoint_list(read_env("SOLANA_NETWORK").as_deref())?;
         let solana_network = solana_networks[0].clone();
-        let operator_keypair_source = read_env("OPERATOR_KEYPAIR_PATH")
-            .or_else(|| read_env("ORACLE_KEYPAIR_PATH"))
-            .unwrap_or_else(|| {
+        let operator_keypair_source =
+            read_env("OPERATOR_KEYPAIR_PATH").or_else(|| read_env("ORACLE_KEYPAIR_PATH")).unwrap_or_else(|| {
                 if Path::new(&resolve_path(DEFAULT_KEYPAIR_FILE)).exists() {
                     DEFAULT_KEYPAIR_FILE.into()
                 } else {

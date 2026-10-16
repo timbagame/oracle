@@ -98,11 +98,8 @@ impl ProgramClient {
     }
 
     pub async fn fetch_game(&self, game: &Address) -> anyhow::Result<GameAccount> {
-        let account = self
-            .rpc
-            .get_account_info(game)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!(account_not_found_message(game)))?;
+        let account =
+            self.rpc.get_account_info(game).await?.ok_or_else(|| anyhow::anyhow!(account_not_found_message(game)))?;
         GameAccount::decode(&account.data).map_err(|error| anyhow::anyhow!("{error}"))
     }
 
@@ -110,7 +107,11 @@ impl ProgramClient {
         self.listeners.lock().unwrap().len()
     }
 
-    pub async fn add_event_listener(self: &Arc<Self>, event: EventName, callback: EventCallback) -> anyhow::Result<u64> {
+    pub async fn add_event_listener(
+        self: &Arc<Self>,
+        event: EventName,
+        callback: EventCallback,
+    ) -> anyhow::Result<u64> {
         let id = self.next_listener_id.fetch_add(1, Ordering::SeqCst);
         self.listeners.lock().unwrap().insert(id, (event, callback));
         if let Err(error) = self.ensure_subscription().await {

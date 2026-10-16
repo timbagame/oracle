@@ -4,9 +4,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::address::{
-    find_associated_token_address, ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID,
-};
+use crate::address::{find_associated_token_address, ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID};
 use crate::codec::{DecodeError, Reader};
 use crate::instruction::{AccountMeta, Instruction};
 use crate::Address;
@@ -59,9 +57,7 @@ impl ContractVersion {
     /// Mirrors `parseContractVersion`: blank means the default version.
     pub fn parse_env(value: Option<&str>, variable_name: &str) -> Result<Self, String> {
         let version = value.map(str::trim).filter(|v| !v.is_empty()).unwrap_or("0.2.0");
-        version.parse().map_err(|_| {
-            format!("{variable_name} must be one of 0.2.0, 0.3.0; received {version}")
-        })
+        version.parse().map_err(|_| format!("{variable_name} must be one of 0.2.0, 0.3.0; received {version}"))
     }
 
     pub fn idl_json(self) -> &'static str {
@@ -311,9 +307,7 @@ impl GameTokenAccount {
 // ---------------------------------------------------------------------------
 
 pub fn find_game_pda(random_hash: &[u8; 32], program_id: &Address) -> Address {
-    Address::find_program_address(&[b"game", random_hash], program_id)
-        .expect("game PDA")
-        .0
+    Address::find_program_address(&[b"game", random_hash], program_id).expect("game PDA").0
 }
 
 pub fn find_oracle_pda(program_id: &Address) -> Address {
@@ -321,15 +315,11 @@ pub fn find_oracle_pda(program_id: &Address) -> Address {
 }
 
 pub fn find_game_vault_pda(token_mint: &Address, program_id: &Address) -> Address {
-    Address::find_program_address(&[b"game_vault", &token_mint.0], program_id)
-        .expect("game vault PDA")
-        .0
+    Address::find_program_address(&[b"game_vault", &token_mint.0], program_id).expect("game vault PDA").0
 }
 
 pub fn find_game_token_pda(token_mint: &Address, program_id: &Address) -> Address {
-    Address::find_program_address(&[b"game_token", &token_mint.0], program_id)
-        .expect("game token PDA")
-        .0
+    Address::find_program_address(&[b"game_token", &token_mint.0], program_id).expect("game token PDA").0
 }
 
 /// Associated token account using the classic token program (the IDL default).
@@ -507,7 +497,11 @@ pub fn join_game_account_metas(
     metas
 }
 
-pub fn join_game_instruction(version: ContractVersion, accounts: &JoinGameAccounts, program_id: &Address) -> Instruction {
+pub fn join_game_instruction(
+    version: ContractVersion,
+    accounts: &JoinGameAccounts,
+    program_id: &Address,
+) -> Instruction {
     Instruction {
         program_id: *program_id,
         accounts: join_game_account_metas(version, accounts, program_id),
@@ -553,7 +547,11 @@ pub struct CloseGameAccounts {
     pub creator_token_account: Address,
 }
 
-pub fn close_game_instruction(version: ContractVersion, accounts: &CloseGameAccounts, program_id: &Address) -> Instruction {
+pub fn close_game_instruction(
+    version: ContractVersion,
+    accounts: &CloseGameAccounts,
+    program_id: &Address,
+) -> Instruction {
     let mut metas = vec![
         AccountMeta::writable(accounts.game),
         AccountMeta::writable_signer(accounts.creator),
@@ -630,8 +628,18 @@ mod tests {
             assert_eq!(
                 names,
                 [
-                    "creator", "game_type", "ticket_amount", "max_tickets", "min_tickets", "tickets_count",
-                    "token_mint", "created_at", "timeout", "last_slot", "is_private", "total_amount",
+                    "creator",
+                    "game_type",
+                    "ticket_amount",
+                    "max_tickets",
+                    "min_tickets",
+                    "tickets_count",
+                    "token_mint",
+                    "created_at",
+                    "timeout",
+                    "last_slot",
+                    "is_private",
+                    "total_amount",
                     "participants"
                 ]
             );

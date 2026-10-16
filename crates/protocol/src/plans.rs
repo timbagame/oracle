@@ -4,8 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::address::{
-    find_associated_token_address, ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID,
-    WRAPPED_SOL_MINT,
+    find_associated_token_address, ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID, WRAPPED_SOL_MINT,
 };
 use crate::codec::DecodeError;
 use crate::contracts::{
@@ -258,9 +257,10 @@ impl ContractAdapter {
         );
         let mut instructions = vec![setup];
         if !unjoin && is_wrapped_sol(&input.token_mint) {
-            let amount = input.token_amount.filter(|a| *a > 0).ok_or_else(|| {
-                PlanError::Invalid("SOL joins require a positive stake amount".into())
-            })?;
+            let amount = input
+                .token_amount
+                .filter(|a| *a > 0)
+                .ok_or_else(|| PlanError::Invalid("SOL joins require a positive stake amount".into()))?;
             let (_, wrap) = build_wrap_sol_instructions(&input.player, amount)?;
             instructions.extend(wrap.into_iter().skip(1));
         }

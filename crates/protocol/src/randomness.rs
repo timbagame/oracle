@@ -19,7 +19,7 @@ pub fn select_winner_from_entropy(entropy: &[u8], tickets: u64) -> Result<Winner
     if entropy.len() != 32 {
         return Err(RandomnessError("Entropy must contain 32 bytes".into()));
     }
-    if tickets < 1 || tickets > 0xffff_ffff {
+    if !(1..=0xffff_ffff).contains(&tickets) {
         return Err(RandomnessError("Ticket count must be a positive u32".into()));
     }
     let read = |start: usize| u64::from_le_bytes(entropy[start..start + 8].try_into().expect("8 bytes"));

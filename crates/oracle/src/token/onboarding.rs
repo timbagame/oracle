@@ -55,11 +55,13 @@ pub fn assert_operator_token_account(
     Ok(())
 }
 
-pub async fn prepare_game_token(rpc: &RpcPool, operator: &Keypair, mint: &Address) -> anyhow::Result<PreparedGameToken> {
-    let mint_account = rpc
-        .get_account_info(mint)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Token mint does not exist: {mint}"))?;
+pub async fn prepare_game_token(
+    rpc: &RpcPool,
+    operator: &Keypair,
+    mint: &Address,
+) -> anyhow::Result<PreparedGameToken> {
+    let mint_account =
+        rpc.get_account_info(mint).await?.ok_or_else(|| anyhow::anyhow!("Token mint does not exist: {mint}"))?;
     let decimals = decode_mint_decimals(mint, &mint_account)?;
 
     let owner = operator.address();

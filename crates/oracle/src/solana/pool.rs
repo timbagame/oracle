@@ -12,8 +12,8 @@ use timba_protocol::Address;
 use tokio::sync::broadcast;
 
 use super::rpc::{
-    AccountInfo, BoxFuture, HttpTransport, LatestBlockhash, RpcError, RpcTransport, SignatureInfo,
-    SignatureStatus, SignaturesForAddressOptions, TransactionInfo,
+    AccountInfo, BoxFuture, HttpTransport, LatestBlockhash, RpcError, RpcTransport, SignatureInfo, SignatureStatus,
+    SignaturesForAddressOptions, TransactionInfo,
 };
 
 pub const RPC_RETRY_BASE_DELAY_MS: u64 = 500;
@@ -240,9 +240,8 @@ impl RpcPool {
             .as_str()
             .and_then(|b| Address::parse(b).ok())
             .ok_or_else(|| RpcError::decode("Invalid blockhash"))?;
-        let last_valid_block_height = value["lastValidBlockHeight"]
-            .as_u64()
-            .ok_or_else(|| RpcError::decode("Invalid lastValidBlockHeight"))?;
+        let last_valid_block_height =
+            value["lastValidBlockHeight"].as_u64().ok_or_else(|| RpcError::decode("Invalid lastValidBlockHeight"))?;
         Ok(LatestBlockhash { blockhash, last_valid_block_height })
     }
 
@@ -261,10 +260,12 @@ impl RpcPool {
         result.as_str().map(String::from).ok_or_else(|| RpcError::decode("sendTransaction returned no signature"))
     }
 
-    pub async fn get_signature_statuses(&self, signatures: &[String]) -> Result<Vec<Option<SignatureStatus>>, RpcError> {
-        let result = self
-            .request("getSignatureStatuses", json!([signatures, { "searchTransactionHistory": true }]))
-            .await?;
+    pub async fn get_signature_statuses(
+        &self,
+        signatures: &[String],
+    ) -> Result<Vec<Option<SignatureStatus>>, RpcError> {
+        let result =
+            self.request("getSignatureStatuses", json!([signatures, { "searchTransactionHistory": true }])).await?;
         serde_json::from_value(result.get("value").cloned().unwrap_or(Value::Null))
             .map_err(|e| RpcError::decode(format!("Invalid signature statuses: {e}")))
     }
@@ -347,7 +348,10 @@ pub mod testing {
         }
 
         /// Adds a fallback handler consulted when nothing is queued.
-        pub fn on(&self, handler: impl Fn(&str, &str, &Value) -> Option<Result<Value, RpcError>> + Send + Sync + 'static) {
+        pub fn on(
+            &self,
+            handler: impl Fn(&str, &str, &Value) -> Option<Result<Value, RpcError>> + Send + Sync + 'static,
+        ) {
             self.handlers.lock().unwrap().push(Box::new(handler));
         }
 
@@ -363,15 +367,19 @@ pub mod testing {
     }
 
     impl RpcTransport for FakeTransport {
-        fn send<'a>(&'a self, endpoint: &'a str, method: &'a str, params: Value) -> BoxFuture<'a, Result<Value, RpcError>> {
+        fn send<'a>(
+            &'a self,
+            endpoint: &'a str,
+            method: &'a str,
+            params: Value,
+        ) -> BoxFuture<'a, Result<Value, RpcError>> {
             self.calls.lock().unwrap().push((endpoint.to_string(), method.to_string(), params.clone()));
             let queued = {
                 let mut queue = self.queued.lock().unwrap();
                 queue.iter().position(|(m, _)| m == method).and_then(|i| queue.remove(i)).map(|(_, r)| r)
             };
-            let response = queued.or_else(|| {
-                self.handlers.lock().unwrap().iter().find_map(|h| h(endpoint, method, &params))
-            });
+            let response =
+                queued.or_else(|| self.handlers.lock().unwrap().iter().find_map(|h| h(endpoint, method, &params)));
             Box::pin(async move {
                 response.unwrap_or_else(|| Err(RpcError::decode(format!("unexpected RPC call {method}"))))
             })
@@ -390,10 +398,10 @@ mod tests {
             parse_rpc_endpoint_list(Some(" https://a/, https://b ,https://a ")).unwrap(),
             vec!["https://a", "https://b"]
         );
-        assert_eq!(parse_rpc_endpoint_list(Some(r#"["https://x//", "", "https://y"]"#)).unwrap(), vec![
-            "https://x",
-            "https://y"
-        ]);
+        assert_eq!(
+            parse_rpc_endpoint_list(Some(r#"["https://x//", "", "https://y"]"#)).unwrap(),
+            vec!["https://x", "https://y"]
+        );
         assert!(parse_rpc_endpoint_list(None).unwrap_err().contains("required"));
         assert!(parse_rpc_endpoint_list(Some("[nope]")).unwrap_err().contains("JSON array"));
         assert!(parse_rpc_endpoint_list(Some(" , ")).unwrap_err().contains("empty list"));
@@ -403,7 +411,11 @@ mod tests {
     async fn fails_over_and_promotes() {
         let transport = FakeTransport::new();
         transport.on(|endpoint, _, _| {
-            Some(if endpoint == "https://a" { Err(RpcError::http(503, "Service Unavailable", None)) } else { Ok(json!(42)) })
+            Some(if endpoint == "https://a" {
+                Err(RpcError::http(503, "Service Unavailable", None))
+            } else {
+                Ok(json!(42))
+            })
         });
         let pool = RpcPool::with_transport(&["https://a".into(), "https://b".into()], transport.clone()).unwrap();
         let mut changes = pool.subscribe_endpoint_changes();
@@ -431,12 +443,12 @@ mod tests {
         transport.push("getSlot", Ok(json!(1)));
         let waited = Arc::new(std::sync::Mutex::new(Vec::new()));
         let w = waited.clone();
-        let pool = RpcPool::with_transport(&["https://a".into(), "https://b".into()], transport)
-            .unwrap()
-            .with_delay(move |ms| {
+        let pool = RpcPool::with_transport(&["https://a".into(), "https://b".into()], transport).unwrap().with_delay(
+            move |ms| {
                 w.lock().unwrap().push(ms);
                 Box::pin(async {})
-            });
+            },
+        );
         assert_eq!(pool.get_slot().await.unwrap(), 1);
         assert!(waited.lock().unwrap()[0] >= 2_000);
     }

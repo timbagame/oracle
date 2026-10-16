@@ -162,11 +162,8 @@ fn player_unjoined(data: &[u8]) -> Result<PlayerMembership, DecodeError> {
     }
     let mut r = Reader::new(&data[8..]);
     let (game_key, player, total_amount, tickets_count, ticket_index) = membership_head(&mut r)?;
-    let (moved_participant, offset) = if flag == Some(1) {
-        (Some(Address::from_slice(&data[89..121]).expect("32 bytes")), 121)
-    } else {
-        (None, 89)
-    };
+    let (moved_participant, offset) =
+        if flag == Some(1) { (Some(Address::from_slice(&data[89..121]).expect("32 bytes")), 121) } else { (None, 89) };
     let mut tail = Reader::new(&data[offset..]);
     Ok(PlayerMembership {
         game_key,
@@ -323,10 +320,7 @@ mod tests {
 
     #[test]
     fn discriminators_match_idl() {
-        for json in [
-            include_str!("../idl/timba-v0.2.0.json"),
-            include_str!("../idl/timba-v0.3.0.json"),
-        ] {
+        for json in [include_str!("../idl/timba-v0.2.0.json"), include_str!("../idl/timba-v0.3.0.json")] {
             let idl: Value = serde_json::from_str(json).unwrap();
             for event in idl["events"].as_array().unwrap() {
                 let bytes: Vec<u8> =

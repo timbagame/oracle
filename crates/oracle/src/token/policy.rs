@@ -34,9 +34,7 @@ pub struct TokenPolicy {
 }
 
 pub fn normalize_mint(value: &str) -> Result<String, String> {
-    Address::parse(value.trim())
-        .map(|a| a.to_base58())
-        .map_err(|_| "mint must be a valid Solana address".to_string())
+    Address::parse(value.trim()).map(|a| a.to_base58()).map_err(|_| "mint must be a valid Solana address".to_string())
 }
 
 const DECIMALS_ERROR: &str = "token decimals must be an integer from 0 to 15";
@@ -204,14 +202,18 @@ mod tests {
 
     #[test]
     fn api_policy_and_evaluation() {
-        let stored = StoredTokenPolicy { mint: "M".into(), enabled: true, decimals: 6, revision: 2, effective_at_ms: 0 };
+        let stored =
+            StoredTokenPolicy { mint: "M".into(), enabled: true, decimals: 6, revision: 2, effective_at_ms: 0 };
         let api = to_api_token_policy(&stored, 100_000);
         assert_eq!(api.accepted_minimum_amount_raw, "95000");
         assert_eq!(api.effective_at, "1970-01-01T00:00:00.000Z");
         assert_eq!(to_api_token_policy(&stored, 0).accepted_minimum_amount_raw, "0");
         let policies = vec![api];
         assert!(evaluate_token_policy(&policies, "M", Some(95_000)).is_ok());
-        assert_eq!(evaluate_token_policy(&policies, "M", Some(94_999)).unwrap_err().0, RejectionCode::AmountBelowMinimum);
+        assert_eq!(
+            evaluate_token_policy(&policies, "M", Some(94_999)).unwrap_err().0,
+            RejectionCode::AmountBelowMinimum
+        );
         assert_eq!(evaluate_token_policy(&policies, "X", None).unwrap_err().0, RejectionCode::UnsupportedMint);
     }
 }

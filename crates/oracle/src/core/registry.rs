@@ -105,7 +105,13 @@ impl PlayerRegistrySync {
         Self::with_limits(rpc, program_id, 500, 6, 4)
     }
 
-    pub fn with_limits(rpc: Arc<RpcPool>, program_id: Address, batch_size: usize, max_batches: usize, concurrency: usize) -> Self {
+    pub fn with_limits(
+        rpc: Arc<RpcPool>,
+        program_id: Address,
+        batch_size: usize,
+        max_batches: usize,
+        concurrency: usize,
+    ) -> Self {
         Self {
             rpc,
             program_id,
@@ -165,7 +171,11 @@ impl PlayerRegistrySync {
         Ok(Some(assignments.into_values().collect()))
     }
 
-    async fn collect_signatures(&self, game_pda: &Address, max_signatures: Option<usize>) -> anyhow::Result<Vec<(String, u64)>> {
+    async fn collect_signatures(
+        &self,
+        game_pda: &Address,
+        max_signatures: Option<usize>,
+    ) -> anyhow::Result<Vec<(String, u64)>> {
         let mut collected: Vec<(String, u64)> = Vec::new();
         let mut before: Option<String> = None;
         for _ in 0..self.max_batches {
@@ -174,7 +184,8 @@ impl PlayerRegistrySync {
             }
             let remaining = max_signatures.map_or(self.batch_size, |max| max - collected.len());
             let limit = remaining.min(self.batch_size).max(1);
-            let options = SignaturesForAddressOptions { before: before.clone(), until: None, limit: Some(limit as u32) };
+            let options =
+                SignaturesForAddressOptions { before: before.clone(), until: None, limit: Some(limit as u32) };
             let page = self.rpc.get_signatures_for_address(game_pda, &options).await?;
             if page.is_empty() {
                 break;
@@ -191,7 +202,12 @@ impl PlayerRegistrySync {
     }
 }
 
-fn parse_registry_events(logs: &[String], signature: &str, slot: u64, program_id: &str) -> Result<Vec<RegistryEvent>, String> {
+fn parse_registry_events(
+    logs: &[String],
+    signature: &str,
+    slot: u64,
+    program_id: &str,
+) -> Result<Vec<RegistryEvent>, String> {
     if logs.is_empty() {
         return Ok(Vec::new());
     }
@@ -281,9 +297,7 @@ impl RegistrySyncManager {
         expected_entries: i64,
     ) -> Result<Vec<String>, &'static str> {
         if expected_entries <= 0 {
-            error!(
-                "Ticket registry mismatch for {game_address}: expected at least 1 entry, found {expected_entries}"
-            );
+            error!("Ticket registry mismatch for {game_address}: expected at least 1 entry, found {expected_entries}");
             self.desync(game_address);
             return Err("No ticket entries available for completion");
         }
@@ -372,7 +386,12 @@ impl RegistrySyncManager {
         }
     }
 
-    pub async fn prefetch_player_registry(self: &Arc<Self>, game_address: &str, context: &GameContext, readiness: &Readiness) {
+    pub async fn prefetch_player_registry(
+        self: &Arc<Self>,
+        game_address: &str,
+        context: &GameContext,
+        readiness: &Readiness,
+    ) {
         let (Some(recover), Some(game)) = (self.recover.clone(), readiness.game_account.as_ref()) else {
             return;
         };

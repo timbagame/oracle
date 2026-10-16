@@ -154,7 +154,10 @@ mod tests {
             "value": {"signature": "abc", "err": null, "logs": ["a", "b"]}
         }}});
         let parsed = parse_notification(&value).unwrap();
-        assert_eq!(parsed, LogsNotification { slot: 5, signature: "abc".into(), err: None, logs: vec!["a".into(), "b".into()] });
+        assert_eq!(
+            parsed,
+            LogsNotification { slot: 5, signature: "abc".into(), err: None, logs: vec!["a".into(), "b".into()] }
+        );
     }
 
     #[tokio::test]

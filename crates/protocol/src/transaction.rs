@@ -413,11 +413,8 @@ impl Transaction {
     }
 
     pub fn set_signature(&mut self, address: &Address, signature: [u8; 64]) -> Result<(), TransactionError> {
-        let slot = self
-            .signatures
-            .iter_mut()
-            .find(|(a, _)| a == address)
-            .ok_or(TransactionError::CannotSign(*address))?;
+        let slot =
+            self.signatures.iter_mut().find(|(a, _)| a == address).ok_or(TransactionError::CannotSign(*address))?;
         slot.1 = Some(signature);
         Ok(())
     }
@@ -459,11 +456,15 @@ mod tests {
             ],
             data: vec![1, 2, 3],
         };
-        let message = LegacyMessage::compile(&payer, &Address([7; 32]), &[ix.clone()]).unwrap();
+        let message = LegacyMessage::compile(&payer, &Address([7; 32]), std::slice::from_ref(&ix)).unwrap();
         assert_eq!(message.account_keys, vec![payer, signer, writable, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID]);
         assert_eq!(
             message.header,
-            MessageHeader { num_required_signatures: 2, num_readonly_signed_accounts: 1, num_readonly_unsigned_accounts: 2 }
+            MessageHeader {
+                num_required_signatures: 2,
+                num_readonly_signed_accounts: 1,
+                num_readonly_unsigned_accounts: 2
+            }
         );
         let bytes = message.serialize();
         assert_eq!(LegacyMessage::deserialize(&bytes).unwrap(), message);

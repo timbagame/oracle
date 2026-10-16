@@ -33,16 +33,9 @@ impl<'a> Reader<'a> {
     }
 
     pub fn bytes(&mut self, len: usize) -> Result<&'a [u8], DecodeError> {
-        let end = self
-            .offset
-            .checked_add(len)
-            .filter(|end| *end <= self.data.len())
-            .ok_or_else(|| {
-                DecodeError::new(format!(
-                    "Codec [decode] expected {len} bytes, got {}",
-                    self.remaining()
-                ))
-            })?;
+        let end = self.offset.checked_add(len).filter(|end| *end <= self.data.len()).ok_or_else(|| {
+            DecodeError::new(format!("Codec [decode] expected {len} bytes, got {}", self.remaining()))
+        })?;
         let slice = &self.data[self.offset..end];
         self.offset = end;
         Ok(slice)

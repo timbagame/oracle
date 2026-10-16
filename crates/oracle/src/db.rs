@@ -26,7 +26,8 @@ mod sql {
     pub const REACTIVATE_SECRET_KEY: &str =
         "UPDATE secret_keys SET used = FALSE, committed_at = COALESCE(committed_at, created_at) WHERE game_address = ?";
     pub const DELETE_SECRET_KEY: &str = "DELETE FROM secret_keys WHERE game_address = ?";
-    pub const UPSERT_GAME_TRACKING: &str = "INSERT INTO game_tracking (game_address, status, game_type, last_checked, auto_complete_disabled)
+    pub const UPSERT_GAME_TRACKING: &str =
+        "INSERT INTO game_tracking (game_address, status, game_type, last_checked, auto_complete_disabled)
      VALUES (?, ?, ?, ?, COALESCE((SELECT auto_complete_disabled FROM game_tracking WHERE game_address = ?), FALSE))
      ON CONFLICT(game_address) DO UPDATE SET
        status = excluded.status,
@@ -44,7 +45,8 @@ mod sql {
     pub const RESET_COMPLETION_ATTEMPTS: &str = "UPDATE game_tracking SET status = ?, completion_attempts = 0, completion_failure_kind = NULL, completion_retry_after = NULL, completed_at = NULL, last_checked = ? WHERE game_address = ?";
     pub const UPSERT_GAME_PLAYER: &str =
         "INSERT OR REPLACE INTO game_players (game_address, player_address, ticket_index, joined_at) VALUES (?, ?, ?, ?)";
-    pub const DELETE_GAME_PLAYER_BY_TICKET: &str = "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?";
+    pub const DELETE_GAME_PLAYER_BY_TICKET: &str =
+        "DELETE FROM game_players WHERE game_address = ? AND ticket_index = ?";
     pub const DELETE_GAME_PLAYER_BY_ADDRESS: &str =
         "DELETE FROM game_players WHERE game_address = ? AND player_address = ?";
     pub const UPDATE_GAME_METADATA: &str =
@@ -52,7 +54,8 @@ mod sql {
     pub const MARK_GAME_DESYNCED: &str = "UPDATE game_tracking SET status = ?, completion_failure_kind = 'permanent', completion_retry_after = NULL, completed_at = NULL, last_checked = ? WHERE game_address = ?";
     pub const SET_AUTO_COMPLETE_DISABLED: &str =
         "UPDATE game_tracking SET auto_complete_disabled = ?, last_checked = ? WHERE game_address = ?";
-    pub const UPSERT_TOKEN_POLICY: &str = "INSERT INTO token_policies (mint, enabled, minimum_amount_raw, decimals, revision, effective_at)
+    pub const UPSERT_TOKEN_POLICY: &str =
+        "INSERT INTO token_policies (mint, enabled, minimum_amount_raw, decimals, revision, effective_at)
     VALUES (?, ?, '0', ?, 1, ?)
     ON CONFLICT(mint) DO UPDATE SET
       enabled = excluded.enabled,
@@ -74,7 +77,8 @@ mod sql {
         "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? ORDER BY last_checked ASC LIMIT ?";
     pub const SELECT_PENDING_GAMES_ACTIVE: &str = "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND auto_complete_disabled = FALSE AND (completion_retry_after IS NULL OR completion_retry_after <= ?) ORDER BY last_checked ASC LIMIT ?";
     pub const SELECT_PENDING_GAMES_WITH_ATTEMPTS: &str = "SELECT game_address, completion_attempts FROM game_tracking WHERE status = ? AND completion_attempts < ? ORDER BY last_checked ASC LIMIT ?";
-    pub const SELECT_PENDING_GAMES_WITH_ATTEMPTS_ACTIVE: &str = "SELECT game_address, completion_attempts FROM game_tracking
+    pub const SELECT_PENDING_GAMES_WITH_ATTEMPTS_ACTIVE: &str =
+        "SELECT game_address, completion_attempts FROM game_tracking
       WHERE status = ?
         AND auto_complete_disabled = FALSE
         AND (completion_retry_after IS NULL OR completion_retry_after <= ?)
@@ -548,8 +552,13 @@ impl OracleDatabase {
             }
         }
         self.with_conn(|c| {
-            run(c, sql::UPSERT_GAME_TRACKING, "Failed to track game", params![game, DEFAULT_STATUS, game_type, now_ms(), game])
-                .map(drop)
+            run(
+                c,
+                sql::UPSERT_GAME_TRACKING,
+                "Failed to track game",
+                params![game, DEFAULT_STATUS, game_type, now_ms(), game],
+            )
+            .map(drop)
         })
     }
 
@@ -565,7 +574,11 @@ impl OracleDatabase {
         )
     }
 
-    pub fn set_auto_complete_disabled(&self, game: &str, disabled: bool) -> Result<std::result::Result<bool, ToggleFailure>> {
+    pub fn set_auto_complete_disabled(
+        &self,
+        game: &str,
+        disabled: bool,
+    ) -> Result<std::result::Result<bool, ToggleFailure>> {
         let normalized = game.trim();
         if normalized.is_empty() {
             return Ok(Err(ToggleFailure::InvalidAddress));
@@ -649,7 +662,9 @@ impl OracleDatabase {
         Ok((row.get(0)?, row.get::<_, Option<bool>>(1)?.unwrap_or(false), row.get(2)?, row.get(3)?, row.get(4)?))
     }
 
-    fn to_policy((mint, enabled, decimals, revision, effective_at): (String, bool, Option<i64>, i64, i64)) -> Result<StoredTokenPolicy> {
+    fn to_policy(
+        (mint, enabled, decimals, revision, effective_at): (String, bool, Option<i64>, i64, i64),
+    ) -> Result<StoredTokenPolicy> {
         let decimals = decimals
             .ok_or_else(|| anyhow!("token decimals must be an integer from 0 to 15"))
             .and_then(|d| normalize_token_decimals(d).map_err(|e| anyhow!(e)))?;
@@ -698,7 +713,9 @@ impl OracleDatabase {
     pub fn get_game_status(&self, game: &str) -> Option<String> {
         or_default(
             self.with_conn(|c| {
-                Ok(c.prepare_cached(sql::SELECT_GAME_STATUS)?.query_row([game], |r| r.get::<_, String>(0)).optional()?)
+                Ok(c.prepare_cached(sql::SELECT_GAME_STATUS)?
+                    .query_row([game], |r| r.get::<_, String>(0))
+                    .optional()?)
             }),
             "Failed to get game status",
             None,
@@ -715,7 +732,8 @@ impl OracleDatabase {
 
     pub fn mark_game_desynced(&self, game: &str) -> Result<()> {
         self.with_conn(|c| {
-            run(c, sql::MARK_GAME_DESYNCED, "Failed to mark game as desynced", params!["desynced", now_ms(), game]).map(drop)
+            run(c, sql::MARK_GAME_DESYNCED, "Failed to mark game as desynced", params!["desynced", now_ms(), game])
+                .map(drop)
         })
     }
 
@@ -730,8 +748,13 @@ impl OracleDatabase {
 
     pub fn increment_completion_attempts(&self, game: &str) -> Result<()> {
         self.with_conn(|c| {
-            run(c, sql::INCREMENT_COMPLETION_ATTEMPTS, "Failed to increment completion attempts", params![now_ms(), game])
-                .map(drop)
+            run(
+                c,
+                sql::INCREMENT_COMPLETION_ATTEMPTS,
+                "Failed to increment completion attempts",
+                params![now_ms(), game],
+            )
+            .map(drop)
         })
     }
 
@@ -768,7 +791,11 @@ impl OracleDatabase {
         })
     }
 
-    pub fn reset_completion_attempts(&self, game: &str, allow_finalized: bool) -> Result<std::result::Result<(), ResetFailure>> {
+    pub fn reset_completion_attempts(
+        &self,
+        game: &str,
+        allow_finalized: bool,
+    ) -> Result<std::result::Result<(), ResetFailure>> {
         let Some(status) = self.get_game_status_or_log(game, "Failed to lookup existing game status") else {
             return Ok(Err(ResetFailure::NotFound));
         };
@@ -798,7 +825,9 @@ impl OracleDatabase {
     fn get_game_status_or_log(&self, game: &str, message: &str) -> Option<String> {
         or_default(
             self.with_conn(|c| {
-                Ok(c.prepare_cached(sql::SELECT_GAME_STATUS)?.query_row([game], |r| r.get::<_, String>(0)).optional()?)
+                Ok(c.prepare_cached(sql::SELECT_GAME_STATUS)?
+                    .query_row([game], |r| r.get::<_, String>(0))
+                    .optional()?)
             }),
             message,
             None,
@@ -817,7 +846,10 @@ impl OracleDatabase {
             self.with_conn(|c| {
                 Ok(c.prepare_cached(sql)?
                     .query_map(params, |r| {
-                        Ok(PendingGame { game_address: r.get(0)?, completion_attempts: r.get::<_, Option<i64>>(1)?.unwrap_or(0) })
+                        Ok(PendingGame {
+                            game_address: r.get(0)?,
+                            completion_attempts: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                        })
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?)
             }),
@@ -828,9 +860,10 @@ impl OracleDatabase {
 
     pub fn get_pending_games(&self, max_attempts: Option<i64>) -> Vec<PendingGame> {
         match max_attempts {
-            Some(max) => {
-                self.query_pending(sql::SELECT_PENDING_GAMES_WITH_ATTEMPTS, params![DEFAULT_STATUS, max, PENDING_SCAN_LIMIT])
-            }
+            Some(max) => self.query_pending(
+                sql::SELECT_PENDING_GAMES_WITH_ATTEMPTS,
+                params![DEFAULT_STATUS, max, PENDING_SCAN_LIMIT],
+            ),
             None => self.query_pending(sql::SELECT_PENDING_GAMES, params![DEFAULT_STATUS, PENDING_SCAN_LIMIT]),
         }
     }
@@ -842,7 +875,9 @@ impl OracleDatabase {
                 sql::SELECT_PENDING_GAMES_WITH_ATTEMPTS_ACTIVE,
                 params![DEFAULT_STATUS, now, max, now - COMPLETION_RECOVERY_COOLDOWN_MS, PENDING_SCAN_LIMIT],
             ),
-            None => self.query_pending(sql::SELECT_PENDING_GAMES_ACTIVE, params![DEFAULT_STATUS, now, PENDING_SCAN_LIMIT]),
+            None => {
+                self.query_pending(sql::SELECT_PENDING_GAMES_ACTIVE, params![DEFAULT_STATUS, now, PENDING_SCAN_LIMIT])
+            }
         }
     }
 
@@ -935,14 +970,20 @@ impl OracleDatabase {
 
     pub fn add_player_to_game(&self, game: &str, player: &str, ticket_index: i64) -> Result<()> {
         self.with_conn(|c| {
-            run(c, sql::UPSERT_GAME_PLAYER, "Failed to add player to game", params![game, player, ticket_index, now_ms()])
-                .map(drop)
+            run(
+                c,
+                sql::UPSERT_GAME_PLAYER,
+                "Failed to add player to game",
+                params![game, player, ticket_index, now_ms()],
+            )
+            .map(drop)
         })
     }
 
     pub fn remove_player_from_game(&self, game: &str, ticket_index: i64) -> Result<()> {
         self.with_conn(|c| {
-            run(c, sql::DELETE_GAME_PLAYER_BY_TICKET, "Failed to remove player from game", params![game, ticket_index]).map(drop)
+            run(c, sql::DELETE_GAME_PLAYER_BY_TICKET, "Failed to remove player from game", params![game, ticket_index])
+                .map(drop)
         })
     }
 
@@ -976,7 +1017,12 @@ impl OracleDatabase {
                         )?;
                     }
                     PlayerMutation::Unjoined { ticket_index, moved_participant } => {
-                        run(c, sql::DELETE_GAME_PLAYER_BY_TICKET, "Failed to remove player from game", params![game, ticket_index])?;
+                        run(
+                            c,
+                            sql::DELETE_GAME_PLAYER_BY_TICKET,
+                            "Failed to remove player from game",
+                            params![game, ticket_index],
+                        )?;
                         if let Some(moved) = moved_participant.as_deref().filter(|m| !m.is_empty()) {
                             run(
                                 c,

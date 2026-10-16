@@ -73,6 +73,7 @@ pub struct GameContext {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum ReadinessResolution {
     MissingContext,
     Resolved { ready: bool, context: GameContext, readiness: Readiness, prefetch_scheduled: bool },

@@ -131,8 +131,11 @@ pub fn submission_url(endpoint: &str, rebate: Option<&str>) -> String {
     if !RE.get_or_init(|| Regex::new(r"(?i)(^|\.)helius-rpc\.com$").unwrap()).is_match(&host) {
         return endpoint.to_string();
     }
-    let pairs: Vec<(String, String)> =
-        url.query_pairs().filter(|(k, _)| k != "rebate-address").map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+    let pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(k, _)| k != "rebate-address")
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
     url.query_pairs_mut().clear().extend_pairs(pairs).append_pair("rebate-address", rebate);
     url.to_string()
 }
@@ -169,7 +172,7 @@ impl RpcTransport for HttpTransport {
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
             let body = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
             let response = self.client.post(&url).json(&body).send().await.map_err(|e| {
-                let mut message = e.to_string();
+                let mut message = format!("RPC request failed: {e}");
                 let mut source = std::error::Error::source(&e);
                 while let Some(inner) = source {
                     message.push_str(": ");
@@ -346,7 +349,10 @@ mod tests {
             submission_url("https://mainnet.helius-rpc.com/?api-key=x", Some("R")),
             "https://mainnet.helius-rpc.com/?api-key=x&rebate-address=R"
         );
-        assert_eq!(submission_url("https://api.mainnet-beta.solana.com", Some("R")), "https://api.mainnet-beta.solana.com");
+        assert_eq!(
+            submission_url("https://api.mainnet-beta.solana.com", Some("R")),
+            "https://api.mainnet-beta.solana.com"
+        );
         assert_eq!(submission_url("https://mainnet.helius-rpc.com", None), "https://mainnet.helius-rpc.com");
         assert_eq!(submission_url("https://evilhelius-rpc.com", Some("R")), "https://evilhelius-rpc.com");
     }

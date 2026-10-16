@@ -2,7 +2,9 @@
 //! operator (port of `game-transaction-signer.ts`).
 
 use futures::future::BoxFuture;
-use timba_protocol::address::{ASSOCIATED_TOKEN_PROGRAM_ID, COMPUTE_BUDGET_PROGRAM_ID, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID};
+use timba_protocol::address::{
+    ASSOCIATED_TOKEN_PROGRAM_ID, COMPUTE_BUDGET_PROGRAM_ID, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID,
+};
 use timba_protocol::contracts::{
     ata, discriminators, find_game_pda, find_game_token_pda, find_game_vault_pda, find_oracle_pda, InitializeGameArgs,
 };
@@ -70,7 +72,11 @@ fn policy(message: impl Into<String>) -> SignError {
 
 /// Oracle state consulted while signing.
 pub trait SigningHooks: Send + Sync {
-    fn assert_creation_policy<'a>(&'a self, token_mint: &'a Address, amount: u64) -> BoxFuture<'a, Result<(), SignError>>;
+    fn assert_creation_policy<'a>(
+        &'a self,
+        token_mint: &'a Address,
+        amount: u64,
+    ) -> BoxFuture<'a, Result<(), SignError>>;
     fn assert_unused_commitment(&self, game: &Address, random_hash_hex: &str) -> Result<(), SignError>;
     fn mark_commitment_signed(&self, game: &Address) -> anyhow::Result<()>;
 }
@@ -279,7 +285,9 @@ pub async fn sign_game_transaction_with_policy(
     // Reserve retention before signing; cleanup must not remove this secret.
     options.hooks.mark_commitment_signed(&expected_game)?;
     let signature = options.operator.sign(&to_sign.message_bytes);
-    to_sign.set_signature(&operator_address, signature).map_err(|error| SignError::Other(anyhow::anyhow!("{error}")))?;
+    to_sign
+        .set_signature(&operator_address, signature)
+        .map_err(|error| SignError::Other(anyhow::anyhow!("{error}")))?;
     // Recheck eligibility in case finalization raced with the signature.
     options.hooks.mark_commitment_signed(&expected_game)?;
     Ok(to_sign.to_base64())
@@ -317,7 +325,10 @@ fn validate_creator_join(join: &Instruction, v: &JoinExpectations) -> Result<(),
         m(2),
         meta(Some(optional_operator), v.is_private, false, "Creator join uses an invalid optional oracle operator"),
     )?;
-    assert_meta(m(3), meta(Some(&v.token_mint), false, false, "Creator join token mint does not match initialization"))?;
+    assert_meta(
+        m(3),
+        meta(Some(&v.token_mint), false, false, "Creator join token mint does not match initialization"),
+    )?;
     if v.legacy_game_token {
         assert_meta(m(4), meta(Some(&v.game_token), false, true, "Creator join uses an invalid game token"))?;
     }
@@ -326,7 +337,10 @@ fn validate_creator_join(join: &Instruction, v: &JoinExpectations) -> Result<(),
         m(5 + offset),
         meta(Some(&v.game_vault_token_account), false, true, "Creator join uses an invalid game vault token account"),
     )?;
-    assert_meta(m(6 + offset), meta(Some(&TOKEN_PROGRAM_ID), false, false, "Creator join uses an invalid token program"))?;
+    assert_meta(
+        m(6 + offset),
+        meta(Some(&TOKEN_PROGRAM_ID), false, false, "Creator join uses an invalid token program"),
+    )?;
     assert_meta(
         m(7 + offset),
         meta(Some(&ASSOCIATED_TOKEN_PROGRAM_ID), false, false, "Creator join uses an invalid associated token program"),
@@ -354,7 +368,11 @@ mod tests {
     }
 
     impl SigningHooks for Recorder {
-        fn assert_creation_policy<'a>(&'a self, mint: &'a Address, amount: u64) -> BoxFuture<'a, Result<(), SignError>> {
+        fn assert_creation_policy<'a>(
+            &'a self,
+            mint: &'a Address,
+            amount: u64,
+        ) -> BoxFuture<'a, Result<(), SignError>> {
             self.policy.lock().unwrap().push((mint.to_base58(), amount.to_string()));
             async { Ok(()) }.boxed()
         }
