@@ -1,9 +1,15 @@
 //! Environment helpers (port of `env.ts`).
 
+/// `String.prototype.trim` as Bun runs it: Unicode whitespace plus the byte order
+/// mark (U+FEFF), which `str::trim` keeps. Editors on Windows add one to saved files.
+pub fn js_trim(value: &str) -> &str {
+    value.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+}
+
 /// Trimmed environment value; empty strings count as unset.
 pub fn read_env(key: &str) -> Option<String> {
     let value = std::env::var(key).ok()?;
-    let trimmed = value.trim();
+    let trimmed = js_trim(&value);
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
@@ -45,7 +51,7 @@ pub fn should_use_ephemeral_keypair() -> bool {
 /// Integer parsing with the same warnings and fallbacks as `config.ts`.
 pub fn parse_integer(value: Option<&str>, default: i64, min: Option<i64>, max: Option<i64>, key: &str) -> i64 {
     let Some(value) = value else { return default };
-    let parsed: f64 = match value.trim().parse::<f64>() {
+    let parsed: f64 = match js_trim(value).parse::<f64>() {
         Ok(v) if v.is_finite() => v,
         _ => {
             crate::warn!("⚠️  Ignoring invalid numeric value '{value}' for {key}; using {default}.");
@@ -85,6 +91,16 @@ mod tests {
         assert_eq!(parse_integer(Some("-1"), 5, Some(0), None, "K"), 5);
         assert_eq!(parse_integer(Some("70000"), 5, Some(0), Some(65535), "K"), 5);
         assert_eq!(parse_integer(Some("1e3"), 5, None, None, "K"), 1000);
+        assert_eq!(parse_integer(Some("\u{feff}42 "), 5, None, None, "K"), 42);
+    }
+
+    #[test]
+    fn trims_like_javascript() {
+        // Bun: "\ufeff\u0085\u00a0\u3000x\u2028\n".trim() === "x", while U+200B stays.
+        assert_eq!(js_trim("\u{feff}\u{85}\u{a0}\u{3000}x\u{2028}\n"), "x");
+        assert_eq!(js_trim("\u{200b}x"), "\u{200b}x");
+        assert_eq!(js_trim("a b"), "a b");
+        assert_eq!(js_trim("\u{feff}"), "");
     }
 
     /// Every case mutating process-wide variables lives in this one test so

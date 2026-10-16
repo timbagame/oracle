@@ -140,8 +140,9 @@ pub fn load_secret(path: &str) -> anyhow::Result<String> {
     if !info.is_file() || info.len() > 4096 || !private {
         anyhow::bail!("EVM secret files must be private regular files (mode 600 or 400)");
     }
-    let value = std::fs::read_to_string(path)?;
-    let value = value.trim();
+    let bytes = std::fs::read(path)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let value = timba_common::env::js_trim(&text);
     if value.is_empty() {
         anyhow::bail!("Empty EVM secret file");
     }
@@ -227,6 +228,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(load_secret(&write(&dir, "secret", "  token-value\n", 0o600)).unwrap(), "token-value");
         assert_eq!(load_secret(&write(&dir, "readonly", "value", 0o400)).unwrap(), "value");
+        // A byte order mark from a Windows editor is trimmed, as `String.trim` does.
+        assert_eq!(load_secret(&write(&dir, "bom", "\u{feff}token-value\r\n", 0o600)).unwrap(), "token-value");
+        assert_eq!(
+            load_secret(&write(&dir, "only-bom", "\u{feff}\n", 0o600)).unwrap_err().to_string(),
+            "Empty EVM secret file"
+        );
+        let latin1 = dir.path().join("latin1");
+        std::fs::write(&latin1, b"caf\xe9").unwrap();
+        std::fs::set_permissions(&latin1, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(load_secret(latin1.to_str().unwrap()).unwrap(), "caf\u{fffd}");
     }
 
     #[test]
