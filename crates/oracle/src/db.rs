@@ -222,17 +222,37 @@ const TRACKING_INDEX_DEFINITIONS: &[SchemaStep] = &[
     },
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SecretKeyData {
     pub secret_key: String,
     pub random_hash: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SecretKeyInfo {
     pub secret_key: String,
     pub random_hash: String,
     pub used: bool,
+}
+
+/// The commitment secret never appears in `Debug` output (logs, panics).
+impl std::fmt::Debug for SecretKeyData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretKeyData")
+            .field("secret_key", &"[redacted]")
+            .field("random_hash", &self.random_hash)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for SecretKeyInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretKeyInfo")
+            .field("secret_key", &"[redacted]")
+            .field("random_hash", &self.random_hash)
+            .field("used", &self.used)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1205,6 +1225,15 @@ fn ensure_token_policy_schema(conn: &Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn debug_output_hides_commitment_secrets() {
+        let data = super::SecretKeyData { secret_key: "s3cr3t".into(), random_hash: "hash".into() };
+        let info = super::SecretKeyInfo { secret_key: "s3cr3t".into(), random_hash: "hash".into(), used: true };
+        for printed in [format!("{data:?}"), format!("{info:?}")] {
+            assert!(!printed.contains("s3cr3t") && printed.contains("hash"), "{printed}");
+        }
+    }
+
     use super::*;
 
     fn db() -> OracleDatabase {

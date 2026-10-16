@@ -93,8 +93,39 @@ impl RouteRateLimiter {
     }
 }
 
+/// A URL safe to print: scheme, host and port only. Paths, queries and user info
+/// often carry provider API keys (`?api-key=`, `/v2/<key>`).
+pub fn redact_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else { return "[redacted]".into() };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let hidden = authority_end < rest.len() || host.len() < authority.len();
+    format!("{scheme}://{host}{}", if hidden { "/[redacted]" } else { "" })
+}
+
+/// `Some("[redacted]")` for present secrets, for `Debug` output.
+pub fn redact_secret(value: &Option<String>) -> Option<&'static str> {
+    value.as_ref().map(|_| "[redacted]")
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn redacts_url_secrets() {
+        use super::redact_url;
+        assert_eq!(redact_url("https://rpc.example:8899"), "https://rpc.example:8899");
+        assert_eq!(
+            redact_url("https://mainnet.helius-rpc.com/?api-key=abc"),
+            "https://mainnet.helius-rpc.com/[redacted]"
+        );
+        assert_eq!(redact_url("wss://user:pass@node.example/v2/key"), "wss://node.example/[redacted]");
+        assert_eq!(redact_url("https://user@node.example"), "https://node.example/[redacted]");
+        assert_eq!(redact_url("not a url"), "[redacted]");
+        assert_eq!(super::redact_secret(&Some("x".into())), Some("[redacted]"));
+        assert_eq!(super::redact_secret(&None), None);
+    }
+
     use super::*;
     use std::sync::atomic::{AtomicI64, Ordering};
     use std::sync::Arc;

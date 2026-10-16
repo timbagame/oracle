@@ -11,7 +11,7 @@ use crate::protocol::schema::{
     MAX_SAFE_INTEGER,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct EvmConfig {
     pub chain_id: u64,
     pub address: Address,
@@ -26,6 +26,27 @@ pub struct EvmConfig {
     pub port: u16,
     /// Token policy is deliberately off chain. Never authorize arbitrary contracts.
     pub tokens: Vec<EvmToken>,
+}
+
+/// RPC URLs often embed provider keys, so `Debug` shows only their hosts.
+impl std::fmt::Debug for EvmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let rpc_urls: Vec<String> = self.rpc_urls.iter().map(|url| timba_common::security::redact_url(url)).collect();
+        f.debug_struct("EvmConfig")
+            .field("chain_id", &self.chain_id)
+            .field("address", &self.address)
+            .field("version", &self.version)
+            .field("rpc_urls", &rpc_urls)
+            .field("start_block", &self.start_block)
+            .field("confirmations", &self.confirmations)
+            .field("poll_ms", &self.poll_ms)
+            .field("database", &self.database)
+            .field("operator_key_file", &self.operator_key_file)
+            .field("api_token_file", &self.api_token_file)
+            .field("port", &self.port)
+            .field("tokens", &self.tokens)
+            .finish()
+    }
 }
 
 impl EvmConfig {
@@ -180,6 +201,14 @@ mod tests {
         assert_eq!(config.poll_ms, 2000);
         assert_eq!(config.port, 3002);
         assert_eq!(config.tokens.len(), 1);
+    }
+
+    #[test]
+    fn debug_output_hides_rpc_keys() {
+        let mut value = example();
+        value["rpcUrls"] = serde_json::json!(["https://eth.example/v2/secret-key"]);
+        let printed = format!("{:?}", parse_config(&value).unwrap());
+        assert!(printed.contains("https://eth.example/[redacted]") && !printed.contains("secret-key"), "{printed}");
     }
 
     #[test]

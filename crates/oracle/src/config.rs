@@ -21,7 +21,7 @@ const DEFAULT_INDEXER_DATABASE_FILE: &str = "indexer.sqlite";
 const DEFAULT_KEYPAIR_FILE: &str = "operator-keypair.json";
 const LEGACY_KEYPAIR_FILE: &str = "admin-keypair.json";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OracleConfig {
     pub contract_version: ContractVersion,
     pub solana_network: String,
@@ -43,6 +43,35 @@ pub struct OracleConfig {
     pub api_token: Option<String>,
     pub jupiter_api_key: Option<String>,
     pub jupiter_price_url: String,
+}
+
+/// Secrets and RPC URLs (which often embed provider keys) are redacted.
+impl std::fmt::Debug for OracleConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use timba_common::security::{redact_secret, redact_url};
+        f.debug_struct("OracleConfig")
+            .field("contract_version", &self.contract_version)
+            .field("solana_network", &redact_url(&self.solana_network))
+            .field("solana_networks", &self.solana_networks.iter().map(|url| redact_url(url)).collect::<Vec<_>>())
+            .field("solana_ws_endpoint", &self.solana_ws_endpoint.as_deref().map(redact_url))
+            .field("oracle_port", &self.oracle_port)
+            .field("database_file", &self.database_file)
+            .field("indexer_database_file", &self.indexer_database_file)
+            .field("indexer_poll_interval_ms", &self.indexer_poll_interval_ms)
+            .field("operator_keypair_path", &self.operator_keypair_path)
+            .field("operator_keypair_source", &self.operator_keypair_source)
+            .field("scan_throttle_ms", &self.scan_throttle_ms)
+            .field("player_event_flush_debounce_ms", &self.player_event_flush_debounce_ms)
+            .field("player_event_flush_max_operations", &self.player_event_flush_max_operations)
+            .field("auto_complete_debounce_ms", &self.auto_complete_debounce_ms)
+            .field("use_ephemeral_keypair", &self.use_ephemeral_keypair)
+            .field("environment", &self.environment)
+            .field("bot_internal_url", &self.bot_internal_url.as_deref().map(redact_url))
+            .field("api_token", &redact_secret(&self.api_token))
+            .field("jupiter_api_key", &redact_secret(&self.jupiter_api_key))
+            .field("jupiter_price_url", &redact_url(&self.jupiter_price_url))
+            .finish()
+    }
 }
 
 fn non_negative(key: &str, default: i64) -> u64 {
@@ -216,6 +245,24 @@ mod tests {
             }
         }
         result
+    }
+
+    #[test]
+    fn debug_output_hides_secrets_and_rpc_keys() {
+        let config = OracleConfig {
+            solana_network: "https://rpc.example/?api-key=rpc-key".into(),
+            solana_networks: vec!["https://rpc.example/?api-key=rpc-key".into()],
+            solana_ws_endpoint: Some("wss://rpc.example/?api-key=rpc-key".into()),
+            bot_internal_url: Some("http://bot:3002".into()),
+            api_token: Some("api-token-value".into()),
+            jupiter_api_key: Some("jupiter-key-value".into()),
+            ..OracleConfig::for_tests()
+        };
+        let printed = format!("{config:?}");
+        for secret in ["rpc-key", "api-token-value", "jupiter-key-value"] {
+            assert!(!printed.contains(secret), "{secret} leaked: {printed}");
+        }
+        assert!(printed.contains("https://rpc.example/[redacted]") && printed.contains("http://bot:3002"), "{printed}");
     }
 
     #[test]
