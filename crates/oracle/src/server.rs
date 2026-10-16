@@ -90,8 +90,16 @@ pub async fn serve() -> anyhow::Result<i32> {
         }
     };
 
+    // `process.once` handlers: a second signal while shutting down exits at once.
+    tokio::spawn(async {
+        let signal = termination_signal().await;
+        warn!("{signal} received again; exiting without waiting for shutdown");
+        std::process::exit(if signal == "SIGINT" { 130 } else { 143 });
+    });
+
     // stopServer(): stop accepting requests, drain the background workers,
-    // then close the oracle. Each step is bounded by the shutdown timeout.
+    // close the oracle, then the indexer database. Each step is bounded by the
+    // shutdown timeout.
     server_stop.trigger();
     if !server_task.is_finished() && tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut server_task).await.is_err() {
         warn!("HTTP server did not stop within the shutdown timeout; proceeding with shutdown.");
@@ -102,10 +110,13 @@ pub async fn serve() -> anyhow::Result<i32> {
         warn!("Background loop did not exit within the shutdown timeout; proceeding with shutdown.");
         background_task.abort();
     }
-    (workers.cleanup)();
+    (workers.detach)();
     if tokio::time::timeout(SHUTDOWN_TIMEOUT, oracle.close()).await.is_err() {
         warn!("Oracle close did not complete within the shutdown timeout; proceeding with shutdown.");
+        // Still checkpoint and close the database so committed secrets leave the WAL.
+        oracle.db().close();
     }
+    workers.indexer_db.close();
     if exit_code == 0 {
         info!("Shutdown complete");
     }
@@ -114,7 +125,9 @@ pub async fn serve() -> anyhow::Result<i32> {
 
 struct Workers {
     workers: Vec<WorkerStart>,
-    cleanup: Box<dyn FnOnce() + Send>,
+    /// Stops program events from waking the indexer.
+    detach: Box<dyn FnOnce() + Send>,
+    indexer_db: Arc<IndexerDatabase>,
 }
 
 fn build_workers(oracle: &Arc<OracleService>, options: &mut RouterOptions) -> anyhow::Result<Workers> {
@@ -142,12 +155,9 @@ fn build_workers(oracle: &Arc<OracleService>, options: &mut RouterOptions) -> an
         ("public indexer", Box::new(move |signal| async move { indexer.run(signal).await }.boxed())),
         ("verification jobs", Box::new(move |signal| verification_worker(web, jobs_db, signal).boxed())),
     ];
-    let cleanup_oracle = oracle.clone();
-    let cleanup = Box::new(move || {
-        cleanup_oracle.remove_program_event_observer(observer);
-        indexer_db.close();
-    });
-    Ok(Workers { workers, cleanup })
+    let detach_oracle = oracle.clone();
+    let detach = Box::new(move || detach_oracle.remove_program_event_observer(observer));
+    Ok(Workers { workers, detach, indexer_db })
 }
 
 /// `initialize()` followed by the supervised background workers.

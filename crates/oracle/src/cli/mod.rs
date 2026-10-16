@@ -209,7 +209,10 @@ pub async fn manual_shutdown() -> anyhow::Result<()> {
 /// Container health probe: exits non-zero unless `GET /health` on the local
 /// API port succeeds. Replaces the `bun -e fetch(...)` quadlet HealthCmd.
 pub async fn healthcheck() -> anyhow::Result<()> {
-    let port = crate::config::oracle_port_from_env();
+    probe(crate::config::oracle_port_from_env()).await
+}
+
+async fn probe(port: u16) -> anyhow::Result<()> {
     let response = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(4))
         .build()?
@@ -237,17 +240,20 @@ mod tests {
     async fn healthcheck_probes_the_configured_port() {
         let healthy = health_server(StatusCode::OK).await;
         let degraded = health_server(StatusCode::SERVICE_UNAVAILABLE).await;
-        let _env = crate::env_test_lock();
-        let saved = std::env::var("ORACLE_PORT").ok();
+        let port_for = |value: String| {
+            let _env = crate::env_test_lock();
+            let saved = std::env::var("ORACLE_PORT").ok();
+            std::env::set_var("ORACLE_PORT", value);
+            let port = crate::config::oracle_port_from_env();
+            match saved {
+                Some(value) => std::env::set_var("ORACLE_PORT", value),
+                None => std::env::remove_var("ORACLE_PORT"),
+            }
+            port
+        };
         // Parsed like `serve` does (JavaScript `Number`), so "3001.0" is port 3001.
-        std::env::set_var("ORACLE_PORT", format!(" {healthy}.0 "));
-        let ok = super::healthcheck().await;
-        std::env::set_var("ORACLE_PORT", degraded.to_string());
-        let failed = super::healthcheck().await;
-        match saved {
-            Some(value) => std::env::set_var("ORACLE_PORT", value),
-            None => std::env::remove_var("ORACLE_PORT"),
-        }
+        let ok = super::probe(port_for(format!(" {healthy}.0 "))).await;
+        let failed = super::probe(port_for(degraded.to_string())).await;
         ok.unwrap();
         assert_eq!(failed.unwrap_err().to_string(), "Health check failed with status 503 Service Unavailable");
     }

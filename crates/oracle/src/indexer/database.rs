@@ -988,6 +988,7 @@ impl IndexerDatabase {
     }
 
     /// The cache generation a windowed query starts from.
+    #[cfg(test)]
     pub(super) fn cache_generation(&self) -> u64 {
         self.cache.lock().unwrap().generation
     }
