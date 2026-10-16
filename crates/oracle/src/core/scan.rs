@@ -336,10 +336,19 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
+    type Hook = Box<dyn Fn() + Send + Sync>;
+
+    #[derive(Default)]
     struct FakeCompletion {
         resolutions: Mutex<Vec<anyhow::Result<ReadinessResolution>>>,
         attempts: Mutex<Vec<String>>,
+        /// Per-attempt results, consumed in order; `result` once exhausted.
+        results: Mutex<Vec<Option<CompletionResult>>>,
         result: CompletionResult,
+        /// The block-time cache content each `resolve` started with.
+        seen_block_times: Mutex<Vec<Option<i64>>>,
+        on_resolve: Mutex<Option<Hook>>,
+        on_attempt: Mutex<Option<Hook>>,
     }
 
     impl ScanCompletion for FakeCompletion {
@@ -348,14 +357,22 @@ mod tests {
             _game: &'a str,
             block_time: &'a BlockTimeCache,
         ) -> BoxFuture<'a, anyhow::Result<ReadinessResolution>> {
+            self.seen_block_times.lock().unwrap().push(block_time.get());
             block_time.set(1);
+            if let Some(hook) = self.on_resolve.lock().unwrap().as_ref() {
+                hook();
+            }
             let next = self.resolutions.lock().unwrap().remove(0);
             async move { next }.boxed()
         }
         fn attempt(&self, options: AttemptOptions) -> BoxFuture<'_, anyhow::Result<Option<CompletionResult>>> {
             self.attempts.lock().unwrap().push(options.game_address);
-            let result = self.result.clone();
-            async move { Ok(Some(result)) }.boxed()
+            if let Some(hook) = self.on_attempt.lock().unwrap().as_ref() {
+                hook();
+            }
+            let mut results = self.results.lock().unwrap();
+            let result = if results.is_empty() { Some(self.result.clone()) } else { results.remove(0) };
+            async move { Ok(result) }.boxed()
         }
     }
 
@@ -380,7 +397,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(OracleDatabase::open(dir.path().join("o.sqlite").to_str().unwrap()).unwrap());
         let completion =
-            Arc::new(FakeCompletion { resolutions: Mutex::new(resolutions), attempts: Mutex::default(), result });
+            Arc::new(FakeCompletion { resolutions: Mutex::new(resolutions), result, ..Default::default() });
         let metrics = Arc::new(OracleMetrics::new(10));
         let runner = ScanLoopRunner::new(ScanLoopRunnerOptions {
             db: db.clone(),
@@ -488,5 +505,316 @@ mod tests {
         assert!(!runner.is_running(), "the running flag is reset when the loop is dropped");
         let again = tokio::time::timeout(Duration::from_secs(1), runner.run_scan_loop(options())).await;
         assert!(again.is_err(), "a second loop starts instead of failing with 'already running'");
+    }
+
+    /// Makes statements matching `when` fail on the runner's database.
+    fn fail_updates(dir: &tempfile::TempDir, trigger: &str, table: &str, when: &str) {
+        let conn = rusqlite::Connection::open(dir.path().join("o.sqlite")).unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TRIGGER {trigger} BEFORE UPDATE ON {table} WHEN {when} BEGIN SELECT RAISE(ABORT, 'disk full'); END;"
+        ))
+        .unwrap();
+    }
+
+    fn last_checked(dir: &tempfile::TempDir, game: &str) -> i64 {
+        let conn = rusqlite::Connection::open(dir.path().join("o.sqlite")).unwrap();
+        conn.query_row("SELECT last_checked FROM game_tracking WHERE game_address = ?", [game], |r| r.get(0)).unwrap()
+    }
+
+    fn age_checks(dir: &tempfile::TempDir) {
+        let conn = rusqlite::Connection::open(dir.path().join("o.sqlite")).unwrap();
+        conn.execute("UPDATE game_tracking SET last_checked = 1", []).unwrap();
+    }
+
+    const SAME_FAILURE_STATE: &str = "NEW.status = OLD.status AND NEW.completion_attempts = OLD.completion_attempts \
+         AND NEW.completion_failure_kind IS OLD.completion_failure_kind";
+
+    #[tokio::test]
+    async fn the_scan_adapter_for_the_completion_manager_delegates_attempts() {
+        let h = crate::core::testing::harness();
+        let manager = h.service.completion_manager();
+        // An address without a stored secret has no context to complete.
+        let result = ScanCompletion::attempt(manager.as_ref(), AttemptOptions::new(crate::core::testing::MINT_A)).await;
+        assert_eq!(result.unwrap(), None);
+        // A game address that is not a public key cannot be completed either.
+        assert_eq!(ScanCompletion::attempt(manager.as_ref(), AttemptOptions::new("nope")).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn an_abort_during_resolution_skips_the_attempt() {
+        let (_dir, db, completion, metrics, runner) =
+            setup(vec![Ok(resolved(true)), Ok(resolved(true))], CompletionResult::default());
+        track(&db, "g1", true);
+        track(&db, "g2", true);
+        let signal = Shutdown::new();
+        let trigger = signal.clone();
+        *completion.on_resolve.lock().unwrap() = Some(Box::new(move || trigger.trigger()));
+        let stats = runner.scan_and_complete_active_games(Some(&signal)).await;
+        assert_eq!(stats, CompletionStats::default());
+        assert!(completion.attempts.lock().unwrap().is_empty());
+        assert_eq!(completion.seen_block_times.lock().unwrap().len(), 1, "the scan stops at the first game");
+        assert!(metrics.completion_records().is_empty());
+        // The aborted cycle is still reported.
+        assert_eq!(metrics.scan_cycles().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_abort_during_the_attempt_discards_its_result() {
+        let success = CompletionResult { success: true, ..Default::default() };
+        let (_dir, db, completion, _metrics, runner) = setup(vec![Ok(resolved(true)), Ok(resolved(true))], success);
+        track(&db, "g1", true);
+        track(&db, "g2", true);
+        let signal = Shutdown::new();
+        let trigger = signal.clone();
+        *completion.on_attempt.lock().unwrap() = Some(Box::new(move || trigger.trigger()));
+        let stats = runner.scan_and_complete_active_games(Some(&signal)).await;
+        assert_eq!(stats, CompletionStats::default());
+        assert_eq!(completion.attempts.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn attempt_outcomes_update_stats_and_check_times() {
+        let results = vec![
+            Some(CompletionResult::not_ready()),
+            None,
+            Some(CompletionResult::failure("boom")),
+            Some(CompletionResult { success: true, ..Default::default() }),
+        ];
+        let (dir, db, completion, _metrics, runner) =
+            setup((0..4).map(|_| Ok(resolved(true))).collect(), CompletionResult::default());
+        *completion.results.lock().unwrap() = results.clone();
+        for game in ["g1", "g2", "g3", "g4"] {
+            track(&db, game, true);
+        }
+        age_checks(&dir);
+        let stats = runner.scan_and_complete_active_games(None).await;
+        assert_eq!(stats, CompletionStats { completed: 1, errors: 1, not_ready: 1 });
+        let attempts = completion.attempts.lock().unwrap().clone();
+        assert_eq!(attempts.len(), 4);
+        for (game, result) in attempts.iter().zip(&results) {
+            // Games that were not ready or had no outcome are pushed back; the rest keep their time.
+            let touched = last_checked(&dir, game) > 1;
+            let expected = match result {
+                Some(result) => result.not_ready,
+                None => true,
+            };
+            assert_eq!(touched, expected, "{game}: {result:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn games_that_are_not_ready_do_not_share_the_block_time() {
+        let (_dir, db, completion, _metrics, runner) =
+            setup(vec![Ok(resolved(false)), Ok(resolved(true)), Ok(resolved(true))], CompletionResult::not_ready());
+        for game in ["g1", "g2", "g3"] {
+            track(&db, game, true);
+        }
+        runner.scan_and_complete_active_games(None).await;
+        // A cached block time survives ready games but not a game that was not ready.
+        assert_eq!(completion.seen_block_times.lock().unwrap().clone(), vec![None, None, Some(1)]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_games_are_throttled() {
+        let (_dir, db, completion, _metrics, mut runner) =
+            setup(vec![Ok(resolved(true)), Ok(resolved(true))], CompletionResult::failure("boom"));
+        runner.options.inter_game_delay_ms = 500;
+        track(&db, "g1", true);
+        track(&db, "g2", true);
+        let started = tokio::time::Instant::now();
+        let stats = runner.scan_and_complete_active_games(None).await;
+        assert_eq!(stats.errors, 2);
+        assert_eq!(completion.attempts.lock().unwrap().len(), 2);
+        // One pause between the two games, none after the last.
+        assert_eq!(started.elapsed(), Duration::from_millis(500));
+    }
+
+    #[test]
+    fn throttling_rules() {
+        let (_dir, _db, _completion, _metrics, mut runner) = setup(vec![], CompletionResult::default());
+        let failure = CompletionResult::failure("boom");
+        let success = CompletionResult { success: true, ..Default::default() };
+        // No delay configured.
+        assert!(!runner.should_throttle_between_games(Some(&failure), 0, 3));
+        runner.options.inter_game_delay_ms = 10;
+        assert!(runner.should_throttle_between_games(Some(&failure), 0, 3));
+        assert!(runner.should_throttle_between_games(None, 1, 3));
+        assert!(!runner.should_throttle_between_games(Some(&success), 0, 3));
+        assert!(!runner.should_throttle_between_games(Some(&failure), 2, 3), "no pause after the last game");
+    }
+
+    #[test]
+    fn scan_stats_classify_results() {
+        let mut stats = CompletionStats::default();
+        update_scan_stats(&mut stats, &CompletionResult { success: true, ..Default::default() });
+        update_scan_stats(&mut stats, &CompletionResult::not_ready());
+        update_scan_stats(&mut stats, &CompletionResult::failure("boom"));
+        update_scan_stats(&mut stats, &CompletionResult::default());
+        assert_eq!(stats, CompletionStats { completed: 1, errors: 2, not_ready: 1 });
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failing_games_are_pushed_back_and_paced() {
+        let (dir, db, completion, metrics, mut runner) = setup(
+            vec![Err(anyhow::anyhow!("rpc down")), Err(anyhow::anyhow!("rpc down"))],
+            CompletionResult::default(),
+        );
+        runner.options.inter_game_delay_ms = 250;
+        track(&db, "g1", true);
+        track(&db, "g2", true);
+        age_checks(&dir);
+        // Even when the push-back itself fails the scan carries on.
+        fail_updates(&dir, "no_touch", "game_tracking", SAME_FAILURE_STATE);
+        let started = tokio::time::Instant::now();
+        let stats = runner.scan_and_complete_active_games(None).await;
+        assert_eq!(stats.errors, 2);
+        assert_eq!(started.elapsed(), Duration::from_millis(500));
+        assert!(completion.attempts.lock().unwrap().is_empty());
+        let records = metrics.completion_records();
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|r| r.error.as_deref() == Some("rpc down")));
+        assert_eq!(last_checked(&dir, "g1"), 1);
+    }
+
+    #[tokio::test]
+    async fn an_abort_after_a_failure_stops_the_scan() {
+        let (_dir, db, completion, _metrics, runner) = setup(
+            vec![Err(anyhow::anyhow!("rpc down")), Err(anyhow::anyhow!("rpc down"))],
+            CompletionResult::default(),
+        );
+        track(&db, "g1", true);
+        track(&db, "g2", true);
+        let signal = Shutdown::new();
+        let trigger = signal.clone();
+        *completion.on_resolve.lock().unwrap() = Some(Box::new(move || trigger.trigger()));
+        let stats = runner.scan_and_complete_active_games(Some(&signal)).await;
+        assert_eq!(stats.errors, 1);
+        assert_eq!(completion.seen_block_times.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn missing_contexts_survive_database_failures() {
+        let (dir, db, _completion, metrics, runner) = setup(
+            vec![Ok(ReadinessResolution::MissingContext), Ok(ReadinessResolution::MissingContext)],
+            CompletionResult::default(),
+        );
+        track(&db, "patient", true);
+        track(&db, "orphan", false);
+        fail_updates(&dir, "no_increment", "game_tracking", "NEW.completion_attempts <> OLD.completion_attempts");
+        fail_updates(&dir, "no_touch", "game_tracking", SAME_FAILURE_STATE);
+        fail_updates(&dir, "no_desync", "game_tracking", "NEW.status = 'desynced'");
+        let stats = runner.scan_and_complete_active_games(None).await;
+        assert_eq!(stats, CompletionStats { completed: 0, errors: 1, not_ready: 1 });
+        // Nothing was persisted, but both outcomes are still reported.
+        assert_eq!(db.get_game_status("orphan").as_deref(), Some("pending"));
+        assert_eq!(db.get_completion_attempt_state("patient").unwrap().completion_attempts, 0);
+        assert_eq!(metrics.completion_records().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_second_loop_is_rejected_while_one_runs() {
+        let (_dir, _db, _completion, _metrics, runner) = setup(vec![], CompletionResult::default());
+        runner.running.store(true, Ordering::SeqCst);
+        let err = runner.run_scan_loop(ScanLoopOptions::default()).await.unwrap_err();
+        assert_eq!(err.to_string(), "Scan loop is already running");
+        assert!(runner.is_running(), "the running loop is left alone");
+    }
+
+    #[tokio::test]
+    async fn cleanup_failures_do_not_stop_the_loop() {
+        let (_dir, _db, _completion, _metrics, mut runner) = setup(vec![], CompletionResult::default());
+        let hours = Arc::new(Mutex::new(Vec::new()));
+        let seen = hours.clone();
+        runner.options.cleanup_old_records = Arc::new(move |h| {
+            seen.lock().unwrap().push(h);
+            anyhow::bail!("cleanup failed")
+        });
+        let summary = runner
+            .run_scan_loop(ScanLoopOptions { cleanup_after_cycle_hours: Some(12), ..Default::default() })
+            .await
+            .unwrap();
+        assert_eq!(summary.cycles, 1);
+        assert_eq!(hours.lock().unwrap().clone(), vec![12]);
+    }
+
+    #[tokio::test]
+    async fn an_abort_during_cleanup_ends_the_loop() {
+        let (_dir, _db, _completion, _metrics, mut runner) = setup(vec![], CompletionResult::default());
+        let signal = Shutdown::new();
+        let trigger = signal.clone();
+        runner.options.cleanup_old_records = Arc::new(move |_| {
+            trigger.trigger();
+            Ok(())
+        });
+        let continued = Arc::new(Mutex::new(false));
+        let flag = continued.clone();
+        let summary = runner
+            .run_scan_loop(ScanLoopOptions {
+                cleanup_after_cycle_hours: Some(1),
+                should_continue: Some(Arc::new(move |_, _| {
+                    *flag.lock().unwrap() = true;
+                    true
+                })),
+                signal: Some(signal),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(summary.cycles, 1);
+        assert!(!*continued.lock().unwrap(), "the continue check is skipped after an abort");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stop_ends_a_waiting_loop() {
+        let (_dir, _db, _completion, _metrics, runner) = setup(vec![], CompletionResult::default());
+        let runner = Arc::new(runner);
+        let looping = runner.clone();
+        let task = tokio::spawn(async move {
+            looping
+                .run_scan_loop(ScanLoopOptions {
+                    wait_between_cycles_ms: Some(60_000),
+                    should_continue: Some(Arc::new(|_, _| true)),
+                    ..Default::default()
+                })
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(runner.is_running());
+        runner.stop();
+        assert!(!runner.is_running());
+        let summary = task.await.unwrap().unwrap();
+        assert_eq!(summary.cycles, 1);
+    }
+
+    #[tokio::test]
+    async fn waiting_for_pending_work_only_skips_the_cycle_delay() {
+        let success = CompletionResult { success: true, ..Default::default() };
+        // Without a continue hook the loop ends after the cycle that found work.
+        let (_dir, db, completion, _metrics, runner) = setup(vec![Ok(resolved(true))], success.clone());
+        track(&db, "g1", true);
+        let summary = runner
+            .run_scan_loop(ScanLoopOptions {
+                wait_between_cycles_ms: Some(3_600_000),
+                wait_for_pending_only: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!((summary.cycles, summary.total_completed), (1, 1));
+        assert_eq!(completion.attempts.lock().unwrap().len(), 1);
+
+        // With one, the hook decides and the loop goes straight into the next cycle.
+        let (_dir, db, _completion, _metrics, runner) = setup((0..2).map(|_| Ok(resolved(true))).collect(), success);
+        track(&db, "g1", true);
+        let summary = runner
+            .run_scan_loop(ScanLoopOptions {
+                wait_between_cycles_ms: Some(3_600_000),
+                wait_for_pending_only: true,
+                should_continue: Some(Arc::new(|_, cycle| cycle < 2)),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(summary.cycles, 2);
     }
 }
