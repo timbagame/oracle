@@ -70,6 +70,8 @@ jobs:
         with:
           path: |
             ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
@@ -79,8 +81,11 @@ jobs:
             cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
       - name: Install Cargo tools
         run: |
-          cargo install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
-          cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION"
+          # A cache hit restores ~/.cargo/bin, so only install when the pinned version is missing.
+          cargo llvm-cov --version 2>/dev/null | grep -qF "$CARGO_LLVM_COV_VERSION" \
+            || cargo install cargo-llvm-cov --locked --force --version "$CARGO_LLVM_COV_VERSION"
+          cargo audit --version 2>/dev/null | grep -qF "$CARGO_AUDIT_VERSION" \
+            || cargo install cargo-audit --locked --force --version "$CARGO_AUDIT_VERSION"
       - name: Audit dependencies
         run: cargo audit
       - name: Check formatting
