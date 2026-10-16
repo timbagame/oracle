@@ -260,6 +260,20 @@ impl EventProcessor {
     where
         F: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
+        let _ = self.enqueue_event_mutation(event_type, game_address, handler).await;
+    }
+
+    /// Queues `handler` behind earlier work for the same game; the receiver
+    /// resolves once it ran. Dropping the receiver does not cancel it.
+    fn enqueue_event_mutation<F>(
+        self: &Arc<Self>,
+        event_type: String,
+        game_address: &str,
+        handler: F,
+    ) -> oneshot::Receiver<()>
+    where
+        F: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
         let (done, wait) = oneshot::channel();
         let game = game_address.to_string();
         self.enqueue(
@@ -272,7 +286,7 @@ impl EventProcessor {
             }
             .boxed(),
         );
-        let _ = wait.await;
+        wait
     }
 
     // -- listening -----------------------------------------------------------
@@ -341,11 +355,13 @@ impl EventProcessor {
         match dispatch {
             ProgramDispatch::PlayerMembership(event) => self.handle_player_event(event).await,
             ProgramDispatch::GameInitialized(event) => self.handle_game_initialized(&event),
+            // Like the TypeScript `void runEventMutation(...)`: queued in order, but
+            // the subscription reader does not wait for the flush and DB writes.
             ProgramDispatch::GameCompleted(GameCompletedEvent { game_key, .. }) => {
-                self.handle_game_status_change(GameStatus::Completed, &game_key).await
+                drop(self.start_game_status_change(GameStatus::Completed, &game_key))
             }
             ProgramDispatch::GameClosed(GameClosedEvent { game_key, .. }) => {
-                self.handle_game_status_change(GameStatus::Closed, &game_key).await
+                drop(self.start_game_status_change(GameStatus::Closed, &game_key))
             }
         }
     }
@@ -392,22 +408,27 @@ impl EventProcessor {
     }
 
     pub async fn handle_game_status_change(self: &Arc<Self>, status: GameStatus, game_key: &str) {
+        if let Some(done) = self.start_game_status_change(status, game_key) {
+            let _ = done.await;
+        }
+    }
+
+    fn start_game_status_change(self: &Arc<Self>, status: GameStatus, game_key: &str) -> Option<oneshot::Receiver<()>> {
         let event_type = format!("game {}", status.as_str());
         let Ok(key) = Address::parse(game_key) else {
             warn!("⚠️  Invalid game address in {event_type} event for {game_key}");
-            return;
+            return None;
         };
         if !self.has_active_secret_key(game_key) {
-            return;
+            return None;
         }
         let processor = self.clone();
         let game = game_key.to_string();
         let trigger = event_type.clone();
-        self.run_event_mutation(event_type, game_key, async move {
+        Some(self.enqueue_event_mutation(event_type, game_key, async move {
             processor.flush_player_buffer_serialized(&game, &trigger, Some(key)).await;
             processor.apply_status(status, &game)
-        })
-        .await;
+        }))
     }
 
     fn apply_status(&self, status: GameStatus, game: &str) -> anyhow::Result<()> {
@@ -935,6 +956,46 @@ mod tests {
         settle().await;
         assert!(h.hooks.syncs.lock().unwrap().is_empty());
         assert!(!h.processor.has_pending_registry_sync(&game()));
+    }
+
+    #[tokio::test]
+    async fn status_events_do_not_hold_up_the_subscription() {
+        let h = harness(0);
+        h.db.save_secret_key(&game(), "secret", "hash").unwrap();
+        h.db.track_game(&game(), None, true).unwrap();
+        // Earlier work for the same game is still running.
+        let release = Arc::new(tokio::sync::Notify::new());
+        let gate = release.clone();
+        let busy = h.processor.enqueue_event_mutation("busy".into(), &game(), async move {
+            gate.notified().await;
+            Ok(())
+        });
+        let completed = GameCompletedEvent {
+            game_key: game(),
+            winner: "w".into(),
+            tickets_count: 2,
+            winner_amount: 1,
+            fee_amount: 0,
+            timestamp: 0,
+            signature: "sig".into(),
+            slot: 1,
+        };
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            h.processor.handle_dispatch(ProgramDispatch::GameCompleted(completed)),
+        )
+        .await
+        .expect("the reader moves on while the status change is queued");
+        assert_eq!(h.db.get_game_status(&game()).as_deref(), Some("pending"), "still queued behind the busy job");
+        release.notify_one();
+        busy.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while h.db.get_game_status(&game()).as_deref() != Some("completed") {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the status change runs after the earlier job");
     }
 
     #[tokio::test]
