@@ -463,6 +463,42 @@ mod tests {
         assert!(text.ends_with("Total completions: 0, total errors: 0\n"), "{text}");
     }
 
+    /// A writer that breaks (a closed pipe, say) after `allowed` writes.
+    struct BrokenPipe {
+        allowed: usize,
+    }
+
+    impl std::io::Write for BrokenPipe {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.allowed == 0 {
+                return Err(std::io::ErrorKind::BrokenPipe.into());
+            }
+            self.allowed -= 1;
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_shutdown_stops_when_the_output_breaks() {
+        let h = harness();
+        let mut failures = 0;
+        // Break the output after every possible number of writes, up to a complete run.
+        for allowed in 0.. {
+            match drain(&h.service, 0, &mut BrokenPipe { allowed }).await {
+                Ok(()) => break,
+                Err(err) => {
+                    assert_eq!(err.downcast_ref::<std::io::Error>().unwrap().kind(), std::io::ErrorKind::BrokenPipe);
+                    failures += 1;
+                }
+            }
+        }
+        assert!(failures > 10, "every write is checked: {failures}");
+    }
+
     async fn health_server(status: StatusCode) -> u16 {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();

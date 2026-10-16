@@ -764,6 +764,48 @@ mod tests {
         assert_eq!(h.service.program().listener_count(), 0, "listeners are removed on exit");
     }
 
+    #[tokio::test]
+    async fn events_are_not_written_to_the_database_by_default() {
+        let config = OracleConfig { solana_ws_endpoint: Some(ws_node().await), ..OracleConfig::for_tests() };
+        let h = harness_with(config, Keypair::generate(), &["https://a"]);
+        let game = h.service.generate_game_secrets(None).unwrap().game_address;
+        let value = account_value(&game_account(0, 10, 2, 1_700_000_000, 600));
+        h.transport.on(move |_, method, _| match method {
+            "getSlot" => Some(Ok(json!(100))),
+            "getAccountInfo" => Some(Ok(value.clone())),
+            _ => None,
+        });
+
+        let program = h.service.program().clone();
+        let db = h.service.db().clone();
+        let events = {
+            let game = game.clone();
+            async move {
+                while program.listener_count() < 4 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                program.dispatch(membership(MembershipKind::Joined, &game, "alice", 0)).await;
+                assert!(db.get_game_players(&game).is_empty(), "read-only without --write-db");
+                let completed = GameCompletedEvent {
+                    game_key: game.clone(),
+                    winner: "alice".into(),
+                    tickets_count: 1,
+                    winner_amount: 1,
+                    fee_amount: 0,
+                    timestamp: 3,
+                    signature: "d".into(),
+                    slot: 140,
+                };
+                program.dispatch(ProgramDispatch::GameCompleted(completed)).await;
+            }
+        };
+        let options = CliOptions { once: false, listen: true, ..options(Some(&game)) };
+        let (output, ()) = tokio::join!(audit_output(&h, options, ""), events);
+        let output = output.unwrap();
+        let last = output.rsplit("\x1Bc").next().unwrap();
+        assert!(last.contains("Last joiner: alice (ticketIndex=0"), "{last}");
+    }
+
     #[test]
     fn parses_flags() {
         let options = parse_args(&args(&["--once", "--slots", "10", "--interval", "500", "GAME"])).unwrap();
@@ -777,6 +819,17 @@ mod tests {
         assert_eq!(parse_args(&args(&["--slots"])).unwrap_err().to_string(), "Missing value for --slots");
         assert_eq!(parse_args(&args(&["--bogus"])).unwrap_err().to_string(), "Unknown argument: --bogus");
         assert_eq!(parse_args(&args(&["--game", "A", "B"])).unwrap().game_address.as_deref(), Some("A"));
+        // Empty arguments (an unset shell variable, say) are ignored.
+        assert_eq!(parse_args(&args(&["", "GAME", ""])).unwrap().game_address.as_deref(), Some("GAME"));
+    }
+
+    #[test]
+    fn winner_display_covers_missing_players() {
+        let players = vec!["alice".to_string(), "bob".to_string()];
+        assert_eq!(compute_winner_display(2, &players, 1), "bob (index=1, position=2)");
+        assert_eq!(compute_winner_display(3, &players, 2), "index=2 (missing player)");
+        assert_eq!(compute_winner_display(0, &players, 0), "n/a (no players)");
+        assert_eq!(compute_winner_display(2, &[], 0), "n/a (no players)");
     }
 
     #[test]
