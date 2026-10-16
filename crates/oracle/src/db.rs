@@ -1764,6 +1764,17 @@ mod tests {
     }
 
     #[test]
+    fn unjoining_without_a_moved_participant_only_frees_the_ticket() {
+        for moved_participant in [None, Some(String::new())] {
+            let db = db();
+            db.replace_game_players("g", &["a".into(), "b".into(), "c".into()]).unwrap();
+            let unjoin = PlayerMutation::Unjoined { ticket_index: 1, moved_participant };
+            db.apply_player_mutations("g", &[unjoin]).unwrap();
+            assert_eq!(db.get_game_players("g"), vec!["a", "c"]);
+        }
+    }
+
+    #[test]
     fn rolls_back_a_registry_replacement_that_fails_part_way() {
         let (_dir, path, db) = file_db();
         db.replace_game_players("g", &["a".into(), "b".into()]).unwrap();

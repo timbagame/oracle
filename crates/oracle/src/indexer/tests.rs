@@ -1111,19 +1111,44 @@ fn reads_fail_cleanly_when_their_tables_are_gone() {
         ("active_games", |db, f| db.get_active_games(Some(&f.player)).is_err()),
         ("game_players", |db, f| db.get_player_profile(&f.player).is_err()),
     ];
-    for (index, (table, read)) in reads.into_iter().enumerate() {
-        // Uncached, so the windowed leaderboards read the database every time.
-        let (_dir, path, f) =
-            file_fixture_with(IndexerDatabaseOptions { leaderboard_cache_ttl_ms: Some(0), ..Default::default() });
-        // Leave the game open so the active tables hold rows too.
+    // Uncached, so the windowed leaderboards read the database every time.
+    let options = || IndexerDatabaseOptions { leaderboard_cache_ttl_ms: Some(0), ..Default::default() };
+    // Leave the game open so the active tables hold rows too, and mark the history complete.
+    let seed = |path: &str, f: &Fixture| {
         f.db.apply(&initialized_only(&f.events), &cursor(&f.completed_signature, 12)).unwrap();
         sabotage(
-            &path,
+            path,
             &format!("INSERT INTO historical_backfill (name, complete, updated_at) VALUES ('{BACKFILL_NAME}', 1, 0)"),
         );
-        assert!(!read(&f.db, &f), "read {index} failed before the table was dropped");
+    };
+    for (index, (table, read)) in reads.into_iter().enumerate() {
+        // A separate database proves the read works, so the failure below is the missing table.
+        // (Statements cached by a successful read would fail at execution instead of at prepare.)
+        let (_dir, path, healthy) = file_fixture_with(options());
+        seed(&path, &healthy);
+        assert!(!read(&healthy.db, &healthy), "read {index} failed on a healthy database");
+
+        let (_dir, path, f) = file_fixture_with(options());
+        seed(&path, &f);
         sabotage(&path, &format!("DROP TABLE {table}"));
         assert!(read(&f.db, &f), "read {index} did not fail without {table}");
+    }
+}
+
+#[test]
+fn rejects_a_batch_whose_lookup_reads_a_missing_table() {
+    type Events = fn(&Fixture) -> IndexedEvents;
+    let cases: [(&str, Events); 2] = [
+        ("game_closures", |f| initialized_only(&f.events)),
+        ("game_initializations", |f| IndexedEvents { completed: f.events.completed.clone(), ..Default::default() }),
+    ];
+    for (table, events) in cases {
+        let (_dir, path, f) = file_fixture();
+        sabotage(&path, &format!("DROP TABLE {table}"));
+        let error = f.db.apply(&events(&f), &cursor(&f.completed_signature, 12)).unwrap_err();
+        assert!(error.to_string().contains(&format!("no such table: {table}")), "{table}: {error:#}");
+        assert_eq!(f.db.get_cursor().unwrap(), None);
+        assert_eq!(count(&path, "games"), 0);
     }
 }
 

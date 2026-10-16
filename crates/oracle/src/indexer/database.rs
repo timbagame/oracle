@@ -1159,18 +1159,14 @@ fn remove_active_game(conn: &Connection, game_key: &str) -> Result<()> {
 }
 
 fn migrate_legacy_schema(conn: &Connection) -> Result<()> {
-    let table = query_one(
-        conn,
-        "SELECT 1 AS found FROM sqlite_master WHERE type='table' AND name=?",
-        params!["active_game_players"],
-    )?;
-    if table.is_none() {
-        return Ok(());
-    }
+    // A table that does not exist has no columns, so there is nothing to upgrade.
     let columns: Vec<String> = query_all(conn, "PRAGMA table_info(active_game_players)", [])?
         .iter()
         .filter_map(|column| column.get("name").and_then(Value::as_str).map(String::from))
         .collect();
+    if columns.is_empty() {
+        return Ok(());
+    }
     let mut changed = false;
     if !columns.iter().any(|c| c == "is_joined") {
         conn.execute_batch("ALTER TABLE active_game_players ADD COLUMN is_joined INTEGER NOT NULL DEFAULT 1")?;

@@ -645,11 +645,11 @@ mod tests {
         assert_eq!(parse(&nullable, &Value::Null).unwrap(), Value::Null);
         assert_eq!(parse(&nullable, &json!(true)).unwrap(), json!(true));
         assert_eq!(rejection(&nullable, json!(1)), "expected boolean");
-        static LIST: Schema = array(&Schema::PositiveInteger);
-        assert_eq!(parse(&LIST, &json!([1, 2])).unwrap(), json!([1, 2]));
-        assert_eq!(parse(&LIST, &json!([])).unwrap(), json!([]));
-        assert_eq!(rejection(&LIST, json!("x")), "expected array");
-        let error = parse(&LIST, &json!([1, 0])).unwrap_err();
+        let list = array(&Schema::PositiveInteger);
+        assert_eq!(parse(&list, &json!([1, 2])).unwrap(), json!([1, 2]));
+        assert_eq!(parse(&list, &json!([])).unwrap(), json!([]));
+        assert_eq!(rejection(&list, json!("x")), "expected array");
+        let error = parse(&list, &json!([1, 0])).unwrap_err();
         assert_eq!((error.path.as_str(), error.message.as_str()), ("1", "expected a positive integer"));
         let bounded = Schema::Array { item: &Schema::Bool, min: 1, max: 2 };
         assert_eq!(rejection(&bounded, json!([])), "array length out of range");
