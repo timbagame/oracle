@@ -125,10 +125,8 @@ pub async fn sign_game_transaction_with_policy(
     tx_base64: &str,
     options: &SignGameTransactionOptions<'_>,
 ) -> Result<String, SignError> {
-    let transaction = Transaction::from_base64(tx_base64).map_err(|error| match error {
-        TransactionError::UnsupportedVersion(_) => policy("Only legacy game transactions are supported"),
-        _ => policy("Invalid transaction payload"),
-    })?;
+    // Decoding accepts either message version; the legacy parse below rejects v0.
+    let transaction = Transaction::from_base64(tx_base64).map_err(|_| policy("Invalid transaction payload"))?;
     let message = LegacyMessage::deserialize(&transaction.message_bytes).map_err(|error| match error {
         TransactionError::UnsupportedVersion(_) => policy("Only legacy game transactions are supported"),
         _ => policy("Invalid transaction payload"),
@@ -365,6 +363,10 @@ mod tests {
         marks: Mutex<Vec<String>>,
         unused: Mutex<Vec<(String, String)>>,
         policy: Mutex<Vec<(String, String)>>,
+        reused: bool,
+        rejected: bool,
+        /// Fails the n-th `mark_commitment_signed` call (1-based).
+        fail_mark: Option<usize>,
     }
 
     impl SigningHooks for Recorder {
@@ -374,15 +376,70 @@ mod tests {
             amount: u64,
         ) -> BoxFuture<'a, Result<(), SignError>> {
             self.policy.lock().unwrap().push((mint.to_base58(), amount.to_string()));
-            async { Ok(()) }.boxed()
+            let result = if self.rejected {
+                let error = CreationPolicyError::new(RejectionCode::AmountBelowMinimum, "Amount is too low", "mint");
+                Err(SignError::Creation(error))
+            } else {
+                Ok(())
+            };
+            async move { result }.boxed()
         }
         fn assert_unused_commitment(&self, game: &Address, hash: &str) -> Result<(), SignError> {
             self.unused.lock().unwrap().push((game.to_base58(), hash.to_string()));
+            if self.reused {
+                return Err(policy("Game commitment has already been used"));
+            }
             Ok(())
         }
         fn mark_commitment_signed(&self, game: &Address) -> anyhow::Result<()> {
-            self.marks.lock().unwrap().push(game.to_base58());
+            let mut marks = self.marks.lock().unwrap();
+            marks.push(game.to_base58());
+            if self.fail_mark == Some(marks.len()) {
+                anyhow::bail!("Game was finalized while signing");
+            }
             Ok(())
+        }
+    }
+
+    fn fixture() -> (Value, Keypair) {
+        let fixture: Value = serde_json::from_str(include_str!("../../tests/fixtures/signer.json")).unwrap();
+        let bytes: Vec<u8> =
+            fixture["operatorKeypair"].as_array().unwrap().iter().map(|b| b.as_u64().unwrap() as u8).collect();
+        let operator = Keypair::from_bytes(&bytes).unwrap();
+        (fixture, operator)
+    }
+
+    /// Signs the fixture case `name` (a v0.3.0 transaction the TypeScript signer accepted) with `hooks`.
+    async fn sign_case(name: &str, hooks: &Recorder) -> Result<String, SignError> {
+        let (fixture, operator) = fixture();
+        let case = fixture["cases"].as_array().unwrap().iter().find(|c| c["name"] == name).unwrap();
+        assert!(case["expected"].get("ok").is_some(), "{name} must be a signable case");
+        let options = SignGameTransactionOptions {
+            contract_version: ContractVersion::V0_3_0,
+            program_id: timba_protocol::contracts::PROGRAM_ID,
+            operator: &operator,
+            hooks,
+        };
+        sign_game_transaction_with_policy(case["txBase64"].as_str().unwrap(), &options).await
+    }
+
+    #[tokio::test]
+    async fn hook_rejections_stop_signing() {
+        let reused = Recorder { reused: true, ..Default::default() };
+        let err = sign_case("0.3.0 placeholder", &reused).await.unwrap_err();
+        assert_eq!(err.to_string(), "Game commitment has already been used");
+        assert!(reused.marks.lock().unwrap().is_empty() && reused.policy.lock().unwrap().is_empty());
+
+        let rejected = Recorder { rejected: true, ..Default::default() };
+        let err = sign_case("0.3.0 placeholder", &rejected).await.unwrap_err();
+        assert!(matches!(&err, SignError::Creation(e) if e.code == RejectionCode::AmountBelowMinimum), "{err:?}");
+        assert!(rejected.marks.lock().unwrap().is_empty(), "nothing is reserved for a rejected game");
+
+        for call in [1, 2] {
+            let racing = Recorder { fail_mark: Some(call), ..Default::default() };
+            let err = sign_case("0.3.0 creator-signed join", &racing).await.unwrap_err();
+            assert!(matches!(&err, SignError::Other(e) if e.to_string() == "Game was finalized while signing"));
+            assert_eq!(racing.marks.lock().unwrap().len(), call, "stops at the failing reservation");
         }
     }
 
@@ -398,10 +455,7 @@ mod tests {
     /// Differential cases generated by running the TypeScript signer.
     #[tokio::test]
     async fn matches_typescript_signer() {
-        let fixture: Value = serde_json::from_str(include_str!("../../tests/fixtures/signer.json")).unwrap();
-        let bytes: Vec<u8> =
-            fixture["operatorKeypair"].as_array().unwrap().iter().map(|b| b.as_u64().unwrap() as u8).collect();
-        let operator = Keypair::from_bytes(&bytes).unwrap();
+        let (fixture, operator) = fixture();
         for case in fixture["cases"].as_array().unwrap() {
             let name = case["name"].as_str().unwrap();
             let hooks = Recorder::default();

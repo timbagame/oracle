@@ -81,9 +81,9 @@ async function scenario(version, { isPrivate = false, placeholder = false, creat
   return { creator, operator, creatorAddress, game, initialize, join, tokenMint, version };
 }
 
-function build(s, instructions, { sign = true, feePayer } = {}) {
+function build(s, instructions, { sign = true, feePayer, version = "legacy" } = {}) {
   const message = pipe(
-    createTransactionMessage({ version: "legacy" }),
+    createTransactionMessage({ version }),
     (m) => setTransactionMessageFeePayer(feePayer ?? s.creatorAddress, m),
     (m) => setTransactionMessageLifetimeUsingBlockhash({ blockhash: BLOCKHASH, lastValidBlockHeight: 10n }, m),
     (m) => appendTransactionMessageInstructions(instructions, m),
@@ -147,7 +147,9 @@ for (const version of ["0.3.0", "0.2.0"]) {
 let s = await scenario("0.3.0");
 await add("missing creator signature", "0.3.0", finish(s, build(s, [s.initialize]), false));
 await add("foreign setup program", "0.3.0", finish(s, build(s, [{ programAddress: address("Stake11111111111111111111111111111111111111"), data: new Uint8Array([1]) }, s.initialize]), true));
-await add("setup references operator", "0.3.0", finish(s, build(s, [{ programAddress: SYSTEM_PROGRAM_ADDRESS, data: new Uint8Array([2,0,0,0,1,0,0,0,0,0,0,0]), accounts: [{ address: s.creatorAddress, role: AccountRole.WRITABLE_SIGNER }, { address: s.operator.address, role: AccountRole.WRITABLE }] }, s.initialize]), true));
+// A writable reference merges into the operator's initialize meta and fails that check first.
+await add("setup marks operator writable", "0.3.0", finish(s, build(s, [{ programAddress: SYSTEM_PROGRAM_ADDRESS, data: new Uint8Array([2,0,0,0,1,0,0,0,0,0,0,0]), accounts: [{ address: s.creatorAddress, role: AccountRole.WRITABLE_SIGNER }, { address: s.operator.address, role: AccountRole.WRITABLE }] }, s.initialize]), true));
+await add("setup references operator", "0.3.0", finish(s, build(s, [{ programAddress: SYSTEM_PROGRAM_ADDRESS, data: new Uint8Array([2,0,0,0,1,0,0,0,0,0,0,0]), accounts: [{ address: s.creatorAddress, role: AccountRole.WRITABLE_SIGNER }, { address: s.operator.address, role: AccountRole.READONLY }] }, s.initialize]), true));
 await add("durable nonce", "0.3.0", finish(s, build(s, [{ programAddress: SYSTEM_PROGRAM_ADDRESS, data: new Uint8Array([4,0,0,0]), accounts: [{ address: s.creatorAddress, role: AccountRole.WRITABLE_SIGNER }] }, s.initialize]), true));
 await add("no game instruction", "0.3.0", finish(s, build(s, [compute]), true));
 await add("three game instructions", "0.3.0", finish(s, build(s, [s.initialize, s.join, s.join]), true));
@@ -160,6 +162,20 @@ await add("version mismatch", "0.2.0", finish(s, build(s, [s.initialize]), true)
 await add("bad join count", "0.3.0", finish(s, build(s, [s.initialize, { ...s.join, accounts: s.join.accounts.slice(0, 9) }]), true));
 await add("join wrong mint", "0.3.0", finish(s, build(s, [s.initialize, { ...s.join, accounts: s.join.accounts.map((m, i) => i === 3 ? { ...m, address: s.game } : m) }]), true));
 await add("fee payer differs", "0.3.0", finish(s, build(s, [s.initialize], { feePayer: s.operator.address }), false));
+// Every account the signer pins, swapped for an unrelated address.
+const swap = (ix, index, address) => ({ ...ix, accounts: ix.accounts.map((m, i) => (i === index ? { ...m, address } : m)) });
+const stranger = (await signer(20)).address;
+for (const [index, label] of [[0, "game"], [2, "oracle"], [6, "vault token account"], [7, "token program"], [8, "associated token program"], [9, "creator token account"], [10, "system program"]]) {
+  await add(`initialize with wrong ${label}`, "0.3.0", finish(s, build(s, [swap(s.initialize, index, stranger)]), true));
+}
+for (let index = 0; index < 10; index++) {
+  await add(`join with wrong account ${index}`, "0.3.0", finish(s, build(s, [s.initialize, swap(s.join, index, stranger)]), true));
+}
+await add("join foreign discriminator", "0.3.0", finish(s, build(s, [s.initialize, { ...s.join, data: s.initialize.data.slice(0, 8) }]), true));
+await add("versioned transaction", "0.3.0", finish(s, build(s, [s.initialize], { version: 0 }), true));
+const legacy = await scenario("0.2.0");
+await add("0.2.0 initialize with wrong game token", "0.2.0", finish(legacy, build(legacy, [swap(legacy.initialize, 5, stranger)]), true));
+await add("0.2.0 join with wrong game token", "0.2.0", finish(legacy, build(legacy, [legacy.initialize, swap(legacy.join, 4, stranger)]), true));
 s = await scenario("0.3.0", { creatorOffCurve: true, placeholder: true });
 await add("creator off curve", "0.3.0", finish(s, build(s, [s.initialize]), false));
 cases.push({ name: "invalid base64", version: "0.3.0", txBase64: "!!!", expected: { error: "Invalid transaction payload", policy: true }, marks: [], unused: [], policy: [] });
