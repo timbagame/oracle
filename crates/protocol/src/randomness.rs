@@ -84,6 +84,38 @@ mod tests {
     }
 
     #[test]
+    fn matches_typescript_known_answers() {
+        // Generated with @timbagame/protocol 0.14.2 `calculateWinner`; the first row is the
+        // vector the TypeScript oracle suite pinned (tests/oracle-service.test.ts).
+        let cases: [(u8, u64, u64, u32, u64); 7] = [
+            (1, 123_456, 100, 2, 14_809_389_532_232_907_002),
+            (1, 123_456, 1, 0, 14_809_389_532_232_907_002),
+            (7, 12_345, 10, 1, 1_428_052_397_348_301_901),
+            (0, 0, 2, 0, 10_125_002_298_327_184_428),
+            (255, u64::MAX, 4_294_967_295, 3_496_189_253, 14_218_936_971_049_291_118),
+            (42, 987_654_321, 3, 0, 14_221_578_400_757_830_401),
+            (3, 1, 7, 2, 3_093_185_059_403_452_673),
+        ];
+        for (byte, slot, tickets, winner_index, random_value) in cases {
+            let selection = calculate_winner(&[byte; 32], slot, tickets).unwrap();
+            assert_eq!(
+                (selection.winner_index, selection.random_value),
+                (winner_index, random_value),
+                "secret {byte:#04x}, slot {slot}, tickets {tickets}"
+            );
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn winner_is_always_in_bounds(secret in proptest::array::uniform32(proptest::num::u8::ANY), slot in proptest::num::u64::ANY, tickets in 1u64..=u32::MAX as u64) {
+            if let Ok(selection) = calculate_winner(&secret, slot, tickets) {
+                proptest::prop_assert!(u64::from(selection.winner_index) < tickets);
+            }
+        }
+    }
+
+    #[test]
     fn calculate_is_deterministic() {
         let a = calculate_winner(&[7; 32], 12345, 10).unwrap();
         let b = calculate_winner(&[7; 32], 12345, 10).unwrap();

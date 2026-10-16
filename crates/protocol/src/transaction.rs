@@ -255,7 +255,9 @@ impl LegacyMessage {
     pub fn is_writable(&self, index: usize) -> bool {
         let signers = self.header.num_required_signatures as usize;
         if index < signers {
-            index < signers - self.header.num_readonly_signed_accounts as usize
+            // Untrusted headers can claim more read-only signers than signers; kit
+            // then treats every signer as read-only, so saturate instead of overflowing.
+            index < signers.saturating_sub(self.header.num_readonly_signed_accounts as usize)
         } else {
             index < self.account_keys.len().saturating_sub(self.header.num_readonly_unsigned_accounts as usize)
         }
@@ -356,8 +358,10 @@ pub struct Transaction {
 
 impl Transaction {
     pub fn from_message(message: &LegacyMessage) -> Self {
-        let signers = message.account_keys[..message.header.num_required_signatures as usize]
+        let signers = message
+            .account_keys
             .iter()
+            .take(message.header.num_required_signatures as usize)
             .map(|a| (*a, None))
             .collect();
         Self { message_bytes: message.serialize(), signatures: signers }
@@ -498,6 +502,114 @@ mod tests {
             LegacyMessage::compile(&payer, &Address([7; 32]), &[ix]).unwrap_err(),
             TransactionError::ProgramPaysFees
         );
+    }
+
+    #[test]
+    fn treats_signers_as_read_only_when_the_header_overstates_read_only_signers() {
+        // Header [1, 2, 0]: more read-only signers than signers. kit decompiles this
+        // with every signer read-only; it must not panic on the subtraction.
+        let mut bytes = vec![1u8, 2, 0, 1];
+        bytes.extend_from_slice(&[7; 32]);
+        bytes.extend_from_slice(&[9; 32]);
+        bytes.extend_from_slice(&[1, 0, 1, 0, 0]);
+        let message = LegacyMessage::deserialize(&bytes).unwrap();
+        assert!(!message.is_writable(0));
+        let decompiled = message.decompile().unwrap();
+        assert_eq!(decompiled[0].accounts, vec![AccountMeta::readonly_signer(Address([7; 32]))]);
+    }
+
+    #[test]
+    fn from_message_tolerates_headers_with_more_signers_than_keys() {
+        let message = LegacyMessage {
+            header: MessageHeader { num_required_signatures: 3, ..Default::default() },
+            account_keys: vec![Address([1; 32])],
+            recent_blockhash: Address([2; 32]),
+            instructions: vec![],
+        };
+        assert_eq!(Transaction::from_message(&message).signatures.len(), 1);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn decoding_arbitrary_bytes_never_panics(bytes in proptest::collection::vec(proptest::num::u8::ANY, 0..512)) {
+            if let Ok(message) = LegacyMessage::deserialize(&bytes) {
+                let _ = message.decompile();
+                for index in 0..message.account_keys.len() + 2 {
+                    let _ = message.is_writable(index);
+                }
+                let _ = Transaction::from_message(&message);
+            }
+            if let Ok(tx) = Transaction::decode(&bytes) {
+                if let Ok(message) = LegacyMessage::deserialize(&tx.message_bytes) {
+                    let _ = message.decompile();
+                }
+            }
+        }
+
+        #[test]
+        fn decompiling_any_well_formed_message_never_panics(
+            header in proptest::array::uniform3(proptest::num::u8::ANY),
+            key_count in 0usize..6,
+            instructions in proptest::collection::vec(
+                (proptest::num::u8::ANY, proptest::collection::vec(proptest::num::u8::ANY, 0..6)),
+                0..4,
+            ),
+        ) {
+            // A first byte with the high bit set is a version prefix, covered elsewhere.
+            let mut bytes = vec![header[0] & 0x7f, header[1], header[2]];
+            encode_short_u16(&mut bytes, key_count);
+            for key in 0..key_count {
+                bytes.extend_from_slice(&[key as u8; 32]);
+            }
+            bytes.extend_from_slice(&[9; 32]);
+            encode_short_u16(&mut bytes, instructions.len());
+            for (program, accounts) in &instructions {
+                bytes.push(*program % 8);
+                encode_short_u16(&mut bytes, accounts.len());
+                bytes.extend(accounts.iter().map(|a| a % 8));
+                encode_short_u16(&mut bytes, 0);
+            }
+            let message = LegacyMessage::deserialize(&bytes).unwrap();
+            let _ = message.decompile();
+            let _ = Transaction::from_message(&message);
+        }
+
+        #[test]
+        fn shortvec_round_trips(value in 0usize..=u16::MAX as usize) {
+            let mut out = Vec::new();
+            encode_short_u16(&mut out, value);
+            let mut cursor = Cursor { data: &out, pos: 0 };
+            proptest::prop_assert_eq!(cursor.short_u16().unwrap(), value);
+            proptest::prop_assert_eq!(cursor.pos, out.len());
+        }
+
+        #[test]
+        fn compiled_messages_round_trip(
+            seeds in proptest::collection::vec((1u8..=250, proptest::bool::ANY, proptest::bool::ANY), 1..12),
+            data in proptest::collection::vec(proptest::num::u8::ANY, 0..64),
+        ) {
+            let payer = Address([255; 32]);
+            let program = Address([254; 32]);
+            let accounts = seeds
+                .iter()
+                .map(|(seed, signer, writable)| AccountMeta { address: Address([*seed; 32]), signer: *signer, writable: *writable })
+                .collect();
+            let ix = Instruction { program_id: program, accounts, data };
+            let message = LegacyMessage::compile(&payer, &Address([7; 32]), std::slice::from_ref(&ix)).unwrap();
+            let decoded = LegacyMessage::deserialize(&message.serialize()).unwrap();
+            proptest::prop_assert_eq!(&decoded, &message);
+            let decompiled = decoded.decompile().unwrap();
+            proptest::prop_assert_eq!(decompiled.len(), 1);
+            proptest::prop_assert_eq!(decompiled[0].program_id, program);
+            proptest::prop_assert_eq!(&decompiled[0].data, &ix.data);
+            for (meta, original) in decompiled[0].accounts.iter().zip(&ix.accounts) {
+                proptest::prop_assert_eq!(meta.address, original.address);
+                // Roles merge across duplicate accounts, so they can only be promoted.
+                proptest::prop_assert!(meta.signer >= original.signer && meta.writable >= original.writable);
+            }
+            let tx = Transaction::from_message(&decoded);
+            proptest::prop_assert_eq!(Transaction::decode(&tx.encode()).unwrap(), tx);
+        }
     }
 
     #[test]

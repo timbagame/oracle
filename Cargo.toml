@@ -38,6 +38,7 @@ tower = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
+proptest = { version = "1.12", default-features = false, features = ["std"] }
 
 [profile.release]
 lto = "thin"

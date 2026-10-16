@@ -3886,6 +3886,7 @@ dependencies = [
  "bs58",
  "curve25519-dalek",
  "hex",
+ "proptest",
  "regex",
  "serde",
  "serde_json",
