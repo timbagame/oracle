@@ -200,8 +200,7 @@ mod tests {
     /// Runs `body` with exactly `vars` set among the configuration keys,
     /// restoring the previous environment afterwards.
     fn with_env<R>(vars: &[(&str, &str)], body: impl FnOnce() -> R) -> R {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::env_test_lock();
         let saved: Vec<(&str, Option<String>)> = KEYS.iter().map(|k| (*k, std::env::var(k).ok())).collect();
         for key in KEYS {
             std::env::remove_var(key);

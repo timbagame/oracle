@@ -413,7 +413,10 @@ fn signature_of(byte: u8) -> String {
 }
 
 #[tokio::test]
+// The current-thread test runtime has no other task contending for the lock.
+#[allow(clippy::await_holding_lock)]
 async fn verification_serves_a_previously_verified_game_with_an_immutable_cache_policy() {
+    let _env = crate::env_test_lock();
     let (rpc, transport) = rpc_for(&empty_chain());
     let harness = Harness::new(oracle(rpc), ContractVersion::V0_2_0);
     let signature = signature_of(9);
@@ -430,7 +433,10 @@ async fn verification_serves_a_previously_verified_game_with_an_immutable_cache_
 }
 
 #[tokio::test]
+// The current-thread test runtime has no other task contending for the lock.
+#[allow(clippy::await_holding_lock)]
 async fn verification_reports_an_unavailable_service_when_the_chain_lookup_fails() {
+    let _env = crate::env_test_lock();
     let (rpc, _) = rpc_for(&empty_chain());
     let harness = Harness::new(oracle(rpc), ContractVersion::V0_2_0);
     let signature = signature_of(9);
@@ -453,6 +459,7 @@ async fn verification_reports_an_unavailable_service_when_the_chain_lookup_fails
 
 #[test]
 fn the_verification_namespace_hashes_the_configured_network() {
+    let _env = crate::env_test_lock();
     let namespace = verification_namespace(&PROGRAM_ID);
     let (hash, program) = namespace.split_once(':').unwrap();
     assert_eq!(program, PROGRAM_ID.to_base58());
