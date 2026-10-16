@@ -1302,7 +1302,12 @@ impl OracleService {
             let (Some(service), result, address) = (weak.upgrade(), result.clone(), game_address.clone()) else {
                 return;
             };
+            // Counted as a run so `close()` waits for it: CLI commands exit right
+            // after closing, and Bun likewise let pending notifications finish.
+            service.active_runs.send_modify(|n| *n += 1);
+            let guard = RunGuard(service.clone());
             tokio::spawn(async move {
+                let _guard = guard;
                 if let Err(err) = service.notify_bot_of_completion(&address, &result).await {
                     warn!("Failed to notify bot of completion: {err:#}");
                 }
@@ -1904,6 +1909,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn close_waits_for_bot_notifications() {
+        // The bot answers slowly; `close()` must not return before it is told.
+        let (tx, mut bodies) = tokio::sync::mpsc::unbounded_channel();
+        let app = axum::Router::new().route(
+            BOT_COMPLETED_PATH,
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+                let tx = tx.clone();
+                async move {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    tx.send(body).unwrap();
+                    axum::http::StatusCode::OK
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut config = OracleConfig::for_tests();
+        config.bot_internal_url = Some(url);
+        let h = harness_with(config, Keypair::generate(), &["https://a"]);
+        let (game, _) = ready_game(&h);
+
+        assert!(h.service.complete_game_now(&game).await.unwrap().success);
+        h.service.close().await;
+        assert_eq!(bodies.try_recv().unwrap()["gameAddress"], game.as_str());
+    }
+
+    #[tokio::test]
     async fn bot_notification_failures() {
         let (url, mut bodies) = bot_server(500).await;
         let mut config = OracleConfig::for_tests();
@@ -2122,7 +2155,9 @@ mod tests {
         );
         assert_eq!(attempt.await, None);
         assert!(!h.service.retries.lock().unwrap().contains_key(&game), "retry entry released");
-        assert_eq!(*h.service.active_runs.borrow(), 0);
+        // Only the bot notification spawned before the panic may still be counted.
+        let mut runs = h.service.active_runs.subscribe();
+        tokio::time::timeout(Duration::from_secs(5), runs.wait_for(|n| *n == 0)).await.unwrap().unwrap();
         assert_eq!(h.service.db.get_completion_attempt_state(&game).unwrap().completion_attempts, 1);
     }
 
