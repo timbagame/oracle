@@ -237,7 +237,9 @@ async fn dispatch(State(state): State<Arc<AppState>>, request: Request) -> Respo
 
     let is_indexer = path == "/indexer" || path.starts_with("/indexer/");
     let is_web = path.starts_with("/web/");
-    if PROTECTED_ROUTES.contains(&path.as_str()) || is_indexer || is_web {
+    // Admin routes exist only for tests and the CLI, but still require the token.
+    let is_admin = state.options.enable_admin_routes && ADMIN_ROUTES.iter().any(|r| r.doc.path == path);
+    if PROTECTED_ROUTES.contains(&path.as_str()) || is_indexer || is_web || is_admin {
         if let Some(token) = &state.options.api_token {
             let authorization = request.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok());
             if token.is_empty() || !has_valid_bearer_token(authorization, token) {

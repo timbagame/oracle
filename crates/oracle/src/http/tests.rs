@@ -210,6 +210,16 @@ async fn complete_now_statuses() {
 }
 
 #[tokio::test]
+async fn admin_routes_require_the_token() {
+    let app = app(Arc::default(), true);
+    let body = format!(r#"{{"gameAddress":"{GAME}"}}"#);
+    for path in ["/games/requeue", "/games/auto-complete"] {
+        let (status, _, _) = call(&app, "POST", path, Some(&body), false).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");
+    }
+}
+
+#[tokio::test]
 async fn admin_routes_are_disabled_by_default() {
     let body = format!(r#"{{"gameAddress":"{GAME}"}}"#);
     let (status, _, _) = call(&app(Arc::default(), false), "POST", "/games/requeue", Some(&body), false).await;
@@ -217,13 +227,13 @@ async fn admin_routes_are_disabled_by_default() {
 
     let oracle = Arc::new(FakeOracle::default());
     let app = app(oracle.clone(), true);
-    let (status, json, _) = call(&app, "POST", "/games/requeue", Some(&body), false).await;
+    let (status, json, _) = call(&app, "POST", "/games/requeue", Some(&body), true).await;
     assert_eq!((status, json["status"].clone()), (StatusCode::OK, json!("queued")));
     *oracle.requeue.lock().unwrap() = Some(RequeueFailure::MissingSecret);
-    let (status, json, _) = call(&app, "POST", "/games/requeue", Some(&body), false).await;
+    let (status, json, _) = call(&app, "POST", "/games/requeue", Some(&body), true).await;
     assert_eq!((status, json["error"].clone()), (StatusCode::CONFLICT, json!("Game is missing its secret key")));
     let toggle = format!(r#"{{"gameAddress":"{GAME}","autoCompleteDisabled":false}}"#);
-    let (status, json, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), false).await;
+    let (status, json, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), true).await;
     assert_eq!(
         (status, json["error"].clone()),
         (StatusCode::CONFLICT, json!("Auto-complete is already set to the requested value"))
@@ -344,7 +354,7 @@ async fn requeue_maps_every_failure() {
     let oracle = Arc::new(FakeOracle::default());
     let app = app(oracle.clone(), true);
     let body = format!(r#"{{"gameAddress":" {GAME} "}}"#);
-    let (status, json, _) = call(&app, "POST", "/games/requeue", Some(&body), false).await;
+    let (status, json, _) = call(&app, "POST", "/games/requeue", Some(&body), true).await;
     assert_eq!((status, json["gameAddress"].clone()), (StatusCode::OK, json!(GAME)), "addresses are trimmed");
     for (reason, status, message) in [
         (RequeueFailure::InvalidAddress, StatusCode::BAD_REQUEST, "gameAddress is required"),
@@ -353,15 +363,15 @@ async fn requeue_maps_every_failure() {
         (RequeueFailure::Unchanged, StatusCode::CONFLICT, "Game is already queued for completion"),
     ] {
         *oracle.requeue.lock().unwrap() = Some(reason);
-        let (actual, json, _) = call(&app, "POST", "/games/requeue", Some(&body), false).await;
+        let (actual, json, _) = call(&app, "POST", "/games/requeue", Some(&body), true).await;
         assert_eq!(actual, status, "{reason:?}");
         assert_eq!(json["error"], message, "{reason:?}");
     }
     for bad in [r#"{}"#, r#"{"gameAddress":"  "}"#, r#"{"gameAddress":1}"#] {
-        let (status, json, _) = call(&app, "POST", "/games/requeue", Some(bad), false).await;
+        let (status, json, _) = call(&app, "POST", "/games/requeue", Some(bad), true).await;
         assert_eq!((status, json["error"].clone()), (StatusCode::BAD_REQUEST, json!("gameAddress is required")));
     }
-    let (status, _, _) = call(&app, "POST", "/games/requeue", Some("{"), false).await;
+    let (status, _, _) = call(&app, "POST", "/games/requeue", Some("{"), true).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
@@ -370,7 +380,7 @@ async fn toggle_auto_complete_maps_every_outcome() {
     let oracle = Arc::new(FakeOracle::default());
     let app = app(oracle.clone(), true);
     let toggle = format!(r#"{{"gameAddress":"{GAME}","autoCompleteDisabled":true}}"#);
-    let (status, json, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), false).await;
+    let (status, json, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), true).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["autoCompleteDisabled"], true);
     assert_eq!(json["gameAddress"], GAME);
@@ -381,23 +391,23 @@ async fn toggle_auto_complete_maps_every_outcome() {
         (ToggleFailure::Finalized, StatusCode::CONFLICT, "Game is already finalized"),
     ] {
         *oracle.toggle.lock().unwrap() = Some(Ok(Err(reason)));
-        let (actual, json, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), false).await;
+        let (actual, json, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), true).await;
         assert_eq!((actual, json["error"].clone()), (status, json!(message)), "{reason:?}");
     }
     *oracle.toggle.lock().unwrap() = Some(Err(anyhow::anyhow!("database is closed")));
-    let (status, json, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), false).await;
+    let (status, json, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), true).await;
     assert_eq!((status, json["error"].clone()), (StatusCode::INTERNAL_SERVER_ERROR, json!("Internal server error")));
 
     let missing_flag = format!(r#"{{"gameAddress":"{GAME}","autoCompleteDisabled":"yes"}}"#);
-    let (status, json, _) = call(&app, "POST", "/games/auto-complete", Some(&missing_flag), false).await;
+    let (status, json, _) = call(&app, "POST", "/games/auto-complete", Some(&missing_flag), true).await;
     assert_eq!(
         (status, json["error"].clone()),
         (StatusCode::BAD_REQUEST, json!("autoCompleteDisabled must be a boolean"))
     );
     let (status, json, _) =
-        call(&app, "POST", "/games/auto-complete", Some(r#"{"autoCompleteDisabled":true}"#), false).await;
+        call(&app, "POST", "/games/auto-complete", Some(r#"{"autoCompleteDisabled":true}"#), true).await;
     assert_eq!((status, json["error"].clone()), (StatusCode::BAD_REQUEST, json!("gameAddress is required")));
-    let (status, _, _) = call(&app, "POST", "/games/auto-complete", Some("{"), false).await;
+    let (status, _, _) = call(&app, "POST", "/games/auto-complete", Some("{"), true).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
@@ -506,10 +516,10 @@ mod service_api {
         assert_eq!((status, body["error"].clone()), (StatusCode::BAD_REQUEST, json!("Invalid game transaction")));
 
         let requeue = format!(r#"{{"gameAddress":"{GAME}"}}"#);
-        let (status, _, _) = call(&app, "POST", "/games/requeue", Some(&requeue), false).await;
+        let (status, _, _) = call(&app, "POST", "/games/requeue", Some(&requeue), true).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         let toggle = format!(r#"{{"gameAddress":"{game}","autoCompleteDisabled":true}}"#);
-        let (status, body, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), false).await;
+        let (status, body, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), true).await;
         assert_eq!((status, body["autoCompleteDisabled"].clone()), (StatusCode::OK, json!(true)));
 
         // Disabled games are skipped by the background wake-up.
