@@ -129,9 +129,10 @@ configured by `EVM_CONFIG_FILE`; its API is documented in
 Configure via environment variables in `.env`:
 
 ```bash
-# Required: Solana network endpoints (JSON array or comma-separated list); the oracle walks
-# the ordered set automatically when it encounters transient RPC failures.
-SOLANA_NETWORK=["https://api.mainnet-beta.solana.com","https://rpc-backup.example.com"]
+# Required: Solana network endpoints (comma-separated list or JSON array); the oracle walks
+# the ordered set automatically when it encounters transient RPC failures. Single-quote a
+# JSON array ('["https://a","https://b"]'): `. ./.env` strips unquoted double quotes.
+SOLANA_NETWORK=https://api.mainnet-beta.solana.com,https://rpc-backup.example.com
 # Optional: add rebate-address to Helius sendTransaction requests on every endpoint.
 HELIUS_REBATE_ADDRESS=
 
