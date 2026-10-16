@@ -12,15 +12,15 @@ use alloy_sol_types::{SolCall, SolValue};
 use futures::future::BoxFuture;
 use serde_json::{json, Value};
 use timba_evm_oracle::config::EvmConfig;
-use timba_evm_oracle::protocol::abi::{
-    completeGameCall, configCall, configReturn, creationNoncesCall, getGameCall, ownerCall, CreateRequest, Game,
-};
-use timba_evm_oracle::protocol::client::creation_digest;
-use timba_evm_oracle::protocol::schema::{parse_address, EvmToken};
 use timba_evm_oracle::rpc::{quantity, RpcError, Transport};
 use timba_evm_oracle::service::EvmService;
 use timba_evm_oracle::store::EvmStore;
 use timba_evm_oracle::wallet::OperatorWallet;
+use timba_protocol::evm::abi::{
+    completeGameCall, configCall, configReturn, creationNoncesCall, getGameCall, ownerCall, CreateRequest, Game,
+};
+use timba_protocol::evm::client::creation_digest;
+use timba_protocol::evm::schema::{parse_address, EvmToken};
 
 pub const OPERATOR_KEY: B256 = B256::with_last_byte(1);
 pub const CREATOR_KEY: B256 = B256::with_last_byte(2);

@@ -9,20 +9,20 @@ use rand::Rng;
 use serde_json::{json, Value};
 
 use crate::config::{token_policy, EvmConfig};
-use crate::protocol::abi::{
-    completeGameCall, configCall, configReturn, creationNoncesCall, getGameCall, ownerCall, CreateRequest, Game,
-};
-use crate::protocol::client::{
-    commitment_for, complete_game_transaction, creation_digest, game_id_for, private_join_digest, EvmDeployment,
-};
-use crate::protocol::events::{decode_evm_game_event, EvmLog};
-use crate::protocol::games::{
-    game_lifecycle, observe_evm_game, transaction_progress, ActionProgress, EvmGameReference, ReceiptProgress,
-};
-use crate::protocol::schema::{parse_bytes32, parse_intent, parse_private_join, parse_uint};
 use crate::rpc::{contract_error, is_contract_revert, CallRequest, FallbackTransport, PublicClient, Transport};
 use crate::store::{EvmStore, IndexedEvent, PendingTransaction, StoredGame};
 use crate::wallet::{estimate_fees, fill_transaction, OperatorWallet, PreparedTransaction};
+use timba_protocol::evm::abi::{
+    completeGameCall, configCall, configReturn, creationNoncesCall, getGameCall, ownerCall, CreateRequest, Game,
+};
+use timba_protocol::evm::client::{
+    complete_game_transaction, creation_digest, game_id_for, private_join_digest, EvmDeployment,
+};
+use timba_protocol::evm::events::{decode_evm_game_event, EvmLog};
+use timba_protocol::evm::games::{observe_evm_game, EvmGameReference};
+use timba_protocol::evm::randomness::commitment_for;
+use timba_protocol::evm::schema::{parse_bytes32, parse_intent, parse_private_join, parse_uint};
+use timba_protocol::games::{game_lifecycle, transaction_progress, ActionProgress, ReceiptProgress};
 
 /// Milliseconds since the epoch (`Date.now`), injectable for tests.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;

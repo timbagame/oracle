@@ -13,9 +13,9 @@ use common::*;
 use serde_json::{json, Value};
 use timba_common::Shutdown;
 use timba_evm_oracle::app;
-use timba_evm_oracle::protocol::abi::ownerCall;
 use timba_evm_oracle::rpc::{is_contract_revert, FallbackTransport, PublicClient, RpcError, Transport};
 use timba_evm_oracle::server::CYCLE_FAILED_MESSAGE;
+use timba_protocol::evm::abi::ownerCall;
 
 /// Serves `chain` as a JSON-RPC endpoint and returns its URL.
 async fn rpc_endpoint(chain: Arc<FakeChain>) -> String {

@@ -8,10 +8,10 @@ use std::sync::Arc;
 use timba_common::Shutdown;
 
 use crate::config::{load_config, load_secret};
-use crate::protocol::schema::parse_bytes32;
 use crate::server::{create_evm_router, CYCLE_FAILED_MESSAGE};
 use crate::service::EvmService;
 use crate::store::EvmStore;
+use timba_protocol::evm::schema::parse_bytes32;
 
 /// Failed cycles are reported at most once per minute.
 const WARNING_INTERVAL_MS: i64 = 60_000;

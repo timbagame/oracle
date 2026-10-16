@@ -2,9 +2,9 @@
 //! of authorized games and a canonical event index for one configured deployment.
 
 pub mod app;
+pub mod bytecode;
 pub mod config;
 pub mod erc8010;
-pub mod protocol;
 pub mod rpc;
 pub mod server;
 pub mod service;

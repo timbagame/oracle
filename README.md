@@ -305,7 +305,6 @@ This prevents normal "not ready" states from being reported as errors in logs an
 
 ```
 crates/
-├── protocol/    # timba-protocol: Solana codecs, contract accounts/instructions, shared schemas
 ├── common/      # timba-common: logging, env/secret helpers, shutdown signal
 ├── oracle/      # timba-oracle: oracle service, HTTP API, indexer, web API, CLI
 │   └── src/

@@ -5,8 +5,8 @@ use std::path::Path;
 use alloy_primitives::Address;
 use serde_json::Value;
 
-use crate::protocol::client::{EvmDeployment, EVM_CONTRACT_VERSION};
-use crate::protocol::schema::{
+use timba_protocol::evm::client::{EvmDeployment, EVM_CONTRACT_VERSION};
+use timba_protocol::evm::schema::{
     self, address, fail, integer, join, required, strict_object, string, EvmToken, SchemaError, SchemaResult,
     MAX_SAFE_INTEGER,
 };
