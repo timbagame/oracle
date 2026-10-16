@@ -4,6 +4,8 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -86,12 +88,20 @@ struct AutoCompleteState {
 
 #[derive(Default)]
 struct RegistryEntry {
+    /// Identifies this entry, so loops and timers left over from a cleared
+    /// entry never act on a newer one for the same game.
+    id: u64,
     queue: VecDeque<RegistrySyncRequest>,
     running: bool,
     timer: Option<JoinHandle<()>>,
     retry_pending: Option<RegistrySyncRequest>,
     timer_pending: bool,
+    failures: u32,
 }
+
+/// Consecutive failed syncs before giving up on a game; completion-time
+/// recovery still reconciles it. Each attempt can cost thousands of RPC calls.
+const MAX_REGISTRY_SYNC_FAILURES: u32 = 10;
 
 #[derive(Default)]
 struct ListenState {
@@ -137,6 +147,7 @@ pub struct EventProcessor {
     buffers: Mutex<HashMap<String, PlayerBuffer>>,
     auto_completes: Mutex<HashMap<String, AutoCompleteState>>,
     registry: Mutex<HashMap<String, RegistryEntry>>,
+    next_registry_id: AtomicU64,
     observers: Mutex<Vec<(u64, ProgramEventObserver)>>,
     next_observer: Mutex<u64>,
 }
@@ -159,6 +170,7 @@ impl EventProcessor {
             buffers: Mutex::new(HashMap::new()),
             auto_completes: Mutex::new(HashMap::new()),
             registry: Mutex::new(HashMap::new()),
+            next_registry_id: AtomicU64::new(1),
             observers: Mutex::new(Vec::new()),
             next_observer: Mutex::new(1),
         })
@@ -612,7 +624,12 @@ impl EventProcessor {
                 (entry.game_key, entry.trigger.clone().unwrap_or_else(|| "batch".into()))
             };
             if let Some(hooks) = self.hooks.upgrade() {
-                hooks.try_auto_complete(game_key, game.to_string(), trigger).await;
+                // A panic must not leave `running` set, which would ignore every
+                // later event for the game.
+                let attempt = AssertUnwindSafe(hooks.try_auto_complete(game_key, game.to_string(), trigger));
+                if attempt.catch_unwind().await.is_err() {
+                    error!("Auto-complete for {game} panicked");
+                }
             }
             let mut states = self.auto_completes.lock().unwrap();
             let Some(entry) = states.get_mut(game) else { return };
@@ -652,7 +669,15 @@ impl EventProcessor {
     pub fn schedule_registry_sync(self: &Arc<Self>, request: RegistrySyncRequest) {
         let game = request.game_address.clone();
         let mut entries = self.registry.lock().unwrap();
-        let entry = entries.entry(game.clone()).or_default();
+        let entry = entries.entry(game.clone()).or_insert_with(|| RegistryEntry {
+            id: self.next_registry_id.fetch_add(1, Ordering::Relaxed),
+            queue: VecDeque::new(),
+            running: false,
+            timer: None,
+            retry_pending: None,
+            timer_pending: false,
+            failures: 0,
+        });
         if entry.timer_pending {
             if let Some(pending) = entry.retry_pending.take() {
                 entry.retry_pending = Some(merge_requests(pending, request));
@@ -666,43 +691,59 @@ impl EventProcessor {
         if entry.running {
             return;
         }
-        let processor = self.clone();
-        tokio::spawn(async move { processor.process_registry_queue(game).await });
+        entry.running = true;
+        let (processor, id) = (self.clone(), entry.id);
+        tokio::spawn(async move { processor.process_registry_queue(game, id).await });
     }
 
     pub fn has_pending_registry_sync(&self, game: &str) -> bool {
         self.registry.lock().unwrap().contains_key(game)
     }
 
-    fn process_registry_queue(self: Arc<Self>, game: String) -> BoxFuture<'static, ()> {
+    /// Drops queued and scheduled registry syncs for a finalized game.
+    pub fn cancel_registry_sync(&self, game: &str) {
+        if let Some(entry) = self.registry.lock().unwrap().remove(game) {
+            cancel_timer(entry.timer);
+        }
+    }
+
+    /// Drains the game's queue. The caller has already marked the entry as
+    /// running; "queue empty" and "not running" flip under one lock so a request
+    /// scheduled in between always finds a worker.
+    fn process_registry_queue(self: Arc<Self>, game: String, id: u64) -> BoxFuture<'static, ()> {
         async move {
-            {
-                let mut entries = self.registry.lock().unwrap();
-                let Some(entry) = entries.get_mut(&game) else { return };
-                if entry.running {
-                    return;
-                }
-                entry.running = true;
-            }
             loop {
                 let next = {
                     let mut entries = self.registry.lock().unwrap();
-                    let Some(entry) = entries.get_mut(&game) else { return };
-                    entry.queue.pop_front()
+                    let Some(entry) = entries.get_mut(&game).filter(|e| e.id == id) else { return };
+                    match entry.queue.pop_front() {
+                        Some(next) => next,
+                        None => {
+                            entry.running = false;
+                            if entry.retry_pending.is_none() && entry.timer.is_none() {
+                                entries.remove(&game);
+                            }
+                            return;
+                        }
+                    }
                 };
-                let Some(next) = next else { break };
                 let success = match self.hooks.upgrade() {
                     Some(hooks) => {
-                        let sync = hooks.sync_player_registry(next.clone());
-                        if self.registry_timeout_ms == 0 {
-                            sync.await
+                        let sync = AssertUnwindSafe(hooks.sync_player_registry(next.clone())).catch_unwind();
+                        let outcome = if self.registry_timeout_ms == 0 {
+                            Ok(sync.await)
                         } else {
-                            match tokio::time::timeout(Duration::from_millis(self.registry_timeout_ms), sync).await {
-                                Ok(success) => success,
-                                Err(_) => {
-                                    warn!("Registry sync failed or timed out for {game}: Registry sync timeout");
-                                    false
-                                }
+                            tokio::time::timeout(Duration::from_millis(self.registry_timeout_ms), sync).await
+                        };
+                        match outcome {
+                            Ok(Ok(success)) => success,
+                            Ok(Err(_)) => {
+                                error!("Registry sync panicked for {game}");
+                                false
+                            }
+                            Err(_) => {
+                                warn!("Registry sync failed or timed out for {game}: Registry sync timeout");
+                                false
                             }
                         }
                     }
@@ -710,40 +751,50 @@ impl EventProcessor {
                 };
 
                 let mut entries = self.registry.lock().unwrap();
-                let Some(entry) = entries.get_mut(&game) else { return };
-                if !success {
-                    entry.running = false;
-                    entry.timer_pending = true;
-                    let processor = self.clone();
-                    let address = game.clone();
-                    let delay = self.registry_retry_delay_ms;
-                    entry.timer = Some(tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_millis(delay)).await;
-                        {
-                            let mut entries = processor.registry.lock().unwrap();
-                            let Some(current) = entries.get_mut(&address) else { return };
-                            current.timer_pending = false;
-                            current.timer = None;
-                            if let Some(pending) = current.retry_pending.take() {
-                                current.queue.push_front(pending);
-                            }
-                        }
-                        processor.process_registry_queue(address).await;
-                    }));
-                    entry.retry_pending = Some(match entry.retry_pending.take() {
-                        Some(pending) => merge_requests(pending, next),
-                        None => next,
-                    });
+                let Some(entry) = entries.get_mut(&game).filter(|e| e.id == id) else { return };
+                if success {
+                    entry.failures = 0;
+                    cancel_timer(entry.timer.take());
+                    continue;
+                }
+                entry.failures += 1;
+                if entry.failures >= MAX_REGISTRY_SYNC_FAILURES {
+                    warn!(
+                        "Giving up registry sync for {game} after {} failures; completion will reconcile it",
+                        entry.failures
+                    );
+                    if let Some(entry) = entries.remove(&game) {
+                        cancel_timer(entry.timer);
+                    }
                     return;
                 }
-                cancel_timer(entry.timer.take());
-            }
-            let mut entries = self.registry.lock().unwrap();
-            if let Some(entry) = entries.get_mut(&game) {
                 entry.running = false;
-                if entry.retry_pending.is_none() && entry.queue.is_empty() && entry.timer.is_none() {
-                    entries.remove(&game);
-                }
+                entry.timer_pending = true;
+                entry.retry_pending = Some(match entry.retry_pending.take() {
+                    Some(pending) => merge_requests(pending, next),
+                    None => next,
+                });
+                let processor = self.clone();
+                let address = game.clone();
+                let delay = self.registry_retry_delay_ms;
+                entry.timer = Some(tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    {
+                        let mut entries = processor.registry.lock().unwrap();
+                        let Some(current) = entries.get_mut(&address).filter(|e| e.id == id) else { return };
+                        current.timer_pending = false;
+                        current.timer = None;
+                        if let Some(pending) = current.retry_pending.take() {
+                            current.queue.push_front(pending);
+                        }
+                        if current.running {
+                            return;
+                        }
+                        current.running = true;
+                    }
+                    processor.process_registry_queue(address, id).await;
+                }));
+                return;
             }
         }
         .boxed()
@@ -779,6 +830,9 @@ mod tests {
         syncs: Mutex<Vec<RegistrySyncRequest>>,
         finalized: Mutex<Vec<String>>,
         fail_syncs: AtomicUsize,
+        panic_syncs: AtomicUsize,
+        hold_syncs: std::sync::atomic::AtomicBool,
+        release: Arc<tokio::sync::Notify>,
     }
 
     impl EventHooks for RecordingHooks {
@@ -788,8 +842,18 @@ mod tests {
         }
         fn sync_player_registry(&self, request: RegistrySyncRequest) -> BoxFuture<'static, bool> {
             self.syncs.lock().unwrap().push(request);
+            if self.panic_syncs.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok() {
+                return async { panic!("simulated registry sync bug") }.boxed();
+            }
             let fail = self.fail_syncs.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok();
-            async move { !fail }.boxed()
+            let hold = self.hold_syncs.load(Ordering::SeqCst).then(|| self.release.clone());
+            async move {
+                if let Some(release) = hold {
+                    release.notified().await;
+                }
+                !fail
+            }
+            .boxed()
         }
         fn on_game_finalized(&self, game: &str) {
             self.finalized.lock().unwrap().push(game.to_string());
@@ -926,5 +990,112 @@ mod tests {
         });
         assert_eq!(h.db.get_game_status(&game()).as_deref(), Some("pending"));
         assert!(h.db.get_game_type(&game()).is_some());
+    }
+
+    fn sync_request(game: &str, trigger: &str) -> RegistrySyncRequest {
+        RegistrySyncRequest {
+            game_address: game.into(),
+            expected_tickets: Some(3),
+            trigger: trigger.into(),
+            game_key: None,
+        }
+    }
+
+    async fn wait_until(mut done: impl FnMut() -> bool) {
+        for _ in 0..400 {
+            if done() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("condition not reached");
+    }
+
+    #[tokio::test]
+    async fn gives_up_after_repeated_registry_sync_failures() {
+        let h = harness(0);
+        h.hooks.fail_syncs.store(usize::MAX, Ordering::SeqCst);
+        h.processor.schedule_registry_sync(sync_request(&game(), "player joined"));
+        wait_until(|| !h.processor.has_pending_registry_sync(&game())).await;
+        settle().await;
+        assert_eq!(h.hooks.syncs.lock().unwrap().len(), MAX_REGISTRY_SYNC_FAILURES as usize);
+    }
+
+    #[tokio::test]
+    async fn a_panicking_registry_sync_is_retried() {
+        let h = harness(0);
+        h.hooks.panic_syncs.store(1, Ordering::SeqCst);
+        h.processor.schedule_registry_sync(sync_request(&game(), "player joined"));
+        wait_until(|| !h.processor.has_pending_registry_sync(&game())).await;
+        assert_eq!(h.hooks.syncs.lock().unwrap().len(), 2, "the panic counts as a failure and is retried");
+    }
+
+    #[tokio::test]
+    async fn cancelling_drops_scheduled_retries() {
+        let h = harness(0);
+        h.hooks.fail_syncs.store(usize::MAX, Ordering::SeqCst);
+        h.processor.schedule_registry_sync(sync_request(&game(), "player joined"));
+        wait_until(|| !h.hooks.syncs.lock().unwrap().is_empty()).await;
+        h.processor.cancel_registry_sync(&game());
+        assert!(!h.processor.has_pending_registry_sync(&game()));
+        let calls = h.hooks.syncs.lock().unwrap().len();
+        settle().await;
+        assert_eq!(h.hooks.syncs.lock().unwrap().len(), calls, "no retry after cancel");
+        h.processor.cancel_registry_sync(&game());
+    }
+
+    #[tokio::test]
+    async fn requests_during_a_running_sync_are_merged_and_run_next() {
+        let h = harness(0);
+        h.hooks.hold_syncs.store(true, Ordering::SeqCst);
+        h.processor.schedule_registry_sync(sync_request(&game(), "first"));
+        wait_until(|| h.hooks.syncs.lock().unwrap().len() == 1).await;
+        h.processor.schedule_registry_sync(sync_request(&game(), "second"));
+        h.processor.schedule_registry_sync(sync_request(&game(), "third"));
+        h.hooks.hold_syncs.store(false, Ordering::SeqCst);
+        h.hooks.release.notify_one();
+        wait_until(|| !h.processor.has_pending_registry_sync(&game())).await;
+        let triggers: Vec<String> = h.hooks.syncs.lock().unwrap().iter().map(|r| r.trigger.clone()).collect();
+        assert_eq!(triggers, vec!["first".to_string(), "third".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_loop_from_a_cleared_entry_leaves_the_new_entry_alone() {
+        let h = harness(0);
+        h.hooks.hold_syncs.store(true, Ordering::SeqCst);
+        h.processor.schedule_registry_sync(sync_request(&game(), "old"));
+        wait_until(|| h.hooks.syncs.lock().unwrap().len() == 1).await;
+        // RPC failover clears every sync while the old one is still in flight.
+        h.processor.clear_registry_syncs();
+        h.processor.schedule_registry_sync(sync_request(&game(), "new"));
+        wait_until(|| h.hooks.syncs.lock().unwrap().len() == 2).await;
+        h.hooks.hold_syncs.store(false, Ordering::SeqCst);
+        h.hooks.release.notify_waiters();
+        wait_until(|| !h.processor.has_pending_registry_sync(&game())).await;
+        settle().await;
+        let triggers: Vec<String> = h.hooks.syncs.lock().unwrap().iter().map(|r| r.trigger.clone()).collect();
+        assert_eq!(triggers, vec!["old".to_string(), "new".to_string()], "each request ran exactly once");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_requests_are_never_stranded() {
+        for round in 0..50 {
+            let h = harness(0);
+            let game = Address([round as u8; 32]).to_base58();
+            let threads: Vec<_> = (0..4)
+                .map(|i| {
+                    let (processor, game) = (h.processor.clone(), game.clone());
+                    let runtime = tokio::runtime::Handle::current();
+                    std::thread::spawn(move || {
+                        let _enter = runtime.enter();
+                        for j in 0..10 {
+                            processor.schedule_registry_sync(sync_request(&game, &format!("{i}-{j}")));
+                        }
+                    })
+                })
+                .collect();
+            threads.into_iter().for_each(|t| t.join().unwrap());
+            wait_until(|| !h.processor.has_pending_registry_sync(&game)).await;
+        }
     }
 }

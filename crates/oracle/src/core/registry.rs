@@ -138,7 +138,10 @@ impl PlayerRegistrySync {
                 async move {
                     match self.rpc.get_transaction(&signature).await {
                         Ok(transaction) => {
-                            let logs = transaction.map(|t| t.log_messages).unwrap_or_default();
+                            // A failed transaction still logs events from instructions that
+                            // ran before the failure; replaying them corrupts the roster.
+                            let logs =
+                                transaction.filter(|t| t.err.is_none()).map(|t| t.log_messages).unwrap_or_default();
                             parse_registry_events(&logs, &signature, slot, &program_id).unwrap_or_else(|message| {
                                 warn!("Failed to fetch transaction {signature}: {message}");
                                 Vec::new()
@@ -192,7 +195,7 @@ impl PlayerRegistrySync {
             }
             let page_len = page.len();
             before = page.last().map(|s| s.signature.clone());
-            collected.extend(page.into_iter().map(|s| (s.signature, s.slot)));
+            collected.extend(page.into_iter().filter(|s| s.err.is_none()).map(|s| (s.signature, s.slot)));
             if page_len < limit {
                 break;
             }
@@ -354,6 +357,15 @@ impl RegistrySyncManager {
         if !self.attempted_recovery.lock().unwrap().insert(game_address.to_string()) {
             return None;
         }
+        // Released even if the completion future is dropped or panics mid-recovery;
+        // a stale marker would desync every later completion of the game.
+        struct Attempt<'a>(&'a Mutex<HashSet<String>>, &'a str);
+        impl Drop for Attempt<'_> {
+            fn drop(&mut self) {
+                self.0.lock().unwrap_or_else(|e| e.into_inner()).remove(self.1);
+            }
+        }
+        let attempt = Attempt(&self.attempted_recovery, game_address);
         let request = RecoverRequest {
             game_address: game_address.to_string(),
             context: context.clone(),
@@ -361,7 +373,7 @@ impl RegistrySyncManager {
             reason: "completion",
         };
         let outcome = recover(request).await;
-        self.attempted_recovery.lock().unwrap().remove(game_address);
+        drop(attempt);
         match outcome {
             Ok(Some(recovered)) if recovered.len() as i64 == expected_entries => {
                 if let Err(error) = self.db.replace_game_players(game_address, &recovered) {
@@ -508,6 +520,7 @@ mod tests {
     use base64::Engine;
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
     use timba_protocol::contracts::{GameAccount, GameType, PROGRAM_ID};
     use timba_protocol::events::discriminators;
 
@@ -612,6 +625,43 @@ mod tests {
         let (_, rpc) = chain(vec![("sig-1", Some(program_logs(&[joined(&game, &one, 1), joined(&game, &two, 2)])))]);
         let sync = PlayerRegistrySync::new(rpc, PROGRAM_ID);
         assert_eq!(sync.fetch_players_from_chain(&game, Some(2), None).await.unwrap(), Some(vec![one, two]));
+    }
+
+    #[tokio::test]
+    async fn ignores_events_from_failed_transactions() {
+        let game = Address([7; 32]);
+        let (one, two, three) = (key(), key(), key());
+        let transport = FakeTransport::new();
+        transport.on(|_, method, _| {
+            (method == "getSignaturesForAddress").then(|| {
+                Ok(json!([
+                    {"signature": "failed-signature", "slot": 9, "err": {"InstructionError": [1, "Custom"]}},
+                    {"signature": "failed-meta", "slot": 8, "err": null},
+                    {"signature": "joins", "slot": 7}
+                ]))
+            })
+        });
+        let (joins, late_join, unjoin) = (
+            program_logs(&[joined(&game, &one, 0), joined(&game, &two, 1)]),
+            program_logs(&[joined(&game, &three, 2)]),
+            program_logs(&[unjoined(&game, &two, 1, None)]),
+        );
+        transport.on(move |_, method, params| {
+            (method == "getTransaction").then(|| {
+                Ok(match params[0].as_str().unwrap() {
+                    "joins" => json!({"slot": 7, "meta": {"err": null, "logMessages": joins}}),
+                    // The join instruction ran, then a later instruction failed.
+                    "failed-meta" => json!({"slot": 8, "meta": {"err": {"InstructionError": [1, "Custom"]}, "logMessages": late_join}}),
+                    _ => json!({"slot": 9, "meta": {"err": null, "logMessages": unjoin}}),
+                })
+            })
+        });
+        let rpc = Arc::new(RpcPool::with_transport(&["https://a".into()], transport.clone()).unwrap());
+        let sync = PlayerRegistrySync::new(rpc, PROGRAM_ID);
+        assert_eq!(sync.fetch_players_from_chain(&game, Some(2), None).await.unwrap(), Some(vec![one, two]));
+        let fetched: Vec<String> =
+            transport.calls_for("getTransaction").iter().map(|(_, p)| p[0].as_str().unwrap().to_string()).collect();
+        assert!(!fetched.contains(&"failed-signature".to_string()), "{fetched:?}");
     }
 
     #[tokio::test]
@@ -1064,5 +1114,24 @@ mod tests {
         assert_eq!(h.calls.load(Ordering::SeqCst), 1);
         assert!(h.db.get_game_players("fails").is_empty());
         assert!(!h.manager.schedule.lock().unwrap().contains_key("fails"));
+    }
+
+    #[tokio::test]
+    async fn an_abandoned_recovery_does_not_block_the_next_one() {
+        let hang: Option<Box<dyn Fn(Arc<AtomicUsize>) -> RecoverPlayerRegistry>> = Some(Box::new(|calls| {
+            Arc::new(move |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                futures::future::pending().boxed()
+            })
+        }));
+        let h = manager_with(hang, None, 0);
+        track(&h, "g", &["p1"]);
+        let context = game_context();
+        let recovery = h.manager.try_recover_player_registry("g", &context, 2, 1);
+        assert!(tokio::time::timeout(Duration::from_millis(20), recovery).await.is_err());
+        // The dropped attempt released its marker, so a later completion retries.
+        let recovery = h.manager.try_recover_player_registry("g", &context, 2, 1);
+        assert!(tokio::time::timeout(Duration::from_millis(20), recovery).await.is_err());
+        assert_eq!(h.calls.load(Ordering::SeqCst), 2);
     }
 }

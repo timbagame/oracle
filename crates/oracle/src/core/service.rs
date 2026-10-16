@@ -1386,6 +1386,7 @@ impl EventHooks for OracleService {
 
     fn on_game_finalized(&self, game_address: &str) {
         self.cancel_completion_retry(game_address);
+        self.events.cancel_registry_sync(game_address);
         self.completion.reset_registry_prefetch_schedule(game_address);
     }
 }

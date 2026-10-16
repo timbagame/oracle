@@ -251,6 +251,15 @@ impl ScanLoopRunner {
         if self.running.swap(true, Ordering::SeqCst) {
             anyhow::bail!("Scan loop is already running");
         }
+        // Reset even when the loop future is dropped or panics; otherwise every later
+        // call fails with "already running".
+        struct Running<'a>(&'a AtomicBool);
+        impl Drop for Running<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+        let _running = Running(&self.running);
         let wait_between_cycles_ms = options.wait_between_cycles_ms.unwrap_or(DEFAULT_DELAY_MS);
         let signal = options.signal.as_ref();
         let should_abort = || aborted(signal) || !self.running.load(Ordering::SeqCst);
@@ -291,7 +300,6 @@ impl ScanLoopRunner {
                 break;
             }
         }
-        self.running.store(false, Ordering::SeqCst);
         Ok(summary)
     }
 
@@ -326,6 +334,7 @@ mod tests {
     use crate::core::types::{GameContext, Readiness};
     use crate::db::SecretKeyData;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     struct FakeCompletion {
         resolutions: Mutex<Vec<anyhow::Result<ReadinessResolution>>>,
@@ -464,5 +473,20 @@ mod tests {
         assert_eq!(summary.cycles, 3);
         assert_eq!(*calls.lock().unwrap(), 3);
         assert!(!runner.is_running());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_dropped_loop_can_be_started_again() {
+        let (_dir, _db, _completion, _metrics, runner) = setup(vec![], CompletionResult::default());
+        let options = || ScanLoopOptions {
+            wait_between_cycles_ms: Some(60_000),
+            should_continue: Some(Arc::new(|_, _| true)),
+            ..Default::default()
+        };
+        // Cancel the loop while it waits between cycles.
+        assert!(tokio::time::timeout(Duration::from_secs(1), runner.run_scan_loop(options())).await.is_err());
+        assert!(!runner.is_running(), "the running flag is reset when the loop is dropped");
+        let again = tokio::time::timeout(Duration::from_secs(1), runner.run_scan_loop(options())).await;
+        assert!(again.is_err(), "a second loop starts instead of failing with 'already running'");
     }
 }
