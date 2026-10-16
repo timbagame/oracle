@@ -176,27 +176,36 @@ impl RpcTransport for HttpTransport {
             };
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
             let body = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-            let response = self.client.post(&url).json(&body).send().await.map_err(|e| {
-                let mut message = format!("RPC request failed: {e}");
-                let mut source = std::error::Error::source(&e);
-                while let Some(inner) = source {
-                    message.push_str(": ");
-                    message.push_str(&inner.to_string());
-                    source = inner.source();
-                }
-                RpcError::transport(message)
-            })?;
+            let response = self.client.post(&url).json(&body).send().await.map_err(transport_error)?;
             let status = response.status();
             if !status.is_success() {
                 let retry_after =
                     parse_retry_after(response.headers().get("retry-after").and_then(|v| v.to_str().ok()));
                 return Err(RpcError::http(status.as_u16(), status.canonical_reason().unwrap_or(""), retry_after));
             }
-            let payload: Value =
-                response.json().await.map_err(|e| RpcError::decode(format!("Invalid JSON-RPC response: {e}")))?;
+            // A timeout or reset while reading the body is a transport failure (worth
+            // failing over); only a complete body that isn't JSON is a decode error.
+            let bytes = response.bytes().await.map_err(transport_error)?;
+            let payload: Value = serde_json::from_slice(&bytes)
+                .map_err(|e| RpcError::decode(format!("Invalid JSON-RPC response: {e}")))?;
             unwrap_response(payload)
         })
     }
+}
+
+/// Describes a reqwest failure with its whole source chain (where the "timed out"
+/// or "connection reset" detail lives) but without the URL, which can carry an
+/// RPC provider API key.
+fn transport_error(error: reqwest::Error) -> RpcError {
+    let error = error.without_url();
+    let mut message = format!("RPC request failed: {error}");
+    let mut source = std::error::Error::source(&error);
+    while let Some(inner) = source {
+        message.push_str(": ");
+        message.push_str(&inner.to_string());
+        source = inner.source();
+    }
+    RpcError::transport(message)
 }
 
 pub fn unwrap_response(payload: Value) -> Result<Value, RpcError> {
@@ -459,11 +468,32 @@ mod tests {
     #[tokio::test]
     async fn http_transport_reports_connection_failures() {
         let transport = HttpTransport::from_env();
-        let err = transport.send("http://127.0.0.1:1", "getSlot", json!([])).await.unwrap_err();
+        let err = transport.send("http://127.0.0.1:1/?api-key=secret-key", "getSlot", json!([])).await.unwrap_err();
         assert_eq!(err.kind, RpcErrorKind::Transport);
         assert!(err.to_string().starts_with("RPC request failed: "), "{err}");
+        assert!(!err.to_string().contains("secret-key"), "the URL must not leak: {err}");
         assert!(err.is_retryable());
         assert_eq!(RpcError::decode("odd").kind, RpcErrorKind::Decode);
+    }
+
+    #[tokio::test]
+    async fn http_transport_fails_over_when_the_body_is_cut_off() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0; 4096];
+            let _ = socket.read(&mut request).await;
+            // Promise 100 bytes, send one, then hang up mid-body.
+            let _ = socket.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\n{").await;
+        });
+        let transport = HttpTransport::new(None);
+        let err =
+            transport.send(&format!("http://{addr}/?api-key=secret-key"), "getSlot", json!([])).await.unwrap_err();
+        assert_eq!(err.kind, RpcErrorKind::Transport, "{err}");
+        assert!(err.is_retryable(), "{err}");
+        assert!(!err.to_string().contains("secret-key"), "{err}");
     }
 
     #[test]
