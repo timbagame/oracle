@@ -7,6 +7,7 @@ pub mod log;
 pub mod secrets;
 pub mod security;
 pub mod shutdown;
+pub mod signal;
 pub mod time;
 
 pub use shutdown::Shutdown;

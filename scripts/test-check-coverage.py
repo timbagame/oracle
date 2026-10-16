@@ -53,6 +53,7 @@ class Check(unittest.TestCase):
         files = {
             "crates/a/src/lib.rs": SOURCE,
             "crates/a/src/decls.rs": "pub mod x;\npub use x::Y;\n",
+            "crates/a/src/traits.rs": "pub trait T {\n    fn f(&self) -> u8;\n    fn g(\n        &self,\n    ) -> u8;\n}\n",
             "crates/a/src/tests.rs": "fn t() {}\n",
             "crates/a/src/main.rs": "fn main() {}\n",
             "crates/a/tests/it.rs": "fn it() {}\n",
@@ -85,7 +86,7 @@ class Check(unittest.TestCase):
         self.assertIn("crates/a/src/lib.rs: uncovered lines 2-3, 19", problems)
         self.assertIn("crates/a/src/main.rs: not in the coverage report", problems)
         self.assertIn("exclusion 'crates/a/src/other.rs' has no reason", problems)
-        self.assertFalse(any("decls.rs" in p or "tests" in p for p in problems), problems)
+        self.assertFalse(any("decls.rs" in p or "traits.rs" in p or "tests" in p for p in problems), problems)
 
     def test_exclusions_with_reasons_are_skipped(self):
         report = self.lcov({"crates/a/src/lib.rs": {1: 1}})

@@ -193,3 +193,51 @@ async fn fallback_moves_on_after_http_failures_but_not_after_reverts() {
     assert!(is_contract_revert(&error), "{error}");
     assert!(healthy.calls("eth_call").is_empty());
 }
+
+/// Runs the real `timba-evm-oracle` binary with `config_file`.
+fn binary(config_file: Option<&str>) -> std::process::Command {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_timba-evm-oracle"));
+    match config_file {
+        Some(file) => command.env("EVM_CONFIG_FILE", file),
+        None => command.env_remove("EVM_CONFIG_FILE"),
+    };
+    command.env("LOG_SILENT", "1").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
+    command
+}
+
+#[tokio::test]
+async fn the_binary_stops_cleanly_on_sigterm() {
+    let chain = FakeChain::new();
+    let url = rpc_endpoint(chain).await;
+    let client = reqwest::Client::new();
+    for _ in 0..5 {
+        let deployment = deployment(vec![url.clone()], &operator_key());
+        let mut child = binary(Some(&deployment.config_file)).spawn().unwrap();
+        let health = format!("http://127.0.0.1:{}/evm/health", deployment.port);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut answered = false;
+        while !answered && std::time::Instant::now() < deadline && child.try_wait().unwrap().is_none() {
+            answered = client.get(&health).send().await.is_ok();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        if !answered {
+            // Another test took the free port first; try a fresh one.
+            let output = tokio::task::spawn_blocking(move || child.wait_with_output().unwrap()).await.unwrap();
+            assert!(String::from_utf8_lossy(&output.stderr).contains("in use"), "{output:?}");
+            continue;
+        }
+        let pid = child.id().to_string();
+        assert!(std::process::Command::new("kill").args(["-TERM", &pid]).status().unwrap().success());
+        let output = tokio::task::spawn_blocking(move || child.wait_with_output().unwrap()).await.unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        return;
+    }
+    panic!("no free port after 5 attempts");
+}
+
+#[tokio::test]
+async fn the_binary_reports_configuration_errors() {
+    let output = tokio::task::spawn_blocking(|| binary(None).output().unwrap()).await.unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(String::from_utf8_lossy(&output.stderr).trim(), "error: EVM_CONFIG_FILE is required");
+}

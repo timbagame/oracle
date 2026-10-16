@@ -126,9 +126,10 @@ def check(lcov, scope, root):
         skipped = test_lines(source)
         report = lcov.get(path)
         if report is None:
-            # Files of only `mod`/`use`/type declarations have no executable lines.
-            code = [l for n, l in enumerate(source.split("\n"), 1) if n not in skipped]
-            if any(re.search(r"\bfn\s", l) for l in code):
+            # Files of only `mod`/`use`/type declarations or trait method
+            # signatures (`fn f();`) have no executable lines.
+            code = "\n".join(l for n, l in enumerate(source.split("\n"), 1) if n not in skipped)
+            if re.search(r"\bfn\b[^;{]*\{", code):
                 problems.append(f"{path}: not in the coverage report")
             continue
         lines = {n: c for n, c in report.items() if n not in skipped}
