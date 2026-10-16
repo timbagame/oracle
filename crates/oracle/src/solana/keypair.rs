@@ -19,7 +19,7 @@ impl std::fmt::Debug for Keypair {
 
 impl Keypair {
     pub fn generate() -> Self {
-        let signing = SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing = SigningKey::generate(&mut rand::rand_core::UnwrapErr(rand::rngs::SysRng));
         Self::from_signing(signing)
     }
 

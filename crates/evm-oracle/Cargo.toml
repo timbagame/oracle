@@ -13,11 +13,11 @@ path = "src/main.rs"
 
 [dependencies]
 timba-common.workspace = true
-alloy-consensus = { version = "1", default-features = false, features = ["std", "k256"] }
-alloy-eips = { version = "1", default-features = false, features = ["std"] }
+alloy-consensus = { version = "2", default-features = false, features = ["std", "k256"] }
+alloy-eips = { version = "2", default-features = false, features = ["std"] }
 alloy-primitives = { version = "1", features = ["k256"] }
-alloy-signer = "1"
-alloy-signer-local = "1"
+alloy-signer = "2"
+alloy-signer-local = "2"
 alloy-sol-types = { version = "1", features = ["json"] }
 anyhow.workspace = true
 axum.workspace = true

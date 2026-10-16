@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use alloy_primitives::{keccak256, Bytes, B256, U256};
 use alloy_sol_types::SolCall;
-use rand::RngCore;
+use rand::Rng;
 use serde_json::{json, Value};
 
 use crate::config::{token_policy, EvmConfig};
@@ -249,7 +249,7 @@ impl EvmService {
             Some(game) => game.secret,
             None => {
                 let mut bytes = [0u8; 32];
-                rand::thread_rng().fill_bytes(&mut bytes);
+                rand::rng().fill_bytes(&mut bytes);
                 B256::from(bytes).to_string()
             }
         };

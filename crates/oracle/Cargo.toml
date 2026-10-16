@@ -36,7 +36,7 @@ tokio.workspace = true
 tokio-tungstenite.workspace = true
 tower = { workspace = true, features = ["util"] }
 url.workspace = true
-num-bigint = "0.4"
+num-bigint = "0.5"
 
 [dev-dependencies]
 tempfile = "3"
