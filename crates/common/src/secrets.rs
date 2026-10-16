@@ -60,6 +60,10 @@ mod tests {
         assert!(read_protected_secret(link.to_str().unwrap(), "T").unwrap_err().contains("symlink"));
         std::fs::write(&file, "   \n").unwrap();
         assert_eq!(read_protected_secret(path, "T").unwrap_err(), "T is empty");
+        for size in [0, 4097] {
+            std::fs::write(&file, "x".repeat(size)).unwrap();
+            assert_eq!(read_protected_secret(path, "T").unwrap_err(), "T has an invalid size");
+        }
     }
 
     #[test]

@@ -156,5 +156,10 @@ mod tests {
             assert!(limiter.check("/web/games/abc").allowed);
         }
         assert!(!limiter.check("/web/games/def").allowed);
+        // Every verification id shares one window.
+        for _ in 0..10 {
+            assert!(limiter.check("/web/verification/a").allowed);
+        }
+        assert!(!limiter.check("/web/verification/b").allowed);
     }
 }

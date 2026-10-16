@@ -43,6 +43,13 @@ class TestLines(unittest.TestCase):
         self.assertEqual(gate.test_lines("#[cfg(test)]\nmod tests;\nfn x() {}\n"), {1, 2})
         self.assertEqual(gate.test_lines('#[cfg(test)]\nfn broken() { "\n'), {1, 2, 3})
 
+    def test_excludes_sol_declaration_blocks(self):
+        source = 'sol! {\n    struct A { uint256 b; }\n    function f(string s) returns (bytes4);\n}\nfn real() {}\n'
+        self.assertEqual(gate.test_lines(source), {1, 2, 3, 4})
+        self.assertEqual(gate.test_lines("alloy_sol_types::sol! {\n}\nfn x() {}\n"), {1, 2})
+        # Only a block at the start of a line; a call inside code still counts.
+        self.assertEqual(gate.test_lines('let s = "sol! {";\nfn x() {}\n'), set())
+
     def test_compresses_ranges(self):
         self.assertEqual(gate.compress([1, 2, 3, 5, 7, 8]), "1-3, 5, 7-8")
 

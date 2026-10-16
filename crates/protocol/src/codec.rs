@@ -24,10 +24,6 @@ impl<'a> Reader<'a> {
         Self { data, offset: 0 }
     }
 
-    pub fn offset(&self) -> usize {
-        self.offset
-    }
-
     pub fn remaining(&self) -> usize {
         self.data.len().saturating_sub(self.offset)
     }

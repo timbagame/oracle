@@ -81,20 +81,11 @@ async fn serve_with(
     builder.timer(TokioTimer::new()).header_read_timeout(idle);
     tokio::pin!(shutdown);
     loop {
-        let stream = tokio::select! {
-            accepted = listener.accept() => match accepted {
-                Ok((stream, _)) => stream,
-                // Per-connection failures (e.g. a reset before accept) must not stop the server.
-                Err(error) if is_connection_error(&error) => continue,
-                Err(error) => {
-                    // Out of file descriptors: back off instead of spinning.
-                    crate::warn!("HTTP accept failed: {error}");
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    continue;
-                }
-            },
+        let accepted = tokio::select! {
+            accepted = listener.accept() => accepted,
             () = &mut shutdown => break,
         };
+        let Some(stream) = accepted_stream(accepted).await else { continue };
         let service = TowerToHyperService::new(router.clone());
         let connection = builder.serve_connection(TokioIo::new(stream), service);
         let connection = graceful.watch(connection);
@@ -105,6 +96,21 @@ async fn serve_with(
     drop(listener);
     graceful.shutdown().await;
     Ok(())
+}
+
+/// The accepted stream, or `None` after an accept failure. Per-connection failures
+/// (e.g. a reset before accept) must not stop the server; anything else (out of file
+/// descriptors) backs off instead of spinning.
+async fn accepted_stream<S>(accepted: std::io::Result<(S, std::net::SocketAddr)>) -> Option<S> {
+    let error = match accepted {
+        Ok((stream, _)) => return Some(stream),
+        Err(error) => error,
+    };
+    if !is_connection_error(&error) {
+        crate::warn!("HTTP accept failed: {error}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    None
 }
 
 fn is_connection_error(error: &std::io::Error) -> bool {
@@ -150,6 +156,18 @@ mod tests {
 
     fn chunked(chunks: Vec<Result<Vec<u8>, std::io::Error>>) -> Body {
         Body::from_stream(futures::stream::iter(chunks))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn accept_failures_back_off_only_when_they_are_not_per_connection() {
+        use std::io::{Error, ErrorKind};
+        let started = tokio::time::Instant::now();
+        for kind in [ErrorKind::ConnectionRefused, ErrorKind::ConnectionAborted, ErrorKind::ConnectionReset] {
+            assert_eq!(accepted_stream::<()>(Err(Error::from(kind))).await, None);
+        }
+        assert_eq!(started.elapsed(), Duration::ZERO);
+        assert_eq!(accepted_stream::<()>(Err(Error::other("Too many open files"))).await, None);
+        assert_eq!(started.elapsed(), Duration::from_millis(100));
     }
 
     #[tokio::test]

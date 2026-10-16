@@ -181,6 +181,36 @@ mod tests {
     use super::*;
     use crate::rpc::Transport;
 
+    /// Answers fee requests like a node without `eth_maxPriorityFeePerGas`.
+    struct NoPriorityFee {
+        gas_price: &'static str,
+    }
+
+    impl Transport for NoPriorityFee {
+        fn request(&self, method: &str, _params: Value) -> BoxFuture<'static, Result<Value, RpcError>> {
+            let result = match method {
+                "eth_getBlockByNumber" => {
+                    Ok(json!({ "hash": "0x01", "timestamp": "0x1", "baseFeePerGas": "0x3b9aca00" }))
+                }
+                "eth_gasPrice" => Ok(json!(self.gas_price)),
+                _ => Err(RpcError::Node { code: -32601, message: "method not found".into(), data: None }),
+            };
+            Box::pin(async move { result })
+        }
+    }
+
+    #[tokio::test]
+    async fn derives_the_priority_fee_from_the_gas_price_when_the_node_lacks_it() {
+        for (gas_price, priority) in [("0x77359400", 1_000_000_000), ("0x1", 0)] {
+            let client = PublicClient::new(Arc::new(NoPriorityFee { gas_price }));
+            let fees = estimate_fees(&client).await.unwrap();
+            assert_eq!(
+                fees,
+                Fees::Eip1559 { max_fee_per_gas: 1_200_000_000 + priority, max_priority_fee_per_gas: priority }
+            );
+        }
+    }
+
     type Answer = Box<dyn Fn() -> Result<Value, RpcError> + Send + Sync>;
 
     /// Answers every `eth_fillTransaction` with `answer` and counts the requests.

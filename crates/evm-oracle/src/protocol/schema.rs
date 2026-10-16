@@ -313,6 +313,35 @@ mod tests {
     }
 
     #[test]
+    fn primitive_validators_report_the_failing_path() {
+        let message = |result: SchemaResult<_>| result.map(|_: ()| ()).unwrap_err().to_string();
+        assert_eq!(join("", "key"), "key");
+        assert_eq!(
+            message(strict_object(&json!([]), "intent", &[]).map(|_| ())),
+            "intent: Invalid input: expected object"
+        );
+        let object = json!({}).as_object().unwrap().clone();
+        assert_eq!(
+            message(required(&object, "intent", "nonce").map(|_| ())),
+            "intent.nonce: Invalid input: expected value, received undefined"
+        );
+        assert_eq!(message(integer(&json!("1"), "n", 0, 9).map(|_| ())), "n: Invalid input: expected number");
+        assert_eq!(
+            message(integer(&json!(MAX_SAFE_INTEGER + 1), "n", 0, i64::MAX).map(|_| ())),
+            "n: Invalid input: expected int, received number"
+        );
+        assert_eq!(integer(&json!(MAX_SAFE_INTEGER), "n", 0, i64::MAX), Ok(MAX_SAFE_INTEGER));
+        assert_eq!(parse_address("0x12"), None);
+        assert_eq!(parse_address(&"1".repeat(42)), None);
+        let long = format!("0x{}", "ab".repeat(4097));
+        assert_eq!(
+            message(hex_signature(&json!(long), "proof").map(|_| ())),
+            "proof: Too big: expected string to have <=8194 characters"
+        );
+        assert_eq!(message(tokens(&json!({}), "tokens").map(|_| ())), "tokens: Invalid input: expected array");
+    }
+
+    #[test]
     fn authorization_wire_validation_rejects_overflow_numbers_and_excessive_limits() {
         let valid = valid_intent();
         assert!(parse_intent(&valid).is_ok());

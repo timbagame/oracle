@@ -600,6 +600,8 @@ mod tests {
             format!("Program {program} invoke [1]"),
             "Program data: ".to_string(),
             "Program data: not base64!".to_string(),
+            // Matches the pattern but sets padding bits, which strict base64 rejects.
+            "Program data: AAAAAAAAAAB=".to_string(),
             "Program log: hello".to_string(),
             format!("Program data: {payload}"),
             format!("Program {program} failed: custom error"),

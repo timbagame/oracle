@@ -96,17 +96,20 @@ impl Address {
         if seeds.len() >= MAX_SEEDS {
             return Err(AddressError::InvalidSeeds);
         }
-        for bump in (0..=255u8).rev() {
-            let bump_seed = [bump];
-            let mut all: Vec<&[u8]> = seeds.to_vec();
-            all.push(&bump_seed);
-            match Self::create_program_address(&all, program_id) {
-                Ok(address) => return Ok((address, bump)),
-                Err(AddressError::OnCurve) => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Err(AddressError::NoViableBump)
+        // Each bump is off the curve with probability 1/2, so exhausting all 256 never happens in practice.
+        (0..=255u8)
+            .rev()
+            .find_map(|bump| {
+                let bump_seed = [bump];
+                let mut all: Vec<&[u8]> = seeds.to_vec();
+                all.push(&bump_seed);
+                match Self::create_program_address(&all, program_id) {
+                    Ok(address) => Some(Ok((address, bump))),
+                    Err(AddressError::OnCurve) => None,
+                    Err(error) => Some(Err(error)),
+                }
+            })
+            .unwrap_or(Err(AddressError::NoViableBump))
     }
 }
 

@@ -139,12 +139,8 @@ pub fn parse_config(value: &Value) -> SchemaResult<EvmConfig> {
 pub fn load_config(path: &str) -> anyhow::Result<EvmConfig> {
     let text = std::fs::read_to_string(path).map_err(|error| anyhow::anyhow!("{error}, open '{path}'"))?;
     let value: Value = serde_json::from_str(&text)?;
-    let config = parse_config(&value).map_err(|error: SchemaError| anyhow::anyhow!("Invalid EVM config: {error}"))?;
-    let mut seen = std::collections::HashSet::new();
-    if !config.tokens.iter().all(|token| seen.insert(token.address)) {
-        anyhow::bail!("Duplicate EVM token policy");
-    }
-    Ok(config)
+    // `schema::tokens` already rejects duplicate token addresses and symbols.
+    parse_config(&value).map_err(|error: SchemaError| anyhow::anyhow!("Invalid EVM config: {error}"))
 }
 
 /// Reads a private secret: a regular file (symlinks are followed), at most 4096 bytes,
@@ -177,6 +173,7 @@ pub fn token_policy(config: &EvmConfig, address: Address) -> anyhow::Result<&Evm
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::os::unix::fs::PermissionsExt;
 
     const EXAMPLE: &str = include_str!("../config.example.json");
@@ -190,6 +187,21 @@ mod tests {
 
     fn example() -> Value {
         serde_json::from_str(EXAMPLE).unwrap()
+    }
+
+    #[test]
+    fn rejects_unusable_rpc_lists_and_duplicate_token_policies() {
+        let mut config = example();
+        config["rpcUrls"] = json!("http://127.0.0.1:8545");
+        assert_eq!(parse_config(&config).unwrap_err().to_string(), "rpcUrls: Invalid input: expected array");
+
+        let mut config = example();
+        let mut duplicate = config["tokens"][0].clone();
+        duplicate["symbol"] = json!("COPY");
+        config["tokens"].as_array_mut().unwrap().push(duplicate);
+        let dir = tempfile::tempdir().unwrap();
+        let file = write(&dir, "config.json", &config.to_string(), 0o600);
+        assert_eq!(load_config(&file).unwrap_err().to_string(), "Invalid EVM config: tokens: Duplicate token policy");
     }
 
     #[test]

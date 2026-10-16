@@ -46,3 +46,29 @@ impl Shutdown {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn sleeps_until_the_deadline_or_the_trigger() {
+        let shutdown = Shutdown::default();
+        assert!(!shutdown.is_triggered());
+        let started = tokio::time::Instant::now();
+        shutdown.sleep(0).await;
+        shutdown.sleep(50).await;
+        assert_eq!(started.elapsed(), Duration::from_millis(50));
+
+        let trigger = shutdown.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            trigger.trigger();
+        });
+        shutdown.sleep(60_000).await;
+        assert_eq!(started.elapsed(), Duration::from_millis(60));
+        shutdown.wait().await;
+        shutdown.sleep(60_000).await;
+        assert_eq!(started.elapsed(), Duration::from_millis(60));
+    }
+}

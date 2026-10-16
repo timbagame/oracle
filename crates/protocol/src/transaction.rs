@@ -426,11 +426,6 @@ impl Transaction {
     pub fn is_fully_signed(&self) -> bool {
         self.signatures.iter().all(|(_, s)| s.is_some())
     }
-
-    /// The transaction id: the fee payer's signature in base58.
-    pub fn signature_base58(&self) -> Option<String> {
-        self.signatures.first().and_then(|(_, s)| s.map(|s| bs58::encode(s).into_string()))
-    }
 }
 
 #[cfg(test)]
@@ -443,6 +438,8 @@ mod tests {
         let mut v = vec!["b", "B", "a", "A", "1", "9", "Ab", "aB", "ab"];
         v.sort_by(|a, b| compare_addresses(a, b));
         assert_eq!(v, vec!["1", "9", "a", "A", "ab", "aB", "Ab", "b", "B"]);
+        // Punctuation sorts before digits, as with Intl.Collator.
+        assert_eq!(compare_addresses("-", "1"), Ordering::Less);
     }
 
     #[test]
@@ -501,6 +498,38 @@ mod tests {
         assert_eq!(
             LegacyMessage::compile(&payer, &Address([7; 32]), &[ix]).unwrap_err(),
             TransactionError::ProgramPaysFees
+        );
+        // A later instruction invoking an account an earlier one marked writable.
+        let writes = Instruction {
+            program_id: SYSTEM_PROGRAM_ID,
+            accounts: vec![AccountMeta::writable(Address([3; 32]))],
+            data: vec![],
+        };
+        let invokes = Instruction { program_id: Address([3; 32]), accounts: vec![], data: vec![] };
+        assert_eq!(
+            LegacyMessage::compile(&payer, &Address([7; 32]), &[writes, invokes]).unwrap_err(),
+            TransactionError::ProgramWritable
+        );
+    }
+
+    #[test]
+    fn rejects_more_than_256_accounts() {
+        let account = |index: u16| {
+            let mut bytes = [5u8; 32];
+            bytes[..2].copy_from_slice(&index.to_le_bytes());
+            AccountMeta::readonly(Address(bytes))
+        };
+        let instruction = |count: u16| Instruction {
+            program_id: SYSTEM_PROGRAM_ID,
+            accounts: (0..count).map(account).collect(),
+            data: vec![],
+        };
+        let payer = Address([9; 32]);
+        // Fee payer + program + 254 accounts is the limit.
+        assert!(LegacyMessage::compile(&payer, &Address([7; 32]), &[instruction(254)]).is_ok());
+        assert_eq!(
+            LegacyMessage::compile(&payer, &Address([7; 32]), &[instruction(255)]).unwrap_err(),
+            TransactionError::TooManyAccounts
         );
     }
 

@@ -197,6 +197,21 @@ mod tests {
     }
 
     #[test]
+    fn reports_database_failures() {
+        let store = EvmStore::open(":memory:", "31337:proxy").unwrap();
+        store.db.execute_batch("DROP TABLE authorizations; DROP TABLE events;").unwrap();
+        let game = StoredGame {
+            id: id(),
+            secret: secret(),
+            intent: "{}".into(),
+            request: "{}".into(),
+            signature: "0x12".into(),
+        };
+        assert!(store.save(&game).unwrap_err().to_string().contains("no such table: authorizations"));
+        assert!(store.events(None).unwrap_err().to_string().contains("no such table: events"));
+    }
+
+    #[test]
     fn secrets_pending_bytes_and_database_identity_survive_restart() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("oracle.sqlite");

@@ -102,6 +102,21 @@ async fn all_routes_require_bearer_auth_and_body_limits_cannot_be_bypassed() {
 }
 
 #[tokio::test]
+async fn a_body_that_fails_mid_stream_is_rejected() {
+    let fake = setup();
+    let chunks = futures::stream::iter([
+        Ok(axum::body::Bytes::from_static(b"{")),
+        Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "client went away")),
+    ]);
+    let response = send(&router(&fake), post("/evm/authorize", Body::from_stream(chunks))).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body(response).await,
+        json!({ "error": "Authorization rejected. Check wallet, nonce, invitation and game terms." })
+    );
+}
+
+#[tokio::test]
 async fn serves_public_deployment_config_with_the_live_settlement_buffer() {
     let fake = setup();
     let response = send(&router(&fake), get("/evm/config")).await;

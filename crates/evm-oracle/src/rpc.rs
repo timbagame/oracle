@@ -167,15 +167,14 @@ impl Transport for FallbackTransport {
         let transports = self.transports.clone();
         let method = method.to_string();
         Box::pin(async move {
-            let last = transports.len() - 1;
-            for (index, transport) in transports.iter().enumerate() {
+            let (last, rest) = transports.split_last().expect("at least one transport is required");
+            for transport in rest {
                 match transport.request(&method, params.clone()).await {
-                    Ok(result) => return Ok(result),
-                    Err(error) if error.should_throw() || index == last => return Err(error),
-                    Err(_) => continue,
+                    Err(error) if !error.should_throw() => continue,
+                    result => return result,
                 }
             }
-            unreachable!("the last transport always returns")
+            last.request(&method, params).await
         })
     }
 }
@@ -602,6 +601,29 @@ mod tests {
         assert!(decode_validator_result(Some(&B256::with_last_byte(1).0)).unwrap());
         assert!(!decode_validator_result(Some(&[0])).unwrap());
         assert!(decode_validator_result(Some(&[2])).is_err());
+    }
+
+    /// Answers every request with `result`.
+    struct Answer(Value);
+
+    impl Transport for Answer {
+        fn request(&self, _method: &str, _params: Value) -> BoxFuture<'static, Result<Value, RpcError>> {
+            let result = self.0.clone();
+            Box::pin(async move { Ok(result) })
+        }
+    }
+
+    fn answering(result: Value) -> PublicClient {
+        PublicClient::new(Arc::new(Answer(result)))
+    }
+
+    #[tokio::test]
+    async fn reports_missing_blocks_and_empty_contract_results() {
+        let error = answering(Value::Null).get_block(Some(9)).await.unwrap_err();
+        assert_eq!(error.to_string(), RpcError::InvalidResponse("Block could not be found".into()).to_string());
+        let call = crate::protocol::abi::creationNoncesCall { creator: Address::ZERO };
+        let error = answering(json!("0x")).read_contract(Address::ZERO, &call).await.unwrap_err();
+        assert_eq!(error.to_string(), "The contract function \"creationNonces(address)\" returned no data (\"0x\")");
     }
 
     #[test]

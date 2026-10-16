@@ -15,6 +15,7 @@ use timba_common::Shutdown;
 use timba_evm_oracle::app;
 use timba_evm_oracle::protocol::abi::ownerCall;
 use timba_evm_oracle::rpc::{is_contract_revert, FallbackTransport, PublicClient, RpcError, Transport};
+use timba_evm_oracle::server::CYCLE_FAILED_MESSAGE;
 
 /// Serves `chain` as a JSON-RPC endpoint and returns its URL.
 async fn rpc_endpoint(chain: Arc<FakeChain>) -> String {
@@ -206,9 +207,9 @@ fn binary(config_file: Option<&str>) -> std::process::Command {
 }
 
 #[tokio::test]
-async fn the_binary_stops_cleanly_on_sigterm() {
+async fn the_binary_reports_failed_cycles_and_stops_cleanly_on_sigterm() {
     let chain = FakeChain::new();
-    let url = rpc_endpoint(chain).await;
+    let url = rpc_endpoint(chain.clone()).await;
     let client = reqwest::Client::new();
     for _ in 0..5 {
         let deployment = deployment(vec![url.clone()], &operator_key());
@@ -226,10 +227,25 @@ async fn the_binary_stops_cleanly_on_sigterm() {
             assert!(String::from_utf8_lossy(&output.stderr).contains("in use"), "{output:?}");
             continue;
         }
+        // Once running, the RPC goes away: the next cycle fails and is reported on stderr.
+        chain.on("eth_chainId", |_| Err(RpcError::Http("unavailable".into())));
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let response = client.get(&health).bearer_auth("evm-token").send().await.unwrap();
+                let body = response.json::<Value>().await.unwrap();
+                if body["error"] == CYCLE_FAILED_MESSAGE {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the failed cycle shows in the health check");
         let pid = child.id().to_string();
         assert!(std::process::Command::new("kill").args(["-TERM", &pid]).status().unwrap().success());
         let output = tokio::task::spawn_blocking(move || child.wait_with_output().unwrap()).await.unwrap();
         assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains(CYCLE_FAILED_MESSAGE), "{output:?}");
         return;
     }
     panic!("no free port after 5 attempts");

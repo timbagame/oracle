@@ -4,7 +4,9 @@ Usage: python3 scripts/check-coverage.py <lcov.info> [coverage-scope.json]
 
 Production code is every tracked `crates/*/src/**/*.rs` file minus test code:
 files named `tests.rs` or `testing.rs`, and items marked `#[cfg(test)]` (test
-modules and helpers). Files listed under `exclude` in the scope file are
+modules and helpers). `sol!` blocks are skipped too: they only declare Solidity
+types, and the compile-time `_type_assertion` functions alloy generates for them
+never run. Files listed under `exclude` in the scope file are
 skipped; each needs a reason under `exclusionReasons`. A tracked source file
 with functions that never appears in the report counts as uncovered.
 """
@@ -16,6 +18,7 @@ import subprocess
 import sys
 
 CFG_TEST = re.compile(r"^\s*#\[cfg\(test\)\]\s*$")
+SOL_BLOCK = re.compile(r"^\s*(?:alloy_sol_types::|alloy::sol_types::)?sol!\s*\{")
 
 
 def skip_literal(text, i):
@@ -70,7 +73,7 @@ def item_end(text, start):
 
 
 def test_lines(source):
-    """1-based line numbers that belong to `#[cfg(test)]` items."""
+    """1-based line numbers that belong to `#[cfg(test)]` items or `sol!` blocks."""
     lines = source.split("\n")
     offsets, total = [], 0
     for line in lines:
@@ -78,9 +81,14 @@ def test_lines(source):
         total += len(line) + 1
     excluded = set()
     for index, line in enumerate(lines):
-        if not CFG_TEST.match(line) or index + 1 in excluded:
+        if index + 1 in excluded:
             continue
-        end = item_end(source, offsets[index] + len(line))
+        if CFG_TEST.match(line):
+            end = item_end(source, offsets[index] + len(line))
+        elif SOL_BLOCK.match(line):
+            end = item_end(source, offsets[index] + line.index("{"))
+        else:
+            continue
         last = source.count("\n", 0, end) + 1
         excluded.update(range(index + 1, last + 1))
     return excluded

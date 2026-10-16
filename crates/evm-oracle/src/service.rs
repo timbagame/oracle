@@ -190,15 +190,6 @@ impl EvmService {
     }
 
     pub async fn authorize(&self, input: &Value) -> anyhow::Result<Authorization> {
-        loop {
-            if let Some(authorization) = self.try_authorize(input).await? {
-                return Ok(authorization);
-            }
-        }
-    }
-
-    /// One authorization attempt; `None` when a concurrent writer stored a different secret.
-    async fn try_authorize(&self, input: &Value) -> anyhow::Result<Option<Authorization>> {
         let parsed = parse_intent(input)?;
         let request = CreateRequest {
             creator: parsed.creator,
@@ -252,8 +243,9 @@ impl EvmService {
         // can never produce two games or reuse the reveal in a later nonce.
         let mut intent = request_json(&request);
         intent["deadline"] = json!("0");
-        let existing = self.store().game(&id)?;
-        let secret = match existing {
+        // Read, sign and persist under one lock (no yield) so concurrent requests share the secret.
+        let store = self.store();
+        let secret = match store.game(&id)? {
             Some(game) => game.secret,
             None => {
                 let mut bytes = [0u8; 32];
@@ -264,13 +256,6 @@ impl EvmService {
         let secret_bytes = parse_bytes32(&secret).ok_or_else(|| anyhow::anyhow!("Secret must be 32 bytes"))?;
         let authorized = CreateRequest { commitment: commitment_for(secret_bytes), ..request };
         let signature = self.wallet.sign_hash(creation_digest(&self.deployment, &authorized)?)?;
-        // Signing is local, with no yield between reading and durable persistence.
-        let store = self.store();
-        if let Some(concurrent) = store.game(&id)? {
-            if concurrent.secret != secret {
-                return Ok(None);
-            }
-        }
         let request = request_json(&authorized);
         store.save(&StoredGame {
             id: id.clone(),
@@ -279,7 +264,7 @@ impl EvmService {
             request: request.to_string(),
             signature: signature.to_string(),
         })?;
-        Ok(Some(Authorization { game_id, request, signature }))
+        Ok(Authorization { game_id, request, signature })
     }
 
     pub async fn private_join(&self, input: &Value) -> anyhow::Result<PrivateJoinAuthorization> {

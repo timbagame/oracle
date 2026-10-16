@@ -172,6 +172,41 @@ pub(crate) fn safe_index(value: alloy_primitives::U256) -> anyhow::Result<u64> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn rejects_codes_and_indexes_the_contract_never_produces() {
+        let reference = EvmGameReference { chain_id: 1, deployment: Address::ZERO, game_id: B256::ZERO };
+        let account = |status: u8, game_type: u8| Game {
+            creator: Address::ZERO,
+            token: Address::ZERO,
+            gameType: game_type,
+            status,
+            isPrivate: false,
+            minPlayers: 2,
+            maxPlayers: 2,
+            expiresAt: 0,
+            ticketAmount: alloy_primitives::U256::ZERO,
+            totalAmount: alloy_primitives::U256::ZERO,
+            commitment: B256::ZERO,
+            lastEntryBlock: alloy_primitives::U256::ZERO,
+            participants: vec![],
+        };
+        let closed = observe_evm_game(reference.clone(), &account(3, 1)).unwrap().unwrap();
+        assert_eq!((closed.status, closed.game_type), (GameStatus::Closed, GameType::Giveaway));
+        let unknown_status = account(4, 0);
+        assert_eq!(
+            observe_evm_game(reference.clone(), &unknown_status).unwrap_err().to_string(),
+            "Unknown game status"
+        );
+        let unknown_type = account(1, 2);
+        assert_eq!(observe_evm_game(reference, &unknown_type).unwrap_err().to_string(), "Unknown game type");
+        let max = alloy_primitives::U256::from(MAX_SAFE_INTEGER);
+        assert_eq!(safe_index(max).unwrap(), MAX_SAFE_INTEGER as u64);
+        assert_eq!(
+            safe_index(max + alloy_primitives::U256::from(1)).unwrap_err().to_string(),
+            "Invalid participant index"
+        );
+    }
+
     fn game(count: usize, min: u32, max: u32, expires_at: u64) -> NormalizedGame {
         NormalizedGame {
             reference: EvmGameReference { chain_id: 1, deployment: Address::ZERO, game_id: B256::ZERO },

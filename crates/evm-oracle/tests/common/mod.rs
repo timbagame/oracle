@@ -266,11 +266,15 @@ impl Fake {
 /// An `EvmService` whose RPC answers come from an in-memory chain. The clock follows real
 /// time unless a test pins it with `set_now_ms`.
 pub fn setup() -> Fake {
+    setup_with(evm_config())
+}
+
+pub fn setup_with(config: EvmConfig) -> Fake {
     let chain = FakeChain::new();
     let store = EvmStore::open(":memory:", "fake-chain").unwrap();
     let clock = Arc::new(AtomicI64::new(0));
     let reader = clock.clone();
-    let service = EvmService::with_transport(evm_config(), OPERATOR_KEY, store, Arc::new(FakeTransport(chain.clone())))
+    let service = EvmService::with_transport(config, OPERATOR_KEY, store, Arc::new(FakeTransport(chain.clone())))
         .unwrap()
         .with_clock(Arc::new(move || match reader.load(Ordering::SeqCst) {
             0 => timba_common::time::now_ms(),

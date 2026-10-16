@@ -7,15 +7,9 @@ fn is_base58(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|b| BASE58_ALPHABET.contains(&b))
 }
 
+/// Callers bound the encoded length and check the alphabet first.
 fn has_base58_decoded_length(value: &str, expected: usize) -> bool {
-    let max_encoded = ((expected * 8) as f64 / 58f64.log2()).ceil() as usize;
-    if value.len() < expected || value.len() > max_encoded {
-        return false;
-    }
-    match bs58::decode(value).into_vec() {
-        Ok(bytes) => bytes.len() == expected,
-        Err(_) => false,
-    }
+    bs58::decode(value).into_vec().is_ok_and(|bytes| bytes.len() == expected)
 }
 
 pub fn is_solana_address(value: &str) -> bool {

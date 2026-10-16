@@ -11,6 +11,7 @@ use alloy_primitives::{keccak256, Bytes, B256, U256};
 use alloy_sol_types::{SolCall, SolEvent, SolValue};
 use common::*;
 use serde_json::{json, Value};
+use timba_evm_oracle::config::EvmConfig;
 use timba_evm_oracle::protocol::abi::{completeGameCall, CreateRequest, PlayerJoined};
 use timba_evm_oracle::protocol::client::{
     commitment_for, complete_game_transaction, creation_digest, game_id_for, private_join_digest,
@@ -144,6 +145,23 @@ mod authorize {
         let stored = fake.service.store().game(&first.game_id.to_string()).unwrap().unwrap();
         let request: Value = serde_json::from_str(&stored.request).unwrap();
         assert_eq!(request["amount"], "150");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_authorizations_of_one_nonce_share_the_stored_secret() {
+        let fake = setup();
+        let requests = (0..16).map(|index| {
+            let service = fake.service.clone();
+            let input = creation_intent(&fake, json!({ "amount": (150 + index).to_string() }));
+            tokio::spawn(async move { service.authorize(&input).await.unwrap() })
+        });
+        let results = futures::future::join_all(requests).await;
+
+        let stored = fake.service.store().game(&results[0].as_ref().unwrap().game_id.to_string()).unwrap().unwrap();
+        let commitment = commitment_for(parse_bytes32(&stored.secret).unwrap()).to_string();
+        for result in results {
+            assert_eq!(result.unwrap().request["commitment"], commitment);
+        }
     }
 
     #[tokio::test]
@@ -512,6 +530,24 @@ mod tick_settlement {
     }
 
     #[tokio::test]
+    async fn refuses_to_sign_when_the_rpc_serves_another_chain() {
+        let fake = setup();
+        seed(&fake, GAME_A, SECRET_A, None);
+        fake.chain.state().games.insert(GAME_A, fake_game());
+        // The fallback moves to a node on another chain after the cycle validated the deployment.
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        fake.chain.on("eth_chainId", move |_| {
+            let first = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+            Ok(json!(if first { "0x7a69" } else { "0x1" }))
+        });
+
+        let error = error_of(fake.service.tick()).await;
+        assert_eq!(error, "The current chain does not match the configured chain");
+        assert_eq!(fake.service.store().pending().unwrap(), None);
+        assert!(fake.chain.calls("eth_sendRawTransaction").is_empty());
+    }
+
+    #[tokio::test]
     async fn fails_the_cycle_on_unexpected_settlement_errors() {
         let fake = setup();
         seed(&fake, GAME_A, SECRET_A, None);
@@ -654,6 +690,16 @@ mod tick_pending {
         fake.service.tick().await.unwrap();
 
         assert_eq!(fake.chain.calls("eth_sendRawTransaction"), [json!(["0xab"])]);
+        assert_eq!(fake.service.store().pending().unwrap(), Some(pending()));
+    }
+
+    #[tokio::test]
+    async fn fails_the_cycle_and_keeps_the_journal_with_an_invalid_confirmation_depth() {
+        let fake = setup_with(EvmConfig { confirmations: 0, ..evm_config() });
+        submit(&fake, Some(json!({ "status": "0x1", "blockNumber": "0xa" })), 11);
+
+        let error = error_of(fake.service.tick()).await;
+        assert_eq!(error, "Invalid confirmation depth");
         assert_eq!(fake.service.store().pending().unwrap(), Some(pending()));
     }
 
