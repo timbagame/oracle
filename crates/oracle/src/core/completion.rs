@@ -276,12 +276,17 @@ impl CompletionManager {
         let Some(game) = readiness.game_account.clone() else {
             return Ok(Err(self.record_fatal(game_address, "On-chain game account unavailable")));
         };
+        // A damaged row must not be revealed as a zero-padded secret, which the
+        // program rejects only after the transaction fee is spent.
+        let secret = match hex::decode(&context.secret.secret_key) {
+            Ok(secret) if secret.len() == SECRET_KEY_LENGTH => secret,
+            _ => return Ok(Err(self.record_fatal(game_address, "Stored secret key is corrupt"))),
+        };
         let expected = i64::from(game.tickets_count);
         let players = match self.registry.ensure_players_in_sync(game_address, context, expected).await {
             Ok(players) => players,
             Err(message) => return Ok(Err(self.record_fatal(game_address, message))),
         };
-        let secret = hex::decode(&context.secret.secret_key).unwrap_or_default();
         let winner_index = self.calculate_winner_index(&secret, game.last_slot, players.len() as u64)?;
         let Some(winner) = players.get(winner_index as usize) else {
             return Ok(Err(self.record_fatal(game_address, "Unable to determine winner")));
@@ -290,8 +295,7 @@ impl CompletionManager {
             return Ok(Err(self.record_fatal(game_address, "Winner address is invalid")));
         };
         let mut secret_key = [0u8; 32];
-        let len = secret.len().min(32);
-        secret_key[..len].copy_from_slice(&secret[..len]);
+        secret_key.copy_from_slice(&secret);
         Ok(Ok(WinnerDetails { game, winner, winner_index, secret_key }))
     }
 
@@ -1068,6 +1072,22 @@ mod tests {
         assert_eq!(result, CompletionResult::failure("Token owner must be on the ed25519 curve"));
         let state = h.db.get_completion_attempt_state(&address).unwrap();
         assert_eq!(state.completion_failure_kind, Some(CompletionFailureKind::Permanent));
+    }
+
+    #[tokio::test]
+    async fn corrupt_secrets_are_permanent_failures_without_a_transaction() {
+        let h = harness(None);
+        for (seed, stored) in [(0x2d, "zz".repeat(32)), (0x2e, "ab".repeat(31)), (0x2f, "ab".repeat(33))] {
+            let (address, _, random_hash) = store_game(&h, [seed; 32]);
+            h.db.delete_secret_key(&address).unwrap();
+            h.db.save_secret_key(&address, &stored, &hex::encode(random_hash)).unwrap();
+            serve_game(&h, Some(game_account(1, 1, 1, 0, 60)));
+            let result = h.manager.complete_game(&address, None, None).await;
+            assert_eq!(result, CompletionResult::failure("Stored secret key is corrupt"), "{stored}");
+            let state = h.db.get_completion_attempt_state(&address).unwrap();
+            assert_eq!(state.completion_failure_kind, Some(CompletionFailureKind::Permanent));
+        }
+        assert!(h.transport.calls_for("sendTransaction").is_empty());
     }
 
     #[tokio::test]
