@@ -19,8 +19,11 @@ use crate::config::OracleConfig;
 use crate::core::scan::{ScanLoopOptions, DEFAULT_DELAY_MS};
 use crate::core::service::OracleService;
 use crate::http::{self, RouterOptions};
+use crate::indexer::{self, IndexerDatabase, PublicIndexer};
+use crate::web_api::WebGameApi;
 
 const FALLBACK_SCAN_INTERVAL_MS: u64 = 300_000;
+const VERIFICATION_INTERVAL_MS: u64 = 10_000;
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 type Worker = BoxFuture<'static, anyhow::Result<()>>;
@@ -116,11 +119,37 @@ struct Workers {
     cleanup: Box<dyn FnOnce() + Send>,
 }
 
-fn build_workers(oracle: &Arc<OracleService>, _options: &mut RouterOptions) -> anyhow::Result<Workers> {
+fn build_workers(oracle: &Arc<OracleService>, options: &mut RouterOptions) -> anyhow::Result<Workers> {
+    let config = oracle.config();
+    let indexer_db = Arc::new(
+        IndexerDatabase::open(&config.indexer_database_file)
+            .with_context(|| format!("Failed to open indexer database {}", config.indexer_database_file))?,
+    );
+    let indexer = Arc::new(PublicIndexer::new(
+        indexer_db.clone(),
+        oracle.connection().clone(),
+        oracle.program_id(),
+        config.indexer_poll_interval_ms,
+    ));
+    let wake = indexer.clone();
+    let observer = oracle.add_program_event_observer(Arc::new(move || wake.request_catch_up()));
+    let web = Arc::new(WebGameApi::new(oracle.clone(), indexer_db.clone(), config));
+    options.indexer = Some(indexer::api::router(indexer_db.clone(), config.jupiter_api_key.clone()));
+    options.web = Some(web.clone().router());
+
     let scan_oracle = oracle.clone();
-    let workers: Vec<WorkerStart> =
-        vec![("scan loop", Box::new(move |signal| scan_worker(scan_oracle, signal).boxed()))];
-    Ok(Workers { workers, cleanup: Box::new(|| {}) })
+    let jobs_db = indexer_db.clone();
+    let workers: Vec<WorkerStart> = vec![
+        ("scan loop", Box::new(move |signal| scan_worker(scan_oracle, signal).boxed())),
+        ("public indexer", Box::new(move |signal| async move { indexer.run(signal).await }.boxed())),
+        ("verification jobs", Box::new(move |signal| verification_worker(web, jobs_db, signal).boxed())),
+    ];
+    let cleanup_oracle = oracle.clone();
+    let cleanup = Box::new(move || {
+        cleanup_oracle.remove_program_event_observer(observer);
+        indexer_db.close();
+    });
+    Ok(Workers { workers, cleanup })
 }
 
 /// `initialize()` followed by the supervised background workers.
@@ -180,6 +209,24 @@ async fn scan_worker(oracle: Arc<OracleService>, signal: Shutdown) -> anyhow::Re
             Err(err) => error!("Background scan loop failed: {err:#}"),
         }
         signal.sleep(DEFAULT_DELAY_MS).await;
+    }
+    Ok(())
+}
+
+/// Backfills one queued verification every ten seconds. A failed job is
+/// rescheduled; a database error is a crash.
+async fn verification_worker(web: Arc<WebGameApi>, db: Arc<IndexerDatabase>, signal: Shutdown) -> anyhow::Result<()> {
+    while !signal.is_triggered() {
+        if let Some(job) = db.next_verification_job()? {
+            let verified = web.verify(&job.signature).await;
+            if !signal.is_triggered() {
+                match verified {
+                    Ok(()) => db.finish_verification_job(&job.signature)?,
+                    Err(_) => db.retry_verification_job(&job.signature, job.attempts)?,
+                }
+            }
+        }
+        signal.sleep(VERIFICATION_INTERVAL_MS).await;
     }
     Ok(())
 }

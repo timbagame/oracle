@@ -69,7 +69,9 @@ pub async fn get_events_since(rpc: &RpcPool, program_id: &Address, cursor: &Inde
     };
     let program = program_id.to_base58();
     let program = program.as_str();
-    let parsed: Vec<IndexedEvents> = stream::iter(newest_first.iter().rev())
+    // Owned items keep the per-transaction futures free of higher-ranked
+    // lifetimes, so the indexer loop stays `Send` for `tokio::spawn`.
+    let parsed: Vec<IndexedEvents> = stream::iter(newest_first.iter().rev().cloned())
         .map(|item| async move {
             if item.err.as_ref().is_some_and(|err| !err.is_null()) {
                 return Ok(IndexedEvents::default());

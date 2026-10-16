@@ -31,6 +31,14 @@ enum Command {
     },
     /// Drain pending games without event listeners, then clean up records.
     ManualShutdown,
+    /// Import a Cloudflare D1 export into a new indexer database.
+    ImportIndexer {
+        /// D1 SQL export (`wrangler d1 export`).
+        source: String,
+        /// Target database; must not exist yet.
+        #[arg(default_value = "indexer.sqlite")]
+        target: String,
+    },
     /// Exit 0 when the local API answers `GET /health` (container probe).
     Healthcheck,
 }
@@ -48,6 +56,9 @@ fn main() {
             Command::InspectOracle => cli::inspect_oracle().await.map(|()| 0),
             Command::AuditRandom { args } => cli::audit_random::run(&args).await.map(|()| 0),
             Command::ManualShutdown => cli::manual_shutdown().await.map(|()| 0),
+            Command::ImportIndexer { source, target } => {
+                timba_oracle::indexer::import::main(&[source, target]).map(|()| 0)
+            }
             Command::Healthcheck => cli::healthcheck().await.map(|()| 0),
         }
     });
