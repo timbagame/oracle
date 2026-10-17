@@ -12,17 +12,26 @@ use super::pool::RpcPool;
 use super::rpc::LatestBlockhash;
 
 pub const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(60);
-const POLL_INTERVAL: Duration = Duration::from_secs(1);
+const POLL_INTERVAL: Duration = Duration::from_millis(400);
+/// How often an unconfirmed transaction is sent again, and the expiry checked. RPC nodes
+/// drop unstaked transactions under load, and a dropped one otherwise only shows up once
+/// its blockhash expires, about a minute later.
+pub const REBROADCAST_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Polls signature status until the transaction is confirmed, fails, expires
 /// or times out.
 pub async fn confirm_transaction(rpc: &RpcPool, signature: &str, latest: &LatestBlockhash) -> anyhow::Result<()> {
+    confirm(rpc, signature, latest, None).await
+}
+
+/// [`confirm_transaction`] that also rebroadcasts `wire` to every endpoint until it lands.
+async fn confirm(rpc: &RpcPool, signature: &str, latest: &LatestBlockhash, wire: Option<&str>) -> anyhow::Result<()> {
     let deadline = Instant::now() + CONFIRMATION_TIMEOUT;
+    // The first round also fans the transaction out to every endpoint right away.
+    let mut next_check = Instant::now();
     let signatures = [signature.to_string()];
     while Instant::now() < deadline {
-        let (statuses, block_height) =
-            tokio::try_join!(rpc.get_signature_statuses(&signatures), rpc.get_block_height())?;
-        if let Some(Some(status)) = statuses.first() {
+        if let Some(Some(status)) = rpc.get_signature_statuses(&signatures).await?.first() {
             if let Some(err) = &status.err {
                 anyhow::bail!("Transaction {signature} failed: {}", serde_json::to_string(err).unwrap_or_default());
             }
@@ -30,8 +39,14 @@ pub async fn confirm_transaction(rpc: &RpcPool, signature: &str, latest: &Latest
                 return Ok(());
             }
         }
-        if block_height > latest.last_valid_block_height {
-            anyhow::bail!("Transaction {signature} expired before confirmation");
+        if Instant::now() >= next_check {
+            next_check = Instant::now() + REBROADCAST_INTERVAL;
+            if rpc.get_block_height().await? > latest.last_valid_block_height {
+                anyhow::bail!("Transaction {signature} expired before confirmation");
+            }
+            if let Some(wire) = wire {
+                rpc.broadcast_transaction(wire).await;
+            }
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
@@ -50,9 +65,9 @@ pub fn should_retry_after_expiry(message: &str) -> bool {
     expiry_re().is_match(message)
 }
 
-/// Signs with a fresh blockhash, sends and confirms; retries once with a new
-/// blockhash when the first attempt expired, unless the expired transaction
-/// actually landed.
+/// Signs with a fresh blockhash, sends, rebroadcasts and confirms; retries once with a
+/// new blockhash when the first attempt expired, unless the expired transaction actually
+/// landed. `sign` runs once per attempt, so it can raise the priority fee on the retry.
 pub async fn submit_transaction<S>(
     rpc: &RpcPool,
     mut sign: S,
@@ -102,7 +117,7 @@ where
     let wire = sign(latest)?;
     let signature = rpc.send_transaction(&wire).await?;
     *last_signature = Some(signature.clone());
-    confirm_transaction(rpc, &signature, latest).await?;
+    confirm(rpc, &signature, latest, Some(&wire)).await?;
     Ok(signature)
 }
 
@@ -184,6 +199,11 @@ mod tests {
         RpcPool::with_transport(&["https://a".into()], transport.clone()).unwrap()
     }
 
+    /// `sendTransaction` calls with preflight, leaving out the rebroadcasts.
+    fn sends(transport: &FakeTransport) -> usize {
+        transport.calls_for("sendTransaction").iter().filter(|(_, params)| params[1]["skipPreflight"] == false).count()
+    }
+
     fn confirmed() -> serde_json::Value {
         json!({"value": [{"slot": 1, "confirmationStatus": "confirmed", "err": null}]})
     }
@@ -203,7 +223,9 @@ mod tests {
         assert_eq!(err.to_string(), "Transaction sig confirmation timed out");
         assert!(started.elapsed() >= CONFIRMATION_TIMEOUT);
         let polls = transport.calls_for("getSignatureStatuses").len();
-        assert!((60..=61).contains(&polls), "one poll per second: {polls}");
+        assert!((150..=151).contains(&polls), "one poll every 400ms: {polls}");
+        let checks = transport.calls_for("getBlockHeight").len();
+        assert!((30..=31).contains(&checks), "one expiry check every 2s: {checks}");
     }
 
     #[tokio::test]
@@ -219,7 +241,7 @@ mod tests {
         let signature = submit_transaction(&pool, |_| Ok("wire".into()), Some(&on_retry)).await.unwrap();
         assert_eq!(signature, "sig");
         assert_eq!(*retries.lock().unwrap(), vec!["Transaction sig expired before confirmation"]);
-        assert_eq!(transport.calls_for("sendTransaction").len(), 2);
+        assert_eq!(sends(&transport), 2);
     }
 
     #[tokio::test]
@@ -231,7 +253,7 @@ mod tests {
         transport.push("getSignatureStatuses", Ok(json!({"value": [null]})));
         transport.on(|_, m, _| (m == "getSignatureStatuses").then(|| Ok(confirmed())));
         assert_eq!(submit_transaction(&pool, |_| Ok("wire".into()), None).await.unwrap(), "sig");
-        assert_eq!(transport.calls_for("sendTransaction").len(), 2);
+        assert_eq!(sends(&transport), 2);
     }
 
     #[tokio::test]
@@ -242,7 +264,7 @@ mod tests {
         transport.push("getSignatureStatuses", Err(RpcError::json_rpc(-32602, "status lookup rejected")));
         transport.on(|_, m, _| (m == "getSignatureStatuses").then(|| Ok(confirmed())));
         assert_eq!(submit_transaction(&pool, |_| Ok("wire".into()), None).await.unwrap(), "sig");
-        assert_eq!(transport.calls_for("sendTransaction").len(), 2);
+        assert_eq!(sends(&transport), 2);
     }
 
     #[tokio::test]
@@ -252,6 +274,43 @@ mod tests {
         transport.push("getSignatureStatuses", Ok(json!({"value": [null]})));
         transport.on(|_, m, _| (m == "getSignatureStatuses").then(|| Ok(confirmed())));
         assert_eq!(submit_transaction(&pool, |_| Ok("wire".into()), None).await.unwrap(), "sig");
-        assert_eq!(transport.calls_for("sendTransaction").len(), 1);
+        assert_eq!(sends(&transport), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropped_transactions_are_rebroadcast_to_every_endpoint_until_they_land() {
+        // Regression: a dropped completion used to wait for its blockhash to expire
+        // (about 35 seconds) before anything was sent again.
+        let transport = FakeTransport::new();
+        transport.on(|_, m, _| (m == "getLatestBlockhash").then(|| Ok(blockhash())));
+        transport.on(|_, m, _| (m == "getBlockHeight").then(|| Ok(json!(10))));
+        transport.on(|endpoint, m, _| {
+            (m == "sendTransaction").then(|| {
+                if endpoint == "https://b" {
+                    Err(RpcError::transport("b is down"))
+                } else {
+                    Ok(json!("sig"))
+                }
+            })
+        });
+        // Unknown for the first 4.4 seconds, then confirmed.
+        for _ in 0..11 {
+            transport.push("getSignatureStatuses", Ok(json!({"value": [null]})));
+        }
+        transport.on(|_, m, _| (m == "getSignatureStatuses").then(|| Ok(confirmed())));
+        let pool = RpcPool::with_transport(&["https://a".into(), "https://b".into()], transport.clone()).unwrap();
+        let started = Instant::now();
+        assert_eq!(submit_transaction(&pool, |_| Ok("wire".into()), None).await.unwrap(), "sig");
+        assert_eq!(started.elapsed(), POLL_INTERVAL * 11);
+        assert_eq!(sends(&transport), 1);
+        let rebroadcasts: Vec<_> = transport
+            .calls_for("sendTransaction")
+            .into_iter()
+            .filter(|(_, params)| params[1]["skipPreflight"] == true)
+            .collect();
+        // Right away, after 2s and after 4s, to both endpoints, even though one keeps failing.
+        assert_eq!(rebroadcasts.len(), 6);
+        assert_eq!(rebroadcasts.iter().filter(|(endpoint, _)| endpoint == "https://b").count(), 3);
+        assert!(rebroadcasts.iter().all(|(_, params)| params[0] == "wire" && params[1]["maxRetries"] == 0));
     }
 }
