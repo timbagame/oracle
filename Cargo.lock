@@ -3989,7 +3989,7 @@ dependencies = [
 [[package]]
 name = "timba-protocol"
 version = "0.17.0"
-source = "git+https://github.com/timbagame/protocol?rev=5167b96#5167b96f767c421a54b188dad6ea8943523989e9"
+source = "git+https://github.com/timbagame/protocol?tag=v0.17.0#88bbaf1ee866200b7c30e10ab96ae9f5de76653e"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
