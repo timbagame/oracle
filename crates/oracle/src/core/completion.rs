@@ -468,7 +468,8 @@ impl CompletionManager {
         let readiness = self.evaluate_game_readiness(game_pda, block_time).await?;
         if let Some(expiry) = &self.expiry {
             let wakeup = match (&readiness.game_account, readiness.evaluated_at) {
-                (Some(game), Some(evaluated_at)) if !readiness.ready => expiry_wakeup(game, evaluated_at),
+                // Ready games return `None`: they are full or already expired.
+                (Some(game), Some(evaluated_at)) => expiry_wakeup(game, evaluated_at),
                 _ => None,
             };
             match wakeup {
@@ -494,7 +495,7 @@ impl CompletionManager {
             return Ok(Readiness { ready: false, game_account: None, evaluated_at: None });
         };
         // A full game is ready at any time, so it skips the two clock RPCs.
-        let is_full = game.tickets_count > 0 && game.tickets_count >= game.max_tickets;
+        let is_full = game.tickets_count >= game.max_tickets;
         let evaluated_at = match block_time {
             Some(time) => time,
             None if is_full => timba_common::time::now_secs(),
