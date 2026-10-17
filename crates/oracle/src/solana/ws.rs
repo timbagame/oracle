@@ -25,9 +25,9 @@ pub struct LogsNotification {
 
 /// Converts an RPC URL to its PubSub URL (`https` → `wss`, otherwise `ws`).
 pub fn websocket_url(endpoint: &str) -> Result<String, String> {
-    let mut url = url::Url::parse(endpoint).map_err(|e| format!("Invalid websocket endpoint {endpoint}: {e}"))?;
+    let mut url = url::Url::parse(endpoint).map_err(|e| format!("Invalid websocket endpoint: {e}"))?;
     let scheme = if matches!(url.scheme(), "https" | "wss") { "wss" } else { "ws" };
-    url.set_scheme(scheme).map_err(|_| format!("Invalid websocket endpoint {endpoint}"))?;
+    url.set_scheme(scheme).map_err(|_| "Invalid websocket endpoint".to_string())?;
     Ok(url.to_string())
 }
 

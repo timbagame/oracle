@@ -444,6 +444,7 @@ impl OracleService {
 
     async fn restart_event_listeners_with_retries(self: &Arc<Self>, endpoint: &str) -> anyhow::Result<()> {
         const MAX_ATTEMPTS: u64 = 3;
+        let endpoint = self.rpc.endpoint_label(endpoint);
         const BASE_DELAY_MS: u64 = 250;
         let mut last_error = None;
         for attempt in 0..MAX_ATTEMPTS {

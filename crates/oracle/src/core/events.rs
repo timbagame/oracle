@@ -491,13 +491,14 @@ impl EventProcessor {
                 let delay = self.player_flush_debounce_ms;
                 entry.timer = Some(tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_millis(delay)).await;
-                    let key = {
+                    let (key, trigger) = {
                         let mut buffers = processor.buffers.lock().unwrap();
                         let Some(entry) = buffers.get_mut(&address) else { return };
                         entry.timer = None;
-                        entry.last_game_key
+                        (entry.last_game_key, entry.last_trigger.clone())
                     };
-                    processor.flush_player_buffer(&address, "debounce", key);
+                    // The batch is named after its latest event, as an immediate flush is.
+                    processor.flush_player_buffer(&address, trigger.as_deref().unwrap_or("debounce"), key);
                 }));
             }
             flush_now.then_some(entry.last_game_key)
@@ -1369,7 +1370,7 @@ mod tests {
         assert!(h.db.get_game_players(&game).is_empty(), "buffered");
         wait_until(|| h.db.get_game_players(&game).len() == 2).await;
         let calls = h.hooks.auto_completes.lock().unwrap().clone();
-        assert_eq!(calls, vec![(game.clone(), "debounce".to_string())], "one attempt for the batch");
+        assert_eq!(calls, vec![(game.clone(), "joined".to_string())], "one attempt for the batch");
         wait_until(|| !h.processor.buffers.lock().unwrap().contains_key(&game)).await;
     }
 

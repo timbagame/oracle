@@ -64,6 +64,19 @@ pub fn parse_rpc_endpoint_list(value: Option<&str>) -> Result<Vec<String>, Strin
     Ok(unique)
 }
 
+/// The host of an RPC URL. Endpoints can carry API keys in their path or query,
+/// so logs name an endpoint by its host only.
+pub fn endpoint_host(endpoint: &str) -> String {
+    url::Url::parse(endpoint)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .unwrap_or_else(|| "an invalid URL".into())
+}
+
+/// `getBlockTime` for a slot whose block the node has not stored yet. Callers
+/// fall back to another clock, so it is not worth an error log.
+const BLOCK_NOT_AVAILABLE: i64 = -32004;
+
 fn compute_retry_delay_ms(attempt: usize, retry_after_ms: Option<u64>) -> u64 {
     let exponent = attempt.min(6) as i32;
     let base = RPC_RETRY_BASE_DELAY_MS as f64 * 2f64.powi(exponent);
@@ -145,13 +158,27 @@ impl RpcPool {
             previous_endpoint: self.endpoints[previous].clone(),
             previous_index: previous,
         });
-        info!("Switched Solana RPC endpoint to {} (commitment=confirmed)", self.endpoints[index]);
+        info!("Switched to Solana RPC {} (commitment=confirmed)", self.endpoint_label(&self.endpoints[index]));
+    }
+
+    /// `endpoint N (host)`, which tells apart endpoints on the same host without
+    /// logging their keys.
+    pub fn endpoint_label(&self, endpoint: &str) -> String {
+        let position = self.endpoints.iter().position(|candidate| candidate == endpoint);
+        let host = endpoint_host(endpoint);
+        match position {
+            Some(index) => format!("endpoint {} ({host})", index + 1),
+            None => host,
+        }
     }
 
     fn should_retry(&self, error: &RpcError, method: &str, endpoint: &str, attempt: usize) -> Option<u64> {
         let total = self.endpoints.len();
+        let endpoint = self.endpoint_label(endpoint);
         if !error.is_retryable() || total == 1 || attempt >= total - 1 {
-            error!("RPC call {method} failed on {endpoint} without fallback: {error}");
+            if error.code != Some(BLOCK_NOT_AVAILABLE) {
+                error!("RPC call {method} failed on {endpoint} without fallback: {error}");
+            }
             return None;
         }
         if error.is_rate_limit() {
@@ -422,6 +449,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn endpoints_are_logged_by_host_and_position_only() {
+        // Fake keys: the point is that neither shows up.
+        let pool = RpcPool::with_transport(
+            &["https://rpc.example/?api-key=fake-key-a".into(), "https://rpc.example/fake-key-b".into()],
+            FakeTransport::new(),
+        )
+        .unwrap();
+        assert_eq!(pool.endpoint_label("https://rpc.example/?api-key=fake-key-a"), "endpoint 1 (rpc.example)");
+        assert_eq!(pool.endpoint_label("https://rpc.example/fake-key-b"), "endpoint 2 (rpc.example)");
+        assert_eq!(pool.endpoint_label("wss://other.example/fake-key-c"), "other.example");
+        assert_eq!(endpoint_host("not a url"), "an invalid URL");
+        assert_eq!(endpoint_host("unix:/fake-key-d"), "an invalid URL");
+    }
+
+    #[test]
     fn parses_endpoint_lists() {
         assert_eq!(
             parse_rpc_endpoint_list(Some(" https://a/, https://b ,https://a ")).unwrap(),
@@ -507,6 +549,33 @@ mod tests {
         );
         assert_eq!(pool.get_slot().await.unwrap(), 1);
         assert!(waited.lock().unwrap()[0] >= 2_000);
+    }
+
+    #[tokio::test]
+    async fn refused_requests_stay_on_their_endpoint() {
+        let transport = FakeTransport::new();
+        transport.push("getSlot", Err(RpcError::json_rpc(-32602, "Invalid params")));
+        let pool = RpcPool::with_transport(&["https://a".into(), "https://b".into()], transport.clone()).unwrap();
+        assert_eq!(pool.get_slot().await.unwrap_err().code, Some(-32602));
+        let endpoints: Vec<String> = transport.calls_for("getSlot").into_iter().map(|(endpoint, _)| endpoint).collect();
+        assert_eq!(endpoints, vec!["https://a"], "another node would refuse it too");
+    }
+
+    #[tokio::test]
+    async fn the_last_endpoint_does_not_wait_out_its_rate_limit() {
+        let transport = FakeTransport::new();
+        transport.push("getSlot", Err(RpcError::http(429, "Too Many Requests", Some(1_000))));
+        transport.push("getSlot", Err(RpcError::http(429, "Too Many Requests", Some(1_000))));
+        let waited = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let w = waited.clone();
+        let pool = RpcPool::with_transport(&["https://a".into(), "https://b".into()], transport).unwrap().with_delay(
+            move |ms| {
+                w.lock().unwrap().push(ms);
+                Box::pin(async {})
+            },
+        );
+        assert!(pool.get_slot().await.unwrap_err().is_rate_limit());
+        assert_eq!(waited.lock().unwrap().len(), 1, "one wait, before the second endpoint");
     }
 
     #[tokio::test]

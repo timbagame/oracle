@@ -70,6 +70,21 @@ pub fn should_retry_after_expiry(message: &str) -> bool {
 /// landed. `sign` runs once per attempt, so it can raise the priority fee on the retry.
 pub async fn submit_transaction<S>(
     rpc: &RpcPool,
+    sign: S,
+    on_retry: Option<&(dyn Fn(&anyhow::Error) + Sync)>,
+) -> anyhow::Result<String>
+where
+    S: FnMut(&LatestBlockhash) -> anyhow::Result<String>,
+{
+    let latest = rpc.get_latest_blockhash().await?;
+    submit_transaction_from(rpc, latest, sign, on_retry).await
+}
+
+/// [`submit_transaction`] whose first attempt uses a blockhash the caller already
+/// fetched, alongside its other lookups.
+pub async fn submit_transaction_from<S>(
+    rpc: &RpcPool,
+    latest: LatestBlockhash,
     mut sign: S,
     on_retry: Option<&(dyn Fn(&anyhow::Error) + Sync)>,
 ) -> anyhow::Result<String>
@@ -77,7 +92,6 @@ where
     S: FnMut(&LatestBlockhash) -> anyhow::Result<String>,
 {
     let mut last_signature: Option<String> = None;
-    let latest = rpc.get_latest_blockhash().await?;
     let first = send_and_confirm(rpc, &mut sign, &latest, &mut last_signature).await;
     let error = match first {
         Ok(signature) => return Ok(signature),
