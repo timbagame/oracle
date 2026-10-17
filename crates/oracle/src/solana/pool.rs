@@ -552,6 +552,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refused_requests_stay_on_their_endpoint() {
+        let transport = FakeTransport::new();
+        transport.push("getSlot", Err(RpcError::json_rpc(-32602, "Invalid params")));
+        let pool = RpcPool::with_transport(&["https://a".into(), "https://b".into()], transport.clone()).unwrap();
+        assert_eq!(pool.get_slot().await.unwrap_err().code, Some(-32602));
+        let endpoints: Vec<String> = transport.calls_for("getSlot").into_iter().map(|(endpoint, _)| endpoint).collect();
+        assert_eq!(endpoints, vec!["https://a"], "another node would refuse it too");
+    }
+
+    #[tokio::test]
+    async fn the_last_endpoint_does_not_wait_out_its_rate_limit() {
+        let transport = FakeTransport::new();
+        transport.push("getSlot", Err(RpcError::http(429, "Too Many Requests", Some(1_000))));
+        transport.push("getSlot", Err(RpcError::http(429, "Too Many Requests", Some(1_000))));
+        let waited = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let w = waited.clone();
+        let pool = RpcPool::with_transport(&["https://a".into(), "https://b".into()], transport).unwrap().with_delay(
+            move |ms| {
+                w.lock().unwrap().push(ms);
+                Box::pin(async {})
+            },
+        );
+        assert!(pool.get_slot().await.unwrap_err().is_rate_limit());
+        assert_eq!(waited.lock().unwrap().len(), 1, "one wait, before the second endpoint");
+    }
+
+    #[tokio::test]
     async fn caps_retry_after_and_backs_off_without_it() {
         let transport = FakeTransport::new();
         transport.push("getSlot", Err(RpcError::http(429, "Too Many Requests", Some(u64::MAX))));
