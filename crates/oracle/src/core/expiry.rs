@@ -70,14 +70,16 @@ impl ExpiryTimers {
         let handle = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(delay as u64)).await;
             let Some(this) = this.upgrade() else { return };
-            {
+            // A replaced or cancelled timer is aborted, but it may already be past its sleep.
+            let current = {
                 let mut timers = this.timers.lock().unwrap();
-                if timers.get(&address).is_none_or(|timer| timer.id != id) {
-                    return;
+                let current = timers.get(&address).is_some_and(|timer| timer.id == id);
+                if current {
+                    timers.remove(&address);
                 }
-                timers.remove(&address);
-            }
-            if let Some(callback) = this.callback.get() {
+                current
+            };
+            if let (true, Some(callback)) = (current, this.callback.get()) {
                 callback(address, game_key).await;
             }
         });

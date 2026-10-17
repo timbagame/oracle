@@ -2056,6 +2056,16 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn expiry_timers_outliving_the_service_do_nothing() {
+        let h = harness();
+        let expiry = h.service.expiry.clone();
+        drop(h);
+        expiry.schedule("gone", Address([1; 32]), 0);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(expiry.scheduled("gone"), None);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn transient_retries_escalate_into_a_cooldown() {
         let h = harness();
         let game = tracked_game(&h);
