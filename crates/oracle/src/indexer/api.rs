@@ -322,16 +322,10 @@ impl IndexerApi {
                 )
             }
             "/api/leaderboard" => {
-                let parsed = query!(LEADERBOARD_QUERY);
-                // `period` is an oracle extension; the protocol contract does not list it yet.
-                let period = match query.last("period") {
-                    None => LeaderboardPeriod::default(),
-                    Some(period) => match LeaderboardPeriod::parse(period) {
-                        Some(period) => period,
-                        None => return Ok(INVALID_QUERY),
-                    },
-                };
-                let players = self.db.get_leaderboard(parsed.int("limit"), parsed.text("tokenMint"), period)?;
+                let query = query!(LEADERBOARD_QUERY);
+                // The schema only lets through periods `LeaderboardPeriod` knows.
+                let period = query.text("period").and_then(LeaderboardPeriod::parse).unwrap_or_default();
+                let players = self.db.get_leaderboard(query.int("limit"), query.text("tokenMint"), period)?;
                 ok(
                     &INDEXER_LEADERBOARD_RESPONSE,
                     json!({ "count": players.len(), "players": players }),
