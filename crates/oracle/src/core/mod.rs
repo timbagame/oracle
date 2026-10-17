@@ -2,6 +2,7 @@
 
 pub mod completion;
 pub mod events;
+pub mod expiry;
 pub mod registry;
 pub mod scan;
 pub mod service;

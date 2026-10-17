@@ -23,6 +23,7 @@ use super::completion::{
 use super::events::{
     EventHooks, EventProcessor, EventProcessorOptions, ProgramEventObserver, RegistrySyncRequest, ALL_EVENTS,
 };
+use super::expiry::ExpiryTimers;
 use super::registry::{PlayerRegistrySync, RecoverPlayerRegistry, RecoverRequest, RegistrySyncManager};
 use super::scan::{ScanCompletion, ScanLoopOptions, ScanLoopRunner, ScanLoopRunnerOptions, ScanLoopSummary};
 use super::signer::{
@@ -194,6 +195,7 @@ pub struct OracleService {
     prices: Arc<dyn TokenPriceResolver>,
     http: reqwest::Client,
     readiness_cache: ReadinessCache,
+    expiry: Arc<ExpiryTimers>,
     retries: Mutex<HashMap<String, CompletionRetry>>,
     next_timer: AtomicU64,
     active_runs: watch::Sender<usize>,
@@ -274,6 +276,7 @@ impl OracleService {
         let program = ProgramClient::new(rpc.clone(), config.contract_version, config.solana_ws_endpoint.clone());
         let registry_sync = Arc::new(PlayerRegistrySync::new(rpc.clone(), program.program_id));
         let readiness_cache = ReadinessCache::default();
+        let expiry = ExpiryTimers::new();
 
         let recover_sync = registry_sync.clone();
         let recover: RecoverPlayerRegistry = Arc::new(move |request: RecoverRequest| {
@@ -293,6 +296,7 @@ impl OracleService {
             operator: operator.clone(),
             readiness_cache: readiness_cache.clone(),
             registry,
+            expiry: Some(expiry.clone()),
         }));
         let events_list: Vec<EventName> = ALL_EVENTS
             .into_iter()
@@ -346,6 +350,7 @@ impl OracleService {
                     .build()
                     .unwrap_or_default(),
                 readiness_cache,
+                expiry: expiry.clone(),
                 retries: Mutex::new(HashMap::new()),
                 next_timer: AtomicU64::new(1),
                 active_runs: watch::channel(0).0,
@@ -354,6 +359,11 @@ impl OracleService {
                 weak_self: weak.clone(),
             }
         });
+        let weak = Arc::downgrade(&service);
+        expiry.set_callback(Arc::new(move |game_address, game_key| match weak.upgrade() {
+            Some(service) => service.try_auto_complete(Some(game_key), game_address, "expiry".into()).boxed(),
+            None => futures::future::ready(()).boxed(),
+        }));
         service.register_rpc_failover_listener();
         service
     }
@@ -530,6 +540,7 @@ impl OracleService {
     pub async fn close(&self) {
         self.closing.store(true, Ordering::SeqCst);
         self.clear_completion_retries();
+        self.expiry.clear();
         self.stop_event_listening().await;
         self.scanner.stop();
         if let Some(task) = self.failover_task.lock().unwrap().take() {
@@ -803,7 +814,11 @@ impl OracleService {
         let mut options = AttemptOptions::new(&game_address);
         options.game_key = game_key;
         let (address, success_trigger) = (game_address.clone(), trigger.clone());
-        options.success_log = log_fn(move |_, _| format!("🎯 Auto-completed game {address} after {success_trigger}"));
+        let triggered = std::time::Instant::now();
+        options.success_log = log_fn(move |_, _| {
+            let elapsed = triggered.elapsed().as_millis();
+            format!("🎯 Auto-completed game {address} after {success_trigger} in {elapsed}ms")
+        });
         options.failure_log =
             log_fn(|_, error| format!("❌ Auto-completion failed: {}", error.unwrap_or("Unknown error")));
         self.start_automatic_completion_attempt(options, trigger, 0, false, RetryMode::Transient).await;
@@ -1402,6 +1417,7 @@ impl EventHooks for OracleService {
 
     fn on_game_finalized(&self, game_address: &str) {
         self.cancel_completion_retry(game_address);
+        self.expiry.cancel(game_address);
         self.events.cancel_registry_sync(game_address);
         self.completion.reset_registry_prefetch_schedule(game_address);
     }
@@ -1984,6 +2000,69 @@ mod tests {
         let state = h.service.db.get_completion_attempt_state(&game).unwrap();
         assert_eq!(state.completion_attempts, 0);
         assert_eq!(state.completion_retry_after, None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn games_with_their_minimum_players_complete_at_expiry_without_a_scan() {
+        let h = harness();
+        // The chain clock is driven by the test; the timer runs on paused tokio time.
+        let chain_time = Arc::new(std::sync::atomic::AtomicI64::new(BLOCK_TIME));
+        let clock = chain_time.clone();
+        h.transport.on(move |_, method, _| {
+            (method == "getBlockTime").then(|| Ok(json!(clock.load(std::sync::atomic::Ordering::SeqCst))))
+        });
+        let timeout = 60;
+        let created_at = timba_common::time::now_secs() as u64 - 5;
+        serve_chain(&h);
+        serve_game(&h, game_value(2, 5, 2, created_at, timeout));
+        let game = tracked_game(&h);
+        let roster: Vec<String> = (0..2).map(|_| Keypair::generate().address().to_base58()).collect();
+        h.service.db.replace_game_players(&game, &roster).unwrap();
+        let expires_at = (created_at + timeout) as i64;
+
+        let result = h.service.complete_game_now(&game).await.unwrap();
+        assert!(result.not_ready, "{result:?}");
+        assert_eq!(h.service.expiry.scheduled(&game), Some(expires_at));
+
+        // Readiness retries run out long before the game expires.
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        assert!(h.service.retries.lock().unwrap().is_empty());
+        assert_eq!(h.service.db.get_game_status(&game).as_deref(), Some("pending"));
+
+        chain_time.store(expires_at, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_secs(25)).await;
+        assert_eq!(h.service.db.get_game_status(&game).as_deref(), Some("pending"), "not before the deadline");
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        assert_eq!(h.service.db.get_game_status(&game).as_deref(), Some("completed"));
+        assert_eq!(h.service.expiry.scheduled(&game), None);
+        h.service.close().await;
+    }
+
+    #[tokio::test]
+    async fn finalized_and_closed_services_drop_expiry_timers() {
+        let h = harness();
+        serve_chain(&h);
+        serve_game(&h, game_value(1, 5, 1, BLOCK_TIME as u64, 600));
+        let game = tracked_game(&h);
+        h.service.complete_game_now(&game).await.unwrap();
+        assert!(h.service.expiry.scheduled(&game).is_some());
+        h.service.on_game_finalized(&game);
+        assert_eq!(h.service.expiry.scheduled(&game), None);
+
+        h.service.complete_game_now(&game).await.unwrap();
+        assert!(h.service.expiry.scheduled(&game).is_some());
+        h.service.close().await;
+        assert_eq!(h.service.expiry.scheduled(&game), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn expiry_timers_outliving_the_service_do_nothing() {
+        let h = harness();
+        let expiry = h.service.expiry.clone();
+        drop(h);
+        expiry.schedule("gone", Address([1; 32]), 0);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(expiry.scheduled("gone"), None);
     }
 
     #[tokio::test(start_paused = true)]

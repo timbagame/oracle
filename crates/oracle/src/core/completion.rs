@@ -7,10 +7,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use regex::Regex;
 use timba_common::{error, info, warn};
+use timba_protocol::address::COMPUTE_BUDGET_PROGRAM_ID;
 use timba_protocol::contracts::{complete_game_instruction, find_game_pda, CompleteGameInput, GameAccount};
 use timba_protocol::randomness::calculate_winner;
 use timba_protocol::{Address, ContractVersion, Instruction};
 
+use super::expiry::{expiry_wakeup, ExpiryTimers};
 use super::registry::RegistrySyncManager;
 use super::types::{AttemptOptions, CompletionResult, GameContext, Readiness, ReadinessResolution};
 use crate::db::{CompletionFailureKind, OracleDatabase};
@@ -21,6 +23,26 @@ use crate::solana::tx::sign_legacy_transaction;
 use crate::solana::{Keypair, RpcPool};
 
 pub const SECRET_KEY_LENGTH: usize = 32;
+
+/// A completion uses 33k-48k compute units. The limit leaves headroom and keeps the
+/// priority fee (price times limit) small.
+pub const COMPLETION_COMPUTE_UNIT_LIMIT: u32 = 100_000;
+/// Priority fee bounds in micro-lamports per compute unit: 1,000 to 50,000 lamports per
+/// completion at the limit above. Without a fee, about half the completions were dropped.
+pub const MIN_PRIORITY_FEE: u64 = 10_000;
+pub const MAX_PRIORITY_FEE: u64 = 500_000;
+/// A retry means the previous transaction expired unseen, so it bids this much more.
+const RETRY_PRIORITY_FEE_FACTOR: u64 = 4;
+
+/// `SetComputeUnitLimit` and `SetComputeUnitPrice` from the compute budget program.
+pub fn compute_budget_instructions(unit_limit: u32, micro_lamports_per_unit: u64) -> [Instruction; 2] {
+    let instruction = |tag: u8, value: &[u8]| Instruction {
+        program_id: COMPUTE_BUDGET_PROGRAM_ID,
+        accounts: Vec::new(),
+        data: std::iter::once(tag).chain(value.iter().copied()).collect(),
+    };
+    [instruction(2, &unit_limit.to_le_bytes()), instruction(3, &micro_lamports_per_unit.to_le_bytes())]
+}
 pub const NO_SECRET_KEY_MESSAGE: &str = "No secret key found";
 
 pub fn is_transient_completion_failure(error: Option<&str>) -> bool {
@@ -75,6 +97,8 @@ pub struct CompletionManagerOptions {
     pub operator: Arc<Keypair>,
     pub readiness_cache: ReadinessCache,
     pub registry: Arc<RegistrySyncManager>,
+    /// Wakes min-player games at expiry; `None` leaves them to the fallback scan.
+    pub expiry: Option<Arc<ExpiryTimers>>,
 }
 
 pub struct CompletionManager {
@@ -86,6 +110,7 @@ pub struct CompletionManager {
     operator: Arc<Keypair>,
     readiness_cache: ReadinessCache,
     pub registry: Arc<RegistrySyncManager>,
+    expiry: Option<Arc<ExpiryTimers>>,
     in_flight: Mutex<HashSet<String>>,
 }
 
@@ -118,6 +143,7 @@ impl CompletionManager {
             operator: options.operator,
             readiness_cache: options.readiness_cache,
             registry: options.registry,
+            expiry: options.expiry,
             in_flight: Mutex::new(HashSet::new()),
         }
     }
@@ -440,6 +466,16 @@ impl CompletionManager {
         block_time: Option<i64>,
     ) -> anyhow::Result<Readiness> {
         let readiness = self.evaluate_game_readiness(game_pda, block_time).await?;
+        if let Some(expiry) = &self.expiry {
+            let wakeup = match (&readiness.game_account, readiness.evaluated_at) {
+                (Some(game), Some(evaluated_at)) if !readiness.ready => expiry_wakeup(game, evaluated_at),
+                _ => None,
+            };
+            match wakeup {
+                Some(expires_at) => expiry.schedule(game_address, *game_pda, expires_at),
+                None => expiry.cancel(game_address),
+            }
+        }
         let mut cache = self.readiness_cache.lock().unwrap();
         if readiness.ready {
             cache.insert(game_address.to_string(), readiness.clone());
@@ -457,8 +493,11 @@ impl CompletionManager {
         let Some(game) = self.fetch_game_account(game_pda).await? else {
             return Ok(Readiness { ready: false, game_account: None, evaluated_at: None });
         };
+        // A full game is ready at any time, so it skips the two clock RPCs.
+        let is_full = game.tickets_count > 0 && game.tickets_count >= game.max_tickets;
         let evaluated_at = match block_time {
             Some(time) => time,
+            None if is_full => timba_common::time::now_secs(),
             None => self.get_blockchain_time().await,
         };
         Ok(Readiness {
@@ -513,15 +552,43 @@ impl CompletionManager {
         winner_index: u32,
     ) -> anyhow::Result<String> {
         let instruction = self.build_completion_instruction(game, winner, random_hash, secret_key, winner_index)?;
+        let mut fee = self.priority_fee(&instruction).await;
+        let started = std::time::Instant::now();
         let operator = self.operator.clone();
-        submit_transaction(
+        let mut fees = Vec::new();
+        let signature = submit_transaction(
             &self.rpc,
-            move |latest| {
-                Ok(sign_legacy_transaction(&operator, &[], &latest.blockhash, std::slice::from_ref(&instruction))?.1)
+            |latest| {
+                if !fees.is_empty() {
+                    fee = fee.saturating_mul(RETRY_PRIORITY_FEE_FACTOR).min(MAX_PRIORITY_FEE);
+                }
+                fees.push(fee);
+                let [limit, price] = compute_budget_instructions(COMPLETION_COMPUTE_UNIT_LIMIT, fee);
+                Ok(sign_legacy_transaction(&operator, &[], &latest.blockhash, &[limit, price, instruction.clone()])?.1)
             },
             None,
         )
-        .await
+        .await?;
+        info!(
+            "📨 Completion {signature} confirmed in {}ms (priority fee {} micro-lamports/CU)",
+            started.elapsed().as_millis(),
+            fees.iter().map(u64::to_string).collect::<Vec<_>>().join(" then ")
+        );
+        Ok(signature)
+    }
+
+    /// The Helius "High" estimate for the instruction's writable accounts, clamped to
+    /// [`MIN_PRIORITY_FEE`]..=[`MAX_PRIORITY_FEE`]; the minimum when no estimate is available.
+    async fn priority_fee(&self, instruction: &Instruction) -> u64 {
+        let writable: Vec<Address> =
+            instruction.accounts.iter().filter(|account| account.writable).map(|account| account.address).collect();
+        match self.rpc.get_priority_fee_estimate(&writable).await {
+            Ok(estimate) => estimate.clamp(MIN_PRIORITY_FEE, MAX_PRIORITY_FEE),
+            Err(error) => {
+                warn!("Priority fee estimate unavailable, using {MIN_PRIORITY_FEE}: {error}");
+                MIN_PRIORITY_FEE
+            }
+        }
     }
 
     pub fn resolve_stored_game(&self, game_address: &str) -> anyhow::Result<Option<GameContext>> {
@@ -612,6 +679,7 @@ mod tests {
             operator: Arc::new(Keypair::generate()),
             readiness_cache: cache.clone(),
             registry,
+            expiry: None,
         });
         Harness { _dir: dir, db, transport, metrics, cache, manager }
     }
@@ -820,6 +888,48 @@ mod tests {
         );
         let err = h.manager.fetch_game_account(&pda).await.unwrap_err();
         assert_eq!(err.to_string(), "Account is not a Timba game");
+    }
+
+    #[tokio::test]
+    async fn full_games_skip_the_chain_clock() {
+        let h = harness(None);
+        let pda = Address([7; 32]);
+        let before = timba_common::time::now_secs();
+        serve_game(&h, Some(game_account(2, 2, 1, 0, u64::MAX / 2)));
+        let readiness = h.manager.evaluate_game_readiness(&pda, None).await.unwrap();
+        assert!(readiness.ready);
+        assert!(readiness.evaluated_at.unwrap() >= before);
+        assert!(h.transport.calls_for("getSlot").is_empty());
+        assert!(h.transport.calls_for("getBlockTime").is_empty());
+
+        // Short of full, readiness depends on the chain clock.
+        let h = harness(None);
+        serve_game(&h, Some(game_account(1, 2, 1, 0, 60)));
+        let readiness = h.manager.evaluate_game_readiness(&pda, None).await.unwrap();
+        assert_eq!(readiness.evaluated_at, Some(BLOCK_TIME));
+        assert_eq!(h.transport.calls_for("getBlockTime").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn readiness_checks_keep_expiry_timers_in_step() {
+        let mut h = harness(None);
+        let expiry = ExpiryTimers::new();
+        h.manager.expiry = Some(expiry.clone());
+        let pda = Address([7; 32]);
+        let address = pda.to_base58();
+        let expires_at = BLOCK_TIME + 60;
+        h.transport.push("getAccountInfo", Ok(account_value(&game_account(1, 3, 1, BLOCK_TIME as u64, 60))));
+        assert!(!h.manager.is_game_ready_for_completion(&pda).await.unwrap());
+        assert_eq!(expiry.scheduled(&address), Some(expires_at));
+
+        // Ready (full) or gone: nothing left to wake up for.
+        h.transport.push("getAccountInfo", Ok(account_value(&game_account(3, 3, 1, BLOCK_TIME as u64, 60))));
+        assert!(h.manager.is_game_ready_for_completion(&pda).await.unwrap());
+        assert_eq!(expiry.scheduled(&address), None);
+        expiry.schedule(&address, pda, expires_at);
+        h.transport.push("getAccountInfo", Ok(json!({"value": null})));
+        assert!(!h.manager.is_game_ready_for_completion(&pda).await.unwrap());
+        assert_eq!(expiry.scheduled(&address), None);
     }
 
     #[tokio::test]
@@ -1128,6 +1238,81 @@ mod tests {
         let signature = h.manager.execute_game_completion(&game, &winner, &[0; 32], &[0; 32], 0).await.unwrap();
         assert_eq!(signature, "landed-sig");
         assert_eq!(h.transport.calls_for("sendTransaction").len(), 1);
+    }
+
+    /// The `SetComputeUnitPrice` value in each sent completion, in order.
+    fn sent_priority_fees(h: &Harness) -> Vec<u64> {
+        h.transport
+            .calls_for("sendTransaction")
+            .iter()
+            .filter(|(_, params)| params[1]["skipPreflight"] == false)
+            .map(|(_, params)| {
+                let wire = base64::engine::general_purpose::STANDARD.decode(params[0].as_str().unwrap()).unwrap();
+                // Each compiled instruction is a program index, account count, data length and data.
+                let limit = [&[0u8, 5, 2][..], &COMPLETION_COMPUTE_UNIT_LIMIT.to_le_bytes()].concat();
+                let at =
+                    wire.windows(7).position(|w| w == &limit[..]).expect("the first instruction sets the limit") + 7;
+                assert_eq!(wire[at + 1..at + 4], [0, 9, 3], "the second sets the price");
+                u64::from_le_bytes(wire[at + 4..at + 12].try_into().unwrap())
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn completions_bid_the_estimated_priority_fee_and_raise_it_on_retry() {
+        // Regression: completions went out without a priority fee and about half were dropped.
+        let h = harness(None);
+        h.transport.on(|_, method, _| match method {
+            "getPriorityFeeEstimate" => Some(Ok(json!({"priorityFeeEstimate": 24_380.2}))),
+            "getLatestBlockhash" => Some(Ok(json!({"value": {"blockhash": BLOCKHASH, "lastValidBlockHeight": 10}}))),
+            "sendTransaction" => Some(Ok(json!("landed-sig"))),
+            _ => None,
+        });
+        // The first transaction expires unseen; the retry lands.
+        h.transport.push("getBlockHeight", Ok(json!(11)));
+        h.transport.on(|_, method, _| (method == "getBlockHeight").then(|| Ok(json!(1))));
+        h.transport.push("getSignatureStatuses", Ok(json!({"value": [null]})));
+        h.transport.push("getSignatureStatuses", Ok(json!({"value": [null]})));
+        h.transport.on(|_, method, _| {
+            (method == "getSignatureStatuses")
+                .then(|| Ok(json!({"value": [{"slot": 1, "confirmationStatus": "confirmed", "err": null}]})))
+        });
+        let game = game_account(1, 1, 1, 0, 60);
+        let winner = Keypair::generate().address();
+        let signature = h.manager.execute_game_completion(&game, &winner, &[0; 32], &[0; 32], 0).await.unwrap();
+        assert_eq!(signature, "landed-sig");
+        assert_eq!(sent_priority_fees(&h), vec![24_381, 97_524]);
+        let estimate = &h.transport.calls_for("getPriorityFeeEstimate")[0].1;
+        let game_pda = find_game_pda(&[0; 32], &PROGRAM_ID).to_base58();
+        assert!(estimate[0]["accountKeys"].as_array().unwrap().contains(&json!(game_pda)));
+    }
+
+    #[tokio::test]
+    async fn priority_fees_stay_within_bounds() {
+        for (estimate, expected) in [
+            (Some(json!({"priorityFeeEstimate": 3.0})), MIN_PRIORITY_FEE),
+            (Some(json!({"priorityFeeEstimate": 1e12})), MAX_PRIORITY_FEE),
+            (None, MIN_PRIORITY_FEE),
+        ] {
+            let h = harness(None);
+            if let Some(estimate) = estimate {
+                h.transport.push("getPriorityFeeEstimate", Ok(estimate));
+            }
+            serve_submission(&h);
+            let game = game_account(1, 1, 1, 0, 60);
+            let winner = Keypair::generate().address();
+            h.manager.execute_game_completion(&game, &winner, &[0; 32], &[0; 32], 0).await.unwrap();
+            assert_eq!(sent_priority_fees(&h), vec![expected]);
+        }
+    }
+
+    #[test]
+    fn compute_budget_instructions_match_the_program_layout() {
+        let [limit, price] = compute_budget_instructions(100_000, 24_381);
+        assert_eq!(limit.program_id, COMPUTE_BUDGET_PROGRAM_ID);
+        assert_eq!(limit.data, [2, 0xa0, 0x86, 0x01, 0x00]);
+        assert_eq!(price.data, [3, 0x3d, 0x5f, 0, 0, 0, 0, 0, 0]);
+        assert!(limit.accounts.is_empty() && price.accounts.is_empty());
     }
 
     #[test]

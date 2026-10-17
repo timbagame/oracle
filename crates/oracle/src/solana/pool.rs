@@ -260,6 +260,35 @@ impl RpcPool {
         result.as_str().map(String::from).ok_or_else(|| RpcError::decode("sendTransaction returned no signature"))
     }
 
+    /// Sends an already signed transaction to every endpoint at once, without preflight.
+    /// Unstaked RPC nodes drop transactions under load, so a rebroadcast only raises the
+    /// odds that a leader sees it; failures are logged and otherwise ignored.
+    pub async fn broadcast_transaction(&self, wire_base64: &str) {
+        let params = json!([wire_base64, { "encoding": "base64", "maxRetries": 0, "skipPreflight": true }]);
+        let sends =
+            self.endpoints.iter().map(|endpoint| self.transport.send(endpoint, "sendTransaction", params.clone()));
+        for (index, result) in futures::future::join_all(sends).await.into_iter().enumerate() {
+            if let Err(error) = result {
+                // The endpoint URL can carry an API key, so only its position is logged.
+                warn!("Rebroadcast to RPC endpoint {} failed: {error}", index + 1);
+            }
+        }
+    }
+
+    /// Helius `getPriorityFeeEstimate` at the "High" level, in micro-lamports per compute
+    /// unit, for a transaction writing `accounts`.
+    pub async fn get_priority_fee_estimate(&self, accounts: &[Address]) -> Result<u64, RpcError> {
+        let keys: Vec<String> = accounts.iter().map(Address::to_base58).collect();
+        let result = self
+            .request("getPriorityFeeEstimate", json!([{ "accountKeys": keys, "options": { "priorityLevel": "High" } }]))
+            .await?;
+        result["priorityFeeEstimate"]
+            .as_f64()
+            .filter(|fee| fee.is_finite() && *fee >= 0.0)
+            .map(|fee| fee.ceil() as u64)
+            .ok_or_else(|| RpcError::decode("getPriorityFeeEstimate returned no estimate"))
+    }
+
     pub async fn get_signature_statuses(
         &self,
         signatures: &[String],
@@ -508,6 +537,23 @@ mod tests {
                 assert!(delay <= RPC_RETRY_MAX_DELAY_MS as u64, "{attempt} {retry_after:?} -> {delay}");
                 assert!(delay >= retry_after.unwrap_or(0).min(RPC_RETRY_MAX_DELAY_MS as u64));
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn priority_fee_estimates_round_up_and_reject_garbage() {
+        let transport = FakeTransport::new();
+        transport.push("getPriorityFeeEstimate", Ok(json!({"priorityFeeEstimate": 24380.2})));
+        transport.push("getPriorityFeeEstimate", Ok(json!({"priorityFeeEstimate": -1.0})));
+        transport.push("getPriorityFeeEstimate", Ok(json!({"priorityFeeLevels": {}})));
+        let pool = RpcPool::with_transport(&["https://a".into()], transport.clone()).unwrap();
+        let account = Address([3; 32]);
+        assert_eq!(pool.get_priority_fee_estimate(&[account]).await.unwrap(), 24381);
+        let calls = transport.calls_for("getPriorityFeeEstimate");
+        assert_eq!(calls[0].1, json!([{"accountKeys": [account.to_base58()], "options": {"priorityLevel": "High"}}]));
+        for _ in 0..2 {
+            let error = pool.get_priority_fee_estimate(&[account]).await.unwrap_err();
+            assert_eq!(error.to_string(), "getPriorityFeeEstimate returned no estimate");
         }
     }
 }

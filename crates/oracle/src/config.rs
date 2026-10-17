@@ -20,6 +20,10 @@ const DEFAULT_DATABASE_FILE: &str = "oracle.sqlite";
 const DEFAULT_INDEXER_DATABASE_FILE: &str = "indexer.sqlite";
 const DEFAULT_KEYPAIR_FILE: &str = "operator-keypair.json";
 const LEGACY_KEYPAIR_FILE: &str = "admin-keypair.json";
+/// Short windows: they still batch the logs of one transaction, but add little to a
+/// completion. Zero would run the completion inline and stall the game's event queue.
+const DEFAULT_PLAYER_EVENT_FLUSH_DEBOUNCE_MS: i64 = 20;
+const DEFAULT_AUTOCOMPLETE_DEBOUNCE_MS: i64 = 50;
 
 #[derive(Clone)]
 pub struct OracleConfig {
@@ -124,7 +128,10 @@ impl OracleConfig {
             operator_keypair_path,
             operator_keypair_source,
             scan_throttle_ms: non_negative("ORACLE_SCAN_THROTTLE_MS", 0),
-            player_event_flush_debounce_ms: non_negative("ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS", 100),
+            player_event_flush_debounce_ms: non_negative(
+                "ORACLE_PLAYER_EVENT_FLUSH_DEBOUNCE_MS",
+                DEFAULT_PLAYER_EVENT_FLUSH_DEBOUNCE_MS,
+            ),
             player_event_flush_max_operations: parse_integer(
                 read_env("ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS").as_deref(),
                 500,
@@ -132,7 +139,10 @@ impl OracleConfig {
                 None,
                 "ORACLE_PLAYER_EVENT_FLUSH_MAX_OPERATIONS",
             ) as usize,
-            auto_complete_debounce_ms: non_negative("ORACLE_AUTOCOMPLETE_DEBOUNCE_MS", 500),
+            auto_complete_debounce_ms: non_negative(
+                "ORACLE_AUTOCOMPLETE_DEBOUNCE_MS",
+                DEFAULT_AUTOCOMPLETE_DEBOUNCE_MS,
+            ),
             use_ephemeral_keypair: should_use_ephemeral_keypair(),
             environment,
             bot_internal_url: Some(read_env("BOT_INTERNAL_URL").unwrap_or_else(|| "http://bot:3002".into())),
@@ -298,9 +308,9 @@ mod tests {
         );
         assert!(Path::new(&config.operator_keypair_path).is_absolute());
         assert_eq!(config.scan_throttle_ms, 0);
-        assert_eq!(config.player_event_flush_debounce_ms, 100);
+        assert_eq!(config.player_event_flush_debounce_ms, 20);
         assert_eq!(config.player_event_flush_max_operations, 500);
-        assert_eq!(config.auto_complete_debounce_ms, 500);
+        assert_eq!(config.auto_complete_debounce_ms, 50);
         assert_eq!(config.bot_internal_url.as_deref(), Some("http://bot:3002"));
         assert_eq!(config.api_token, None);
         assert_eq!(config.jupiter_api_key, None);
@@ -392,7 +402,7 @@ mod tests {
         assert_eq!(config.indexer_poll_interval_ms, 300_000);
         assert_eq!(config.scan_throttle_ms, 0);
         assert_eq!(config.player_event_flush_max_operations, 500);
-        assert_eq!(config.auto_complete_debounce_ms, 500);
+        assert_eq!(config.auto_complete_debounce_ms, 50);
 
         assert_eq!(with_env(&[], OracleConfig::from_env).unwrap_err(), "SOLANA_NETWORK is required");
         let err = with_env(&[("SOLANA_NETWORK", "https://rpc.example"), ("CONTRACT_VERSION", "9.9.9")], || {
