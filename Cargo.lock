@@ -1645,7 +1645,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3258,7 +3258,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3314,7 +3314,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3877,7 +3877,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3988,8 +3988,8 @@ dependencies = [
 
 [[package]]
 name = "timba-protocol"
-version = "0.15.0"
-source = "git+https://github.com/timbagame/protocol?tag=v0.15.0#3e36b3dc8d9a685ef0c633159842cc63c1422b17"
+version = "0.16.0"
+source = "git+https://github.com/timbagame/protocol?tag=v0.16.0#7687eeb7ba254b732fb9c7d6e260c4aee9eca0bb"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -4003,6 +4003,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "thiserror",
+ "url",
 ]
 
 [[package]]
@@ -4462,7 +4463,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

@@ -3,10 +3,11 @@
 
 use serde_json::Value;
 use timba_protocol::contracts::GameType;
-use timba_protocol::validators::{is_solana_address, is_u64_string};
 use timba_protocol::Address;
 
-use crate::indexer::schema::MAX_SAFE_INTEGER;
+use timba_protocol::http::web::CREATE_GAME_REQUEST;
+
+use crate::indexer::schema::parse;
 
 /// An error whose message is safe to return to web clients (HTTP 400).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -103,40 +104,18 @@ pub fn validate_create_game_request(
     })
 }
 
-const FIELDS: [&str; 7] = ["creator", "tokenMint", "type", "amount", "minPlayers", "maxPlayers", "timeoutSeconds"];
-
-fn safe_integer_in(value: &Value, min: f64, max: f64) -> Option<f64> {
-    let number = value.as_f64()?;
-    (is_integer(number) && number.abs() <= MAX_SAFE_INTEGER && number >= min && number <= max).then_some(number)
-}
-
-/// `CreateGameRequestSchema.safeParse`: a strict object with every field
-/// required, plus the player-limit refinements.
+/// `CreateGameRequestSchema.safeParse`.
 pub fn parse_create_game_request(value: &Value) -> Option<CreateGameRequest> {
-    let object = value.as_object()?;
-    if object.keys().any(|key| !FIELDS.contains(&key.as_str())) {
-        return None;
-    }
-    let address = |key: &str| object.get(key)?.as_str().filter(|s| is_solana_address(s)).map(String::from);
-    let creator = address("creator")?;
-    let token_mint = address("tokenMint")?;
-    let game_type = object.get("type")?.as_str().filter(|t| matches!(*t, "coinflip" | "giveaway"))?;
-    let amount = object.get("amount")?.as_str().filter(|a| is_u64_string(a) && *a != "0")?;
-    let min_players = safe_integer_in(object.get("minPlayers")?, 1.0, 100.0)?;
-    let max_players = safe_integer_in(object.get("maxPlayers")?, 1.0, 100.0)?;
-    let timeout_seconds = safe_integer_in(object.get("timeoutSeconds")?, 60.0, 86_400.0)?;
-    let minimum_players = if game_type == "coinflip" { 2.0 } else { 1.0 };
-    if min_players < minimum_players || max_players < min_players {
-        return None;
-    }
+    let parsed = parse(&CREATE_GAME_REQUEST, value).ok()?;
+    let text = |key: &str| parsed[key].as_str().map(String::from);
     Some(CreateGameRequest {
-        creator: Some(creator),
-        token_mint: Some(token_mint),
-        game_type: Some(game_type.to_string()),
-        amount: Some(amount.to_string()),
-        min_players: Some(min_players),
-        max_players: Some(max_players),
-        timeout_seconds: Some(timeout_seconds),
+        creator: text("creator"),
+        token_mint: text("tokenMint"),
+        game_type: text("type"),
+        amount: text("amount"),
+        min_players: parsed["minPlayers"].as_f64(),
+        max_players: parsed["maxPlayers"].as_f64(),
+        timeout_seconds: parsed["timeoutSeconds"].as_f64(),
     })
 }
 

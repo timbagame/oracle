@@ -12,13 +12,14 @@ use timba_protocol::contracts::{discriminators::COMPLETE_GAME, find_game_pda, PR
 use timba_protocol::events::{
     decode_program_event, get_trusted_program_data, GameCompleted, GameInitialized, ProgramEvent,
 };
+use timba_protocol::http::web::FINALIZED_VERIFIED_GAME;
 use timba_protocol::randomness::calculate_winner;
 use timba_protocol::validators::is_solana_signature;
 use timba_protocol::Address;
 
 use super::game_token_config::get_game_token_metadata;
 use super::token_utils::{get_token_symbol, tokens_to_amount};
-use crate::indexer::schema::{array, parse, Schema};
+use crate::indexer::schema::parse;
 use crate::solana::rpc::SignatureInfo;
 use crate::solana::RpcPool;
 
@@ -30,56 +31,6 @@ const HISTORY_PAGE_SIZE: u32 = 100;
 pub fn is_valid_signature(value: &str) -> bool {
     is_solana_signature(value)
 }
-
-static GAME_TYPE: Schema = Schema::Enum(&["coinflip", "giveaway"]);
-static ADDRESS: Schema = Schema::Address;
-static BOOL: Schema = Schema::Bool;
-static NON_NEGATIVE_NUMBER: Schema = Schema::NonNegativeNumber;
-static NON_NEGATIVE_INTEGER: Schema = Schema::NonNegativeInteger;
-static SIGNATURE: Schema = Schema::Signature;
-static PARTICIPANT: Schema = Schema::Object(&[
-    ("address", Schema::Address),
-    ("ticketCount", Schema::NonNegativeInteger),
-    ("ticketIndices", array(&NON_NEGATIVE_INTEGER)),
-]);
-
-/// `FinalizedVerifiedGameSchema` (`VerifiedGameSchema` with the proof fields required).
-pub static FINALIZED_VERIFIED_GAME: Schema = Schema::Object(&[
-    ("gameKey", Schema::Address),
-    ("signature", Schema::Signature),
-    ("timestamp", Schema::NonNegativeInteger),
-    ("gameType", Schema::Optional(&GAME_TYPE)),
-    ("creator", Schema::Optional(&ADDRESS)),
-    ("isPrivate", Schema::Optional(&BOOL)),
-    ("ticketAmount", Schema::Optional(&NON_NEGATIVE_NUMBER)),
-    ("totalAmount", Schema::Optional(&NON_NEGATIVE_NUMBER)),
-    ("maxTickets", Schema::Optional(&NON_NEGATIVE_INTEGER)),
-    ("createdAt", Schema::Optional(&NON_NEGATIVE_INTEGER)),
-    ("participants", array(&PARTICIPANT)),
-    ("totalTickets", Schema::NonNegativeInteger),
-    ("winner", Schema::Address),
-    ("winnerTicketIndex", Schema::NonNegativeInteger),
-    ("prizeAmount", Schema::NonNegativeNumber),
-    ("feeAmount", Schema::NonNegativeNumber),
-    ("tokenMint", Schema::Address),
-    ("tokenSymbol", Schema::NonEmptyString),
-    ("tokenDecimals", Schema::IntegerRange(0, 255)),
-    ("randomValue", Schema::U64String),
-    ("secretKey", Schema::Hex32),
-    ("randomHash", Schema::Hex32),
-    ("transactionSignatures", Schema::Array { item: &SIGNATURE, min: 1, max: 2001 }),
-    ("lastSlot", Schema::U64String),
-    (
-        "calculationBreakdown",
-        Schema::Object(&[
-            ("randomValue", Schema::U64String),
-            ("totalTickets", Schema::NonNegativeInteger),
-            ("winnerIndex", Schema::NonNegativeInteger),
-            ("formula", Schema::NonEmptyString),
-        ]),
-    ),
-    ("explorerUrl", Schema::Url),
-]);
 
 /// Replays joins and swap-remove unjoins in transaction and log order;
 /// timestamps are not an ordering key. Returns the participants and the

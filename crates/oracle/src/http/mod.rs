@@ -16,8 +16,9 @@ use futures::future::{BoxFuture, FutureExt};
 use serde_json::{json, Map, Value};
 use timba_common::security::{has_valid_bearer_token, RouteRateLimiter, MAX_REQUEST_BODY_BYTES};
 use timba_common::{error, warn};
+use timba_protocol::http::oracle::{COMPLETE_GAME_NOW_REQUEST, GENERATE_HASH_REQUEST, SIGN_GAME_TRANSACTION_REQUEST};
+use timba_protocol::schema::{parse, Schema};
 use timba_protocol::transaction::Transaction;
-use timba_protocol::validators::{is_base64_transaction, is_solana_address};
 use tower::ServiceExt;
 
 use crate::core::service::{GameTransactionError, OracleService, RequeueFailure, ServiceStats};
@@ -27,8 +28,6 @@ use crate::token::policy::TokenPolicy;
 use crate::types::GameSecrets;
 use docs::{generate_documentation_html, HttpMethod, RouteDocumentation};
 use envelope::{contract_payload, contract_response, error_response, html_response, json_response, service_payload};
-
-pub const MAX_GAME_TYPE_LENGTH: usize = 128;
 
 mod messages {
     pub const AUTO_COMPLETE_ALREADY_SET: &str = "Auto-complete is already set to the requested value";
@@ -319,35 +318,9 @@ fn internal_error() -> Response {
     error_response(StatusCode::INTERNAL_SERVER_ERROR, msg::INTERNAL_SERVER_ERROR)
 }
 
-/// `GenerateHashRequestSchema`: a strict object with an optional `gameType`
-/// that is trimmed, lowercased and 1–128 characters long.
-fn parse_game_type(body: Option<&Map<String, Value>>) -> Result<Option<String>, ()> {
-    let Some(body) = body else { return Ok(None) };
-    if body.keys().any(|key| key != "gameType") {
-        return Err(());
-    }
-    match body.get("gameType") {
-        None => Ok(None),
-        Some(Value::String(value)) => {
-            let normalized = value.trim().to_lowercase();
-            let length = normalized.encode_utf16().count();
-            if (1..=MAX_GAME_TYPE_LENGTH).contains(&length) {
-                Ok(Some(normalized))
-            } else {
-                Err(())
-            }
-        }
-        Some(_) => Err(()),
-    }
-}
-
-/// Returns the single string field of a strict one-key object.
-fn strict_string_field<'a>(body: Option<&'a Map<String, Value>>, key: &str) -> Option<&'a str> {
-    let body = body?;
-    if body.len() != 1 {
-        return None;
-    }
-    body.get(key)?.as_str()
+/// The request body parsed by its `oracleContract` schema; a missing or non-object body is `{}`.
+fn parse_body(schema: &'static Schema, body: Option<Map<String, Value>>) -> Option<Value> {
+    parse(schema, &Value::Object(body.unwrap_or_default())).ok()
 }
 
 async fn handle_generate_hash(api: &dyn OracleApi, request: Request) -> Response {
@@ -355,8 +328,8 @@ async fn handle_generate_hash(api: &dyn OracleApi, request: Request) -> Response
         Ok(body) => body,
         Err(message) => return bad_request(message),
     };
-    let Ok(game_type) = parse_game_type(body.as_ref()) else { return bad_request(msg::INVALID_GAME_TYPE) };
-    match api.generate_game_secrets(game_type.as_deref()) {
+    let Some(body) = parse_body(&GENERATE_HASH_REQUEST, body) else { return bad_request(msg::INVALID_GAME_TYPE) };
+    match api.generate_game_secrets(body["gameType"].as_str()) {
         Ok(secrets) => contract_response(json!({
             "success": true,
             "randomHash": secrets.random_hash,
@@ -375,9 +348,10 @@ async fn handle_sign_game_transaction(api: &dyn OracleApi, request: Request) -> 
         Ok(body) => body,
         Err(message) => return bad_request(message),
     };
-    let Some(tx_base64) = strict_string_field(body.as_ref(), "txBase64").filter(|tx| is_base64_transaction(tx)) else {
+    let Some(body) = parse_body(&SIGN_GAME_TRANSACTION_REQUEST, body) else {
         return bad_request(msg::INVALID_GAME_TRANSACTION);
     };
+    let tx_base64 = body["txBase64"].as_str().unwrap_or_default();
     match api.sign_game_transaction(tx_base64).await {
         Ok(signed) => contract_response(json!({ "success": true, "txBase64": signed })),
         Err(err) => {
@@ -428,10 +402,10 @@ async fn handle_complete_game_now(api: &dyn OracleApi, request: Request) -> Resp
         Ok(body) => body,
         Err(message) => return bad_request(message),
     };
-    let Some(address) = strict_string_field(body.as_ref(), "gameAddress").filter(|a| is_solana_address(a)) else {
+    let Some(body) = parse_body(&COMPLETE_GAME_NOW_REQUEST, body) else {
         return bad_request(msg::GAME_ADDRESS_REQUIRED);
     };
-    let address = address.to_string();
+    let address = body["gameAddress"].as_str().unwrap_or_default().to_string();
     let result = api.queue_game_completion(&address).await;
     let Some(result) = result else {
         return contract_response(json!({ "success": true, "gameAddress": address, "status": "in-flight" }));
