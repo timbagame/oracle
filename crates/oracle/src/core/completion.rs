@@ -18,7 +18,7 @@ use super::types::{AttemptOptions, CompletionResult, GameContext, Readiness, Rea
 use crate::db::{CompletionFailureKind, OracleDatabase};
 use crate::metrics::{CompletionOutcome, CompletionRecord, OracleMetrics};
 use crate::program_client::{is_account_missing_error, ProgramClient};
-use crate::solana::confirm::submit_transaction;
+use crate::solana::confirm::submit_transaction_from;
 use crate::solana::tx::sign_legacy_transaction;
 use crate::solana::{Keypair, RpcPool};
 
@@ -553,12 +553,14 @@ impl CompletionManager {
         winner_index: u32,
     ) -> anyhow::Result<String> {
         let instruction = self.build_completion_instruction(game, winner, random_hash, secret_key, winner_index)?;
-        let mut fee = self.priority_fee(&instruction).await;
+        // Both lookups are on the path to the send, so they run together.
+        let (mut fee, latest) = tokio::join!(self.priority_fee(&instruction), self.rpc.get_latest_blockhash());
         let started = std::time::Instant::now();
         let operator = self.operator.clone();
         let mut fees = Vec::new();
-        let signature = submit_transaction(
+        let signature = submit_transaction_from(
             &self.rpc,
+            latest?,
             |latest| {
                 if !fees.is_empty() {
                     fee = fee.saturating_mul(RETRY_PRIORITY_FEE_FACTOR).min(MAX_PRIORITY_FEE);
