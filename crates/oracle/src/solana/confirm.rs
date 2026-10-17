@@ -211,7 +211,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn gives_up_when_the_transaction_never_confirms() {
         let transport = FakeTransport::new();
-        transport.on(|_, m, _| (m == "getBlockHeight").then(|| Ok(json!(10))));
+        // The blockhash is still valid at its last valid block height.
+        transport.on(|_, m, _| (m == "getBlockHeight").then(|| Ok(json!(100))));
         transport.on(|_, m, _| {
             (m == "getSignatureStatuses")
                 .then(|| Ok(json!({"value": [{"slot": 1, "confirmationStatus": "processed", "err": null}]})))
@@ -223,9 +224,9 @@ mod tests {
         assert_eq!(err.to_string(), "Transaction sig confirmation timed out");
         assert!(started.elapsed() >= CONFIRMATION_TIMEOUT);
         let polls = transport.calls_for("getSignatureStatuses").len();
-        assert!((150..=151).contains(&polls), "one poll every 400ms: {polls}");
+        assert_eq!(polls, 150, "one poll every 400ms");
         let checks = transport.calls_for("getBlockHeight").len();
-        assert!((30..=31).contains(&checks), "one expiry check every 2s: {checks}");
+        assert_eq!(checks, 30, "one expiry check every 2s");
     }
 
     #[tokio::test]

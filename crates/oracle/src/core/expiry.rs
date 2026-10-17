@@ -30,14 +30,12 @@ pub fn expiry_wakeup(game: &GameAccount, evaluated_at: i64) -> Option<i64> {
 
 struct Timer {
     expires_at: i64,
-    id: u64,
     handle: JoinHandle<()>,
 }
 
 #[derive(Default)]
 pub struct ExpiryTimers {
     timers: Mutex<HashMap<String, Timer>>,
-    next_id: Mutex<u64>,
     callback: OnceLock<ExpiryCallback>,
 }
 
@@ -58,11 +56,6 @@ impl ExpiryTimers {
         if timers.get(game_address).is_some_and(|timer| timer.expires_at == expires_at) {
             return;
         }
-        let id = {
-            let mut next = self.next_id.lock().unwrap();
-            *next += 1;
-            *next
-        };
         let now = timba_common::time::now_ms();
         let delay = (expires_at.saturating_mul(1000) + EXPIRY_GRACE_MS - now).max(MIN_EXPIRY_DELAY_MS);
         let this = Arc::downgrade(self);
@@ -73,7 +66,7 @@ impl ExpiryTimers {
             // A replaced or cancelled timer is aborted, but it may already be past its sleep.
             let current = {
                 let mut timers = this.timers.lock().unwrap();
-                let current = timers.get(&address).is_some_and(|timer| timer.id == id);
+                let current = timers.get(&address).is_some_and(|timer| timer.handle.id() == tokio::task::id());
                 if current {
                     timers.remove(&address);
                 }
@@ -83,7 +76,7 @@ impl ExpiryTimers {
                 callback(address, game_key).await;
             }
         });
-        if let Some(previous) = timers.insert(game_address.to_string(), Timer { expires_at, id, handle }) {
+        if let Some(previous) = timers.insert(game_address.to_string(), Timer { expires_at, handle }) {
             previous.handle.abort();
         }
     }
