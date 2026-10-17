@@ -15,167 +15,15 @@ use timba_common::error;
 
 use super::database::{Clock, IndexerDatabase, LeaderboardPeriod};
 use super::pricing::TokenUsdPrices;
-use super::schema::{
-    address_param, array, coerce_int, enum_param, js_number, js_string, normalize_number, parse, to_js_json,
-    InvalidQuery, QueryParams, Schema,
-};
+use super::schema::{js_number, js_string, normalize_number, parse, to_js_json, QueryParams, Schema};
 use super::types::Row;
 
-// ---------------------------------------------------------------------------
-// Response schemas (`@timbagame/protocol/indexer`)
-// ---------------------------------------------------------------------------
-
-const GAME_TYPES: &[&str] = &["coinflip", "giveaway"];
-const GAME_STATUSES: &[&str] = &["active", "completed", "cancelled"];
-
-static NULLABLE_AMOUNT: Schema = Schema::Nullable(&Schema::NonNegativeNumber);
-static NULLABLE_ADDRESS: Schema = Schema::Nullable(&Schema::Address);
-static NULLABLE_GAME_TYPE: Schema = Schema::Nullable(&Schema::Enum(GAME_TYPES));
-static NULLABLE_INTEGER: Schema = Schema::Nullable(&Schema::NonNegativeInteger);
-static NULLABLE_BOOL: Schema = Schema::Nullable(&Schema::Bool);
-static NULLABLE_PRICE: Schema = Schema::Nullable(&Schema::NonNegativeNumber);
-
-pub static INDEXER_GAME: Schema = Schema::Object(&[
-    ("signature", Schema::Signature),
-    ("gameKey", Schema::Address),
-    ("status", Schema::Optional(&Schema::Enum(GAME_STATUSES))),
-    ("creator", Schema::Optional(&NULLABLE_ADDRESS)),
-    ("gameType", Schema::Optional(&NULLABLE_GAME_TYPE)),
-    ("ticketAmount", Schema::Optional(&NULLABLE_AMOUNT)),
-    ("totalAmount", Schema::Optional(&NULLABLE_AMOUNT)),
-    ("maxTickets", Schema::Optional(&NULLABLE_INTEGER)),
-    ("minTickets", Schema::Optional(&NULLABLE_INTEGER)),
-    ("isPrivate", Schema::Optional(&NULLABLE_BOOL)),
-    ("createdAt", Schema::Optional(&NULLABLE_INTEGER)),
-    ("timeout", Schema::Optional(&NULLABLE_INTEGER)),
-    ("expiresAt", Schema::Optional(&NULLABLE_INTEGER)),
-    ("winner", Schema::Nullable(&Schema::Address)),
-    ("winnerAmount", Schema::Nullable(&Schema::NonNegativeNumber)),
-    ("feeAmount", Schema::Nullable(&Schema::NonNegativeNumber)),
-    ("ticketsCount", Schema::Nullable(&Schema::NonNegativeInteger)),
-    ("tokenMint", Schema::Address),
-    ("timestamp", Schema::NonNegativeInteger),
-    ("slot", Schema::NonNegativeInteger),
-    ("priceUsd", Schema::Optional(&NULLABLE_PRICE)),
-    ("isCreator", Schema::Optional(&Schema::Bool)),
-    ("isPlayer", Schema::Optional(&Schema::Bool)),
-    ("isJoined", Schema::Optional(&Schema::Bool)),
-]);
-
-static BIGGEST_WIN: Schema = Schema::Object(&[
-    ("amount", Schema::NonNegativeNumber),
-    ("winner", Schema::Address),
-    ("signature", Schema::Signature),
-]);
-
-static TOKEN_FINANCIALS: Schema = Schema::Object(&[
-    ("tokenMint", Schema::Address),
-    ("totalVolume", Schema::NonNegativeNumber),
-    ("totalFees", Schema::NonNegativeNumber),
-    ("priceUsd", Schema::Optional(&NULLABLE_PRICE)),
-    ("biggestWin", Schema::Nullable(&BIGGEST_WIN)),
-]);
-
-pub static STATS_RESPONSE: Schema = Schema::Object(&[
-    ("totalGames", Schema::NonNegativeInteger),
-    ("uniquePlayers", Schema::NonNegativeInteger),
-    ("financials", array(&TOKEN_FINANCIALS)),
-    ("lastUpdated", Schema::NonNegativeInteger),
-]);
-
-pub static GAMES_RESPONSE: Schema = Schema::Object(&[
-    ("games", array(&INDEXER_GAME)),
-    ("total", Schema::NonNegativeInteger),
-    ("page", Schema::PositiveInteger),
-    ("limit", Schema::PositiveInteger),
-]);
-
-pub static LATEST_GAMES_RESPONSE: Schema = array(&INDEXER_GAME);
-
-pub static PLAYER_GAMES_RESPONSE: Schema = Schema::Object(&[
-    ("games", array(&INDEXER_GAME)),
-    ("count", Schema::NonNegativeInteger),
-    ("limit", Schema::PositiveInteger),
-    ("offset", Schema::NonNegativeInteger),
-]);
-
-static ACTIVE_GAME: Schema = Schema::Object(&[
-    ("game_key", Schema::Address),
-    ("creator", Schema::Address),
-    ("ticket_amount", Schema::NonNegativeNumber),
-    ("total_amount", Schema::NonNegativeNumber),
-    ("max_tickets", Schema::NonNegativeInteger),
-    ("min_tickets", Schema::NonNegativeInteger),
-    ("current_tickets", Schema::NonNegativeInteger),
-    ("token_mint", Schema::Address),
-    ("is_private", Schema::IntLiterals(&[0, 1])),
-    ("created_at", Schema::NonNegativeInteger),
-    ("timeout", Schema::NonNegativeInteger),
-    ("signature", Schema::Signature),
-    ("slot", Schema::NonNegativeInteger),
-    ("indexed_at", Schema::NonNegativeInteger),
-    ("expiresAt", Schema::NonNegativeInteger),
-    ("timeLeft", Schema::NonNegativeInteger),
-    ("isPrivate", Schema::Bool),
-    ("game_type", Schema::Nullable(&Schema::Enum(GAME_TYPES))),
-    ("priceUsd", Schema::Optional(&NULLABLE_PRICE)),
-]);
-
-pub static ACTIVE_GAMES_RESPONSE: Schema =
-    Schema::Object(&[("games", array(&ACTIVE_GAME)), ("count", Schema::NonNegativeInteger)]);
-
-const PROFILE_SUMMARY: Schema = Schema::Object(&[
-    ("relatedGames", Schema::NonNegativeInteger),
-    ("createdGames", Schema::NonNegativeInteger),
-    ("playedGames", Schema::NonNegativeInteger),
-    ("activeGames", Schema::NonNegativeInteger),
-    ("completedGames", Schema::NonNegativeInteger),
-    ("cancelledGames", Schema::NonNegativeInteger),
-    ("wins", Schema::NonNegativeInteger),
-    ("losses", Schema::NonNegativeInteger),
-    ("lastActivity", Schema::Nullable(&Schema::NonNegativeInteger)),
-]);
-
-static PROFILE_TOKEN: Schema = Schema::Object(&[
-    ("tokenMint", Schema::Address),
-    ("gamesPlayed", Schema::NonNegativeInteger),
-    ("stakedAmount", Schema::NonNegativeNumber),
-    ("wonAmount", Schema::NonNegativeNumber),
-    ("priceUsd", Schema::Optional(&NULLABLE_PRICE)),
-]);
-
-static FREQUENT_PLAYER: Schema =
-    Schema::Object(&[("player", Schema::Address), ("gamesTogether", Schema::NonNegativeInteger)]);
-
-pub static PLAYER_PROFILE: Schema = Schema::Object(&[
-    ("wallet", Schema::Address),
-    ("summary", PROFILE_SUMMARY),
-    ("tokens", array(&PROFILE_TOKEN)),
-    ("frequentPlayers", array(&FREQUENT_PLAYER)),
-    ("historyComplete", Schema::Bool),
-]);
-
-static TOKEN_SUMMARY: Schema = Schema::Object(&[
-    ("tokenMint", Schema::Address),
-    ("games", Schema::NonNegativeInteger),
-    ("latestTimestamp", Schema::NonNegativeInteger),
-    ("priceUsd", Schema::Optional(&NULLABLE_PRICE)),
-]);
-
-pub static TOKENS_RESPONSE: Schema = Schema::Object(&[("tokens", array(&TOKEN_SUMMARY))]);
-
-static LEADERBOARD_PLAYER: Schema = Schema::Object(&[
-    ("player", Schema::Address),
-    ("games_won", Schema::NonNegativeInteger),
-    ("total_winnings", Schema::Nullable(&Schema::NonNegativeNumber)),
-    ("avg_win", Schema::Nullable(&Schema::NonNegativeNumber)),
-]);
-
-pub static LEADERBOARD_RESPONSE: Schema =
-    Schema::Object(&[("players", array(&LEADERBOARD_PLAYER)), ("count", Schema::NonNegativeInteger)]);
-
-pub static HEALTH_RESPONSE: Schema =
-    Schema::Object(&[("status", Schema::Literal("ok")), ("timestamp", Schema::NonNegativeInteger)]);
+use timba_protocol::http::indexer::{
+    GAMES_QUERY, GAME_BY_KEY_QUERY, INDEXER_ACTIVE_GAMES_RESPONSE, INDEXER_GAME, INDEXER_GAMES_RESPONSE,
+    INDEXER_HEALTH_RESPONSE, INDEXER_LEADERBOARD_RESPONSE, INDEXER_PLAYER_GAMES_RESPONSE, INDEXER_PLAYER_PROFILE,
+    INDEXER_STATS_RESPONSE, INDEXER_TOKENS_RESPONSE, LATEST_GAMES_QUERY, LATEST_GAMES_RESPONSE, LEADERBOARD_QUERY,
+    PLAYER_ADDRESS_QUERY, PLAYER_QUERY, STATS_QUERY,
+};
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -236,9 +84,23 @@ enum Outcome {
     Error(&'static str, StatusCode),
 }
 
-impl From<InvalidQuery> for Outcome {
-    fn from(_: InvalidQuery) -> Self {
-        Outcome::Error("Invalid query parameters", StatusCode::BAD_REQUEST)
+const INVALID_QUERY: Outcome = Outcome::Error("Invalid query parameters", StatusCode::BAD_REQUEST);
+
+/// The query string parsed by its `indexerContract` schema.
+struct Query(Value);
+
+impl Query {
+    fn parse(schema: &'static Schema, params: &QueryParams) -> Option<Self> {
+        parse(schema, &params.to_object()).ok().map(Self)
+    }
+
+    /// A coerced integer field (every one has a default or is required).
+    fn int(&self, key: &str) -> i64 {
+        self.0[key].as_i64().expect("the query schema coerces integers")
+    }
+
+    fn text(&self, key: &str) -> Option<&str> {
+        self.0[key].as_str()
     }
 }
 
@@ -394,19 +256,18 @@ impl IndexerApi {
 
     async fn route(&self, path: &str, query: &QueryParams) -> Result<Outcome> {
         macro_rules! query {
-            ($e:expr) => {
-                match $e {
-                    Ok(value) => value,
-                    Err(invalid) => return Ok(Outcome::from(invalid)),
+            ($schema:expr) => {
+                match Query::parse(&$schema, query) {
+                    Some(parsed) => parsed,
+                    None => return Ok(INVALID_QUERY),
                 }
             };
         }
-        let token_mint = || address_param(query.last("tokenMint"), false);
         match path {
-            "/health" => ok(&HEALTH_RESPONSE, json!({ "status": "ok", "timestamp": (self.now)() }), None),
+            "/health" => ok(&INDEXER_HEALTH_RESPONSE, json!({ "status": "ok", "timestamp": (self.now)() }), None),
             "/api/stats" => {
-                let token_mint = query!(token_mint());
-                let stats = self.db.get_stats(token_mint.as_deref())?;
+                let query = query!(STATS_QUERY);
+                let stats = self.db.get_stats(query.text("tokenMint"))?;
                 let mut value = serde_json::to_value(&stats)?;
                 let financials: Vec<Row> = value["financials"]
                     .as_array()
@@ -414,17 +275,16 @@ impl IndexerApi {
                     .unwrap_or_default();
                 let priced = self.add_prices(financials, "tokenMint").await;
                 value["financials"] = Value::Array(priced.into_iter().map(Value::Object).collect());
-                ok(&STATS_RESPONSE, value, Some("public, max-age=10"))
+                ok(&INDEXER_STATS_RESPONSE, value, Some("public, max-age=10"))
             }
             "/api/games" => {
-                let limit = query!(coerce_int(query.last("limit"), 50, 1, Some(100)));
-                let offset = query!(coerce_int(query.last("offset"), 0, 0, None));
-                let token_mint = query!(token_mint());
-                let result = self.db.get_games(limit, offset, token_mint.as_deref())?;
+                let query = query!(GAMES_QUERY);
+                let (limit, offset) = (query.int("limit"), query.int("offset"));
+                let result = self.db.get_games(limit, offset, query.text("tokenMint"))?;
                 let games = result.games.iter().map(serialize_completed).collect();
                 let games = self.add_prices(games, "tokenMint").await;
                 ok(
-                    &GAMES_RESPONSE,
+                    &INDEXER_GAMES_RESPONSE,
                     json!({
                         "games": games,
                         "total": result.total,
@@ -435,30 +295,23 @@ impl IndexerApi {
                 )
             }
             "/api/games/latest" => {
-                let limit = query!(coerce_int(query.last("limit"), 10, 1, Some(100)));
-                let token_mint = query!(token_mint());
-                let game_type = query!(enum_param(query.last("gameType"), GAME_TYPES, None));
-                let include_lifecycle = query!(enum_param(query.last("includeLifecycle"), &["0", "1"], None));
-                let games: Vec<Row> = if include_lifecycle.as_deref() == Some("1") {
+                let query = query!(LATEST_GAMES_QUERY);
+                let (limit, token_mint) = (query.int("limit"), query.text("tokenMint"));
+                let games: Vec<Row> = if query.text("includeLifecycle") == Some("1") {
                     self.db
-                        .get_lifecycle(limit, token_mint.as_deref(), game_type.as_deref())?
+                        .get_lifecycle(limit, token_mint, query.text("gameType"))?
                         .iter()
                         .map(serialize_lifecycle)
                         .collect()
                 } else {
-                    self.db
-                        .get_games(limit, 0, token_mint.as_deref())?
-                        .games
-                        .iter()
-                        .map(serialize_compact_latest)
-                        .collect()
+                    self.db.get_games(limit, 0, token_mint)?.games.iter().map(serialize_compact_latest).collect()
                 };
                 let priced = self.add_prices(games, "tokenMint").await;
                 ok(&LATEST_GAMES_RESPONSE, json!(priced), Some("public, max-age=5"))
             }
             "/api/games/by-key" => {
-                let game_key = query!(address_param(query.last("gameKey"), true)).unwrap_or_default();
-                let Some(game) = self.db.get_game(&game_key)? else {
+                let query = query!(GAME_BY_KEY_QUERY);
+                let Some(game) = self.db.get_game(query.text("gameKey").unwrap_or_default())? else {
                     return Ok(Outcome::Error("Game not found", StatusCode::NOT_FOUND));
                 };
                 let priced = self.add_prices(vec![serialize_lifecycle(&game)], "tokenMint").await;
@@ -469,13 +322,18 @@ impl IndexerApi {
                 )
             }
             "/api/leaderboard" => {
-                let limit = query!(coerce_int(query.last("limit"), 20, 1, Some(100)));
-                let token_mint = query!(token_mint());
-                let period = query!(enum_param(query.last("period"), &["24h", "7d", "all"], Some("all")));
-                let period = period.as_deref().and_then(LeaderboardPeriod::parse).unwrap_or_default();
-                let players = self.db.get_leaderboard(limit, token_mint.as_deref(), period)?;
+                let parsed = query!(LEADERBOARD_QUERY);
+                // `period` is an oracle extension; the protocol contract does not list it yet.
+                let period = match query.last("period") {
+                    None => LeaderboardPeriod::default(),
+                    Some(period) => match LeaderboardPeriod::parse(period) {
+                        Some(period) => period,
+                        None => return Ok(INVALID_QUERY),
+                    },
+                };
+                let players = self.db.get_leaderboard(parsed.int("limit"), parsed.text("tokenMint"), period)?;
                 ok(
-                    &LEADERBOARD_RESPONSE,
+                    &INDEXER_LEADERBOARD_RESPONSE,
                     json!({ "count": players.len(), "players": players }),
                     Some("public, max-age=30"),
                 )
@@ -497,18 +355,15 @@ impl IndexerApi {
                     })
                     .collect();
                 let tokens = self.add_prices(tokens, "tokenMint").await;
-                ok(&TOKENS_RESPONSE, json!({ "tokens": tokens }), Some("public, max-age=30"))
+                ok(&INDEXER_TOKENS_RESPONSE, json!({ "tokens": tokens }), Some("public, max-age=30"))
             }
             "/api/active-games" | "/api/my-active-games" => {
-                let player = if path == "/api/my-active-games" {
-                    query!(address_param(query.last("player"), true))
-                } else {
-                    None
-                };
+                let player = if path == "/api/my-active-games" { Some(query!(PLAYER_ADDRESS_QUERY)) } else { None };
+                let player = player.as_ref().and_then(|query| query.text("player"));
                 let now = (self.now)().div_euclid(1000);
                 let games: Vec<Row> = self
                     .db
-                    .get_active_games(player.as_deref())?
+                    .get_active_games(player)?
                     .into_iter()
                     .filter_map(|mut game| {
                         let expires_at = add(&field(&game, "created_at"), &field(&game, "timeout"));
@@ -525,18 +380,17 @@ impl IndexerApi {
                     .collect();
                 let priced = self.add_prices(games, "token_mint").await;
                 ok(
-                    &ACTIVE_GAMES_RESPONSE,
+                    &INDEXER_ACTIVE_GAMES_RESPONSE,
                     json!({ "count": priced.len(), "games": priced }),
                     Some("public, max-age=5, stale-while-revalidate=10"),
                 )
             }
             "/api/player-games" => {
-                let limit = query!(coerce_int(query.last("limit"), 50, 1, Some(100)));
-                let offset = query!(coerce_int(query.last("offset"), 0, 0, None));
-                let player = query!(address_param(query.last("player"), true)).unwrap_or_default();
+                let query = query!(PLAYER_QUERY);
+                let (limit, offset) = (query.int("limit"), query.int("offset"));
                 let games: Vec<Row> = self
                     .db
-                    .get_player_games(&player, limit, offset)?
+                    .get_player_games(query.text("player").unwrap_or_default(), limit, offset)?
                     .iter()
                     .map(|game| {
                         let mut out = serialize_lifecycle(game);
@@ -550,7 +404,7 @@ impl IndexerApi {
                     .collect();
                 let priced = self.add_prices(games, "tokenMint").await;
                 ok(
-                    &PLAYER_GAMES_RESPONSE,
+                    &INDEXER_PLAYER_GAMES_RESPONSE,
                     json!({
                         "games": priced,
                         "count": priced.len(),
@@ -561,8 +415,9 @@ impl IndexerApi {
                 )
             }
             "/api/player-profile" => {
-                let player = query!(address_param(query.last("player"), true)).unwrap_or_default();
-                let profile = self.db.get_player_profile(&player)?;
+                let query = query!(PLAYER_ADDRESS_QUERY);
+                let player = query.text("player").unwrap_or_default();
+                let profile = self.db.get_player_profile(player)?;
                 let tokens: Vec<Row> = profile
                     .tokens
                     .iter()
@@ -608,7 +463,7 @@ impl IndexerApi {
                     "frequentPlayers": frequent_players,
                     "historyComplete": profile.history_complete,
                 });
-                ok(&PLAYER_PROFILE, value, Some("public, max-age=30, stale-while-revalidate=60"))
+                ok(&INDEXER_PLAYER_PROFILE, value, Some("public, max-age=30, stale-while-revalidate=60"))
             }
             _ => Ok(Outcome::Error("Endpoint not found", StatusCode::NOT_FOUND)),
         }

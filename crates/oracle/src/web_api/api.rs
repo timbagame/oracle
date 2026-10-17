@@ -17,11 +17,11 @@ use futures::StreamExt;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use timba_protocol::contracts::{GameType, PROGRAM_ID};
+use timba_protocol::http::web::{PREPARE_GAME_RESPONSE, SUBMIT_GAME_REQUEST, SUBMIT_GAME_RESPONSE};
 use timba_protocol::plans::{
     build_create_game_plan, serialize_game, ContractAdapter, CreateGameInput, GameInstructionInput,
 };
 use timba_protocol::transaction::{LegacyMessage, Transaction};
-use timba_protocol::validators::{is_base64_transaction, is_solana_signature};
 use timba_protocol::{Address, ContractVersion};
 
 use super::cache::{VerificationLoader, VerificationLoaderOptions};
@@ -34,7 +34,7 @@ use super::verification::{is_valid_signature, verify_game_transaction};
 use crate::config::OracleConfig;
 use crate::indexer::database::Clock;
 use crate::indexer::pricing::TokenUsdPrices;
-use crate::indexer::schema::{to_js_json, QueryParams, MAX_SAFE_INTEGER};
+use crate::indexer::schema::{parse, to_js_json, QueryParams};
 use crate::indexer::IndexerDatabase;
 use crate::types::WebGameOracle;
 
@@ -50,7 +50,6 @@ const UNAVAILABLE: &str = "Game service temporarily unavailable";
 
 const PREPARE_BODY_LIMIT: usize = 4096;
 const SUBMIT_BODY_LIMIT: usize = 8192;
-const SUBMIT_TRANSACTION_MAX_LENGTH: usize = 4000;
 
 const TOKEN_CACHE_FRESH_MS: i64 = 5000;
 /// After the fresh window, keep serving the last value while one background
@@ -106,14 +105,9 @@ async fn read_body(headers: &HeaderMap, body: Body, max_bytes: usize) -> Result<
     serde_json::from_slice(&bytes).map_err(|_| validation("Invalid JSON"))
 }
 
-/// `SubmitGameRequestSchema`: `{ txBase64 }` only, at most 4000 characters.
+/// `SubmitGameRequestSchema`.
 fn parse_submit_request(value: &Value) -> Option<String> {
-    let object = value.as_object()?;
-    if object.keys().any(|key| key != "txBase64") {
-        return None;
-    }
-    let tx = object.get("txBase64")?.as_str()?;
-    (is_base64_transaction(tx) && tx.len() <= SUBMIT_TRANSACTION_MAX_LENGTH).then(|| tx.to_string())
+    parse(&SUBMIT_GAME_REQUEST, value).ok()?["txBase64"].as_str().map(String::from)
 }
 
 /// `serializeGame(adapter.decodeGame(...))` in the TypeScript key order
@@ -319,15 +313,12 @@ impl WebGameApi {
         let message = LegacyMessage::compile(&input.creator, &latest.blockhash, &instructions)
             .map_err(|error| anyhow!("{error}"))?;
         let tx_base64 = Transaction::from_message(&message).to_base64();
-        // PrepareGameResponseSchema
-        if !is_base64_transaction(&tx_base64) || latest.last_valid_block_height as f64 > MAX_SAFE_INTEGER {
-            bail!("Invalid prepared game response");
-        }
-        Ok(json!({
+        let response = json!({
             "txBase64": tx_base64,
             "gameAddress": plan.game.to_base58(),
             "lastValidBlockHeight": latest.last_valid_block_height,
-        }))
+        });
+        parse(&PREPARE_GAME_RESPONSE, &response).map_err(|_| anyhow!("Invalid prepared game response"))
     }
 
     async fn submit(&self, body: Value) -> Result<Value> {
@@ -346,11 +337,8 @@ impl WebGameApi {
                 json!([transaction.to_base64(), { "encoding": "base64", "preflightCommitment": "confirmed" }]),
             )
             .await?;
-        // SubmitGameResponseSchema
-        if !signature.as_str().is_some_and(is_solana_signature) {
-            bail!("Invalid transaction signature");
-        }
-        Ok(json!({ "signature": signature }))
+        parse(&SUBMIT_GAME_RESPONSE, &json!({ "signature": signature }))
+            .map_err(|_| anyhow!("Invalid transaction signature"))
     }
 
     async fn game(&self, game: &str, fresh: bool) -> Result<Response> {

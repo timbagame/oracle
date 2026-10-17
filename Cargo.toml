@@ -11,7 +11,7 @@ publish = false
 
 [workspace.dependencies]
 # Shared with the TypeScript package. Pinned to a release tag, which Renovate bumps.
-timba-protocol = { git = "https://github.com/timbagame/protocol", tag = "v0.15.0" }
+timba-protocol = { git = "https://github.com/timbagame/protocol", rev = "6485b3c" }
 timba-common = { path = "crates/common" }
 anyhow = "1"
 axum = "0.8"
