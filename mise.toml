@@ -1,0 +1,4 @@
+# Tools CI installs. Renovate updates these versions by itself.
+[tools]
+"cargo:cargo-llvm-cov" = "0.9.1"
+"cargo:cargo-audit" = "0.22.2"
