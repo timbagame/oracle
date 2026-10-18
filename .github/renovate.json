@@ -2,23 +2,9 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended",
-    "group:all",
-    "docker:pinDigests"
+    "group:all"
   ],
   "customManagers": [
-    {
-      "customType": "regex",
-      "description": "Rust toolchain in rust-toolchain.toml",
-      "managerFilePatterns": [
-        "/^rust-toolchain\\.toml$/"
-      ],
-      "matchStrings": [
-        "channel = \"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
-      ],
-      "depNameTemplate": "rust",
-      "packageNameTemplate": "rust-lang/rust",
-      "datasourceTemplate": "github-releases"
-    },
     {
       "customType": "regex",
       "description": "Cargo tools CI installs (exact versions, not Cargo ranges)",
@@ -30,15 +16,6 @@
       ],
       "datasourceTemplate": "crate",
       "versioningTemplate": "semver"
-    }
-  ],
-  "packageRules": [
-    {
-      "description": "Quadlet images follow their tag through podman auto-update (AutoUpdate=registry); a pinned digest would freeze them",
-      "matchFileNames": [
-        "deploy/quadlet/**"
-      ],
-      "pinDigests": false
     }
   ]
 }
