@@ -3,19 +3,5 @@
   "extends": [
     "config:recommended",
     "group:all"
-  ],
-  "customManagers": [
-    {
-      "customType": "regex",
-      "description": "Cargo tools CI installs (exact versions, not Cargo ranges)",
-      "managerFilePatterns": [
-        "/^\\.github/workflows/ci\\.yml$/"
-      ],
-      "matchStrings": [
-        "CARGO_(?:LLVM_COV|AUDIT)_VERSION: \"(?<currentValue>[^\"]+)\" # (?<depName>\\S+)"
-      ],
-      "datasourceTemplate": "crate",
-      "versioningTemplate": "semver"
-    }
   ]
 }

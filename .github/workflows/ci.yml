@@ -15,8 +15,6 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  CARGO_LLVM_COV_VERSION: "0.9.1" # cargo-llvm-cov
-  CARGO_AUDIT_VERSION: "0.22.2" # cargo-audit
   CARGO_TERM_COLOR: always
 
 concurrency:
@@ -77,12 +75,8 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
       - name: Install Cargo tools
-        run: |
-          # A cache hit restores ~/.cargo/bin, so only install when the pinned version is missing.
-          cargo llvm-cov --version 2>/dev/null | grep -qF "$CARGO_LLVM_COV_VERSION" \
-            || cargo install cargo-llvm-cov --locked --force --version "$CARGO_LLVM_COV_VERSION"
-          cargo audit --version 2>/dev/null | grep -qF "$CARGO_AUDIT_VERSION" \
-            || cargo install cargo-audit --locked --force --version "$CARGO_AUDIT_VERSION"
+        # Installs the versions pinned in mise.toml, and caches them.
+        uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
       - name: Audit dependencies
         run: cargo audit
       - name: Check formatting
@@ -140,7 +134,13 @@ jobs:
       - name: Install nightly toolchain
         run: rustup toolchain install "$NIGHTLY" --profile minimal --component llvm-tools-preview
       - name: Install cargo-llvm-cov
-        run: cargo +"$NIGHTLY" install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
+        # The version pinned in mise.toml, built with the nightly toolchain.
+        uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+        with:
+          install_args: cargo:cargo-llvm-cov
+          cache_key_prefix: mise-nightly
+        env:
+          RUSTUP_TOOLCHAIN: ${{ env.NIGHTLY }}
       - name: Branch coverage
         run: |
           mkdir -p coverage
