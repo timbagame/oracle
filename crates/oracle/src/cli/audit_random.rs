@@ -86,7 +86,7 @@ pub fn parse_args(argv: &[String]) -> anyhow::Result<CliOptions> {
 pub fn apply_mutation_to_players_cache(cache: &mut Vec<Option<String>>, mutation: &PlayerMutation) {
     let (index, value) = match mutation {
         PlayerMutation::Joined { player_address, ticket_index } => (*ticket_index, Some(player_address.clone())),
-        PlayerMutation::Unjoined { ticket_index, moved_participant } => (*ticket_index, moved_participant.clone()),
+        PlayerMutation::Refunded { ticket_index, moved_participant } => (*ticket_index, moved_participant.clone()),
     };
     let Ok(index) = usize::try_from(index) else { return };
     if cache.len() <= index {
@@ -253,7 +253,7 @@ async fn audit(oracle: &Arc<OracleService>, options: CliOptions, input: Input<'_
     let mut listener_ids = Vec::new();
     if options.listen {
         for event in
-            [EventName::PlayerJoined, EventName::PlayerUnjoined, EventName::GameCompleted, EventName::GameClosed]
+            [EventName::PlayerJoined, EventName::PlayerRefunded, EventName::GameCompleted, EventName::GameClosed]
         {
             let state = state.clone();
             let game = game_address.clone();
@@ -277,7 +277,7 @@ async fn audit(oracle: &Arc<OracleService>, options: CliOptions, input: Input<'_
                                     ticket_index: i64::from(event.ticket_index),
                                 }
                             }
-                            MembershipKind::Unjoined => PlayerMutation::Unjoined {
+                            MembershipKind::Refunded => PlayerMutation::Refunded {
                                 ticket_index: i64::from(event.ticket_index),
                                 moved_participant: event.moved_participant,
                             },
@@ -725,7 +725,7 @@ mod tests {
                 assert_eq!(db.get_game_players(&game), vec!["alice".to_string()], "written with --write-db");
                 // A failed write is reported and the audit keeps going.
                 db.close();
-                program.dispatch(membership(MembershipKind::Unjoined, &game, "alice", 0)).await;
+                program.dispatch(membership(MembershipKind::Refunded, &game, "alice", 0)).await;
                 program.dispatch(membership(MembershipKind::Joined, &game, "carol", 0)).await;
                 let closed = GameClosedEvent {
                     game_key: game.clone(),
@@ -845,11 +845,11 @@ mod tests {
         );
         apply_mutation_to_players_cache(
             &mut cache,
-            &PlayerMutation::Unjoined { ticket_index: 0, moved_participant: Some("b".into()) },
+            &PlayerMutation::Refunded { ticket_index: 0, moved_participant: Some("b".into()) },
         );
         apply_mutation_to_players_cache(
             &mut cache,
-            &PlayerMutation::Unjoined { ticket_index: 1, moved_participant: None },
+            &PlayerMutation::Refunded { ticket_index: 1, moved_participant: None },
         );
         assert_eq!(materialize_players_cache(&cache), vec!["b".to_string()]);
 

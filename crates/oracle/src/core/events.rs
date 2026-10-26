@@ -19,7 +19,7 @@ use super::registry::{analyze_registry_state, RegistryStats};
 use crate::config::normalize_game_type;
 use crate::db::{OracleDatabase, PlayerMutation};
 use crate::indexed_events::{
-    GameClosedEvent, GameCompletedEvent, GameInitializedEvent, MembershipKind, PlayerMembershipEvent,
+    GameClosedEvent, GameCompletedEvent, GameCreatedEvent, MembershipKind, PlayerMembershipEvent,
 };
 use crate::program_client::{EventCallback, EventName, ProgramClient, ProgramDispatch};
 
@@ -28,8 +28,8 @@ pub const DEFAULT_REGISTRY_SYNC_TIMEOUT_MS: u64 = 30_000;
 
 pub const ALL_EVENTS: [EventName; 6] = [
     EventName::PlayerJoined,
-    EventName::PlayerUnjoined,
-    EventName::GameInitialized,
+    EventName::PlayerRefunded,
+    EventName::GameCreated,
     EventName::GameCompleted,
     EventName::GameClosed,
     EventName::OperatorGameClosed,
@@ -350,7 +350,7 @@ impl EventProcessor {
     pub async fn handle_dispatch(self: &Arc<Self>, dispatch: ProgramDispatch) {
         match dispatch {
             ProgramDispatch::PlayerMembership(event) => self.handle_player_event(event).await,
-            ProgramDispatch::GameInitialized(event) => self.handle_game_initialized(&event),
+            ProgramDispatch::GameCreated(event) => self.handle_game_created(&event),
             // Like the TypeScript `void runEventMutation(...)`: queued in order, but
             // the subscription reader does not wait for the flush and DB writes.
             ProgramDispatch::GameCompleted(GameCompletedEvent { game_key, .. }) => {
@@ -371,7 +371,7 @@ impl EventProcessor {
     pub async fn handle_player_event(self: &Arc<Self>, event: PlayerMembershipEvent) {
         let action = match event.kind {
             MembershipKind::Joined => "joined",
-            MembershipKind::Unjoined => "unjoined",
+            MembershipKind::Refunded => "unjoined",
         };
         let event_type = format!("player {action}");
         let Ok(game_key) = Address::parse(&event.game_key) else {
@@ -388,7 +388,7 @@ impl EventProcessor {
                 player_address: event.player.clone(),
                 ticket_index: i64::from(event.ticket_index),
             },
-            MembershipKind::Unjoined => PlayerMutation::Unjoined {
+            MembershipKind::Refunded => PlayerMutation::Refunded {
                 ticket_index: i64::from(event.ticket_index),
                 moved_participant: event.moved_participant.clone(),
             },
@@ -443,7 +443,7 @@ impl EventProcessor {
         Ok(())
     }
 
-    pub fn handle_game_initialized(&self, event: &GameInitializedEvent) {
+    pub fn handle_game_created(&self, event: &GameCreatedEvent) {
         let game_address = &event.game_key;
         if Address::parse(game_address).is_err() {
             warn!("⚠️  Invalid game address in game initialized event for {game_address}");
@@ -1063,7 +1063,7 @@ mod tests {
     async fn game_initialized_tracks_type() {
         let h = harness(0);
         h.db.save_secret_key(&game(), "secret", "hash").unwrap();
-        h.processor.handle_game_initialized(&GameInitializedEvent {
+        h.processor.handle_game_created(&GameCreatedEvent {
             game_key: game(),
             creator: "c".into(),
             game_type: "Bet".into(),
@@ -1206,14 +1206,14 @@ mod tests {
 
     fn unjoin(game: &str, ticket_index: u32, moved: Option<&str>) -> PlayerMembershipEvent {
         PlayerMembershipEvent {
-            kind: MembershipKind::Unjoined,
+            kind: MembershipKind::Refunded,
             moved_participant: moved.map(str::to_string),
             ..join(game, "gone", ticket_index, 1)
         }
     }
 
-    fn initialized(game: &str) -> GameInitializedEvent {
-        GameInitializedEvent {
+    fn initialized(game: &str) -> GameCreatedEvent {
+        GameCreatedEvent {
             game_key: game.into(),
             creator: "c".into(),
             game_type: "Bet".into(),
@@ -1252,7 +1252,7 @@ mod tests {
         assert_eq!(h.db.get_game_players(&game), vec!["p1".to_string(), "p2".to_string()]);
         program.dispatch(ProgramDispatch::PlayerMembership(unjoin(&game, 0, Some("p2")))).await;
         assert_eq!(h.db.get_game_players(&game), vec!["p2".to_string()], "the last player moved into the gap");
-        program.dispatch(ProgramDispatch::GameInitialized(initialized(&game))).await;
+        program.dispatch(ProgramDispatch::GameCreated(initialized(&game))).await;
         assert_eq!(seen.load(Ordering::SeqCst), 4, "a panicking observer does not stop the others");
 
         h.processor.remove_program_event_observer(broken);
@@ -1329,8 +1329,8 @@ mod tests {
         let h = harness(0);
         h.processor.handle_player_event(join("not-an-address", "p1", 0, 1)).await;
         h.processor.handle_game_status_change(GameStatus::Completed, "not-an-address").await;
-        h.processor.handle_game_initialized(&initialized("not-an-address"));
-        h.processor.handle_game_initialized(&initialized(&game()));
+        h.processor.handle_game_created(&initialized("not-an-address"));
+        h.processor.handle_game_created(&initialized(&game()));
         assert_eq!(h.db.get_game_status(&game()), None, "no tracking row without a secret");
         assert!(h.hooks.auto_completes.lock().unwrap().is_empty());
     }
@@ -1340,13 +1340,13 @@ mod tests {
         let h = harness(0);
         h.db.save_secret_key(&game(), "secret", "hash").unwrap();
         break_writes(&h, "secret_keys", "UPDATE");
-        h.processor.handle_game_initialized(&initialized(&game()));
+        h.processor.handle_game_created(&initialized(&game()));
         assert_eq!(h.db.get_game_status(&game()), None, "stops before tracking");
 
         let h = harness(0);
         h.db.save_secret_key(&game(), "secret", "hash").unwrap();
         break_writes(&h, "game_tracking", "INSERT");
-        h.processor.handle_game_initialized(&initialized(&game()));
+        h.processor.handle_game_created(&initialized(&game()));
         assert_eq!(h.db.get_game_status(&game()), None);
 
         let h = harness(0);

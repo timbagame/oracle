@@ -2556,6 +2556,8 @@ mod tests {
         assert!(h.service.retries.lock().unwrap().is_empty());
     }
 
+    use crate::core::signer_scenarios::{Options, Scenario};
+
     fn fixture_operator() -> (Keypair, Value) {
         let fixture: Value = serde_json::from_str(include_str!("../../tests/fixtures/signer.json")).unwrap();
         let bytes: Vec<u8> =
@@ -2600,9 +2602,10 @@ mod tests {
         assert_eq!(err.to_string(), "Random hash is not an unused oracle commitment");
 
         // 0.3.0 creations go through the token policy.
-        let (h, fixture) = signing_harness(ContractVersion::V0_3_0, FIXTURE_HASH);
-        let case = fixture_case(&fixture, "0.3.0 placeholder");
-        let err = h.service.sign_game_transaction(case["txBase64"].as_str().unwrap()).await.unwrap_err();
+        let (h, _) = signing_harness(ContractVersion::V0_3_0, FIXTURE_HASH);
+        let scenario = Scenario::new(ContractVersion::V0_3_0, Options { placeholder: true, ..Default::default() });
+        let tx = scenario.tx(std::slice::from_ref(&scenario.initialize), false);
+        let err = h.service.sign_game_transaction(&tx).await.unwrap_err();
         match &err {
             GameTransactionError::CreationPolicy(policy) => assert_eq!(policy.code, RejectionCode::UnsupportedMint),
             other => panic!("unexpected {other:?}"),

@@ -8,7 +8,7 @@ const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GameInitializedEvent {
+pub struct GameCreatedEvent {
     pub game_key: String,
     pub creator: String,
     pub game_type: String,
@@ -51,7 +51,9 @@ pub struct GameClosedEvent {
 #[serde(rename_all = "lowercase")]
 pub enum MembershipKind {
     Joined,
-    Unjoined,
+    /// Kept as `unjoined` on the wire until services move to the new name.
+    #[serde(rename = "unjoined")]
+    Refunded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -71,7 +73,7 @@ pub struct PlayerMembershipEvent {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IndexedEvents {
-    pub initialized: Vec<GameInitializedEvent>,
+    pub initialized: Vec<GameCreatedEvent>,
     pub completed: Vec<GameCompletedEvent>,
     pub closed: Vec<GameClosedEvent>,
     pub membership: Vec<PlayerMembershipEvent>,
@@ -109,8 +111,9 @@ pub fn parse_transaction_events<S: AsRef<str>>(
         let event = decode_program_event(&data).map_err(|e| wrap(e.to_string()))?;
         let Some(event) = event else { continue };
         let signature = signature.to_string();
+        let joined = matches!(event, ProgramEvent::PlayerJoined(_));
         match event {
-            ProgramEvent::GameInitialized(v) => events.initialized.push(GameInitializedEvent {
+            ProgramEvent::GameCreated(v) => events.initialized.push(GameCreatedEvent {
                 game_key: v.game_key.to_base58(),
                 creator: v.creator.to_base58(),
                 game_type: v.game_type.name().into(),
@@ -149,8 +152,8 @@ pub fn parse_transaction_events<S: AsRef<str>>(
                 signature,
                 slot,
             }),
-            ProgramEvent::PlayerJoined(v) | ProgramEvent::PlayerUnjoined(v) => {
-                let kind = if is_join(&data) { MembershipKind::Joined } else { MembershipKind::Unjoined };
+            ProgramEvent::PlayerJoined(v) | ProgramEvent::PlayerRefunded(v) => {
+                let kind = if joined { MembershipKind::Joined } else { MembershipKind::Refunded };
                 events.membership.push(PlayerMembershipEvent {
                     kind,
                     game_key: v.game_key.to_base58(),
@@ -167,10 +170,6 @@ pub fn parse_transaction_events<S: AsRef<str>>(
         }
     }
     Ok(events)
-}
-
-fn is_join(data: &[u8]) -> bool {
-    data[..8] == timba_protocol::events::discriminators::PLAYER_JOINED
 }
 
 #[cfg(test)]
@@ -218,7 +217,7 @@ mod tests {
             42,
             &logs(&[
                 membership(discriminators::PLAYER_JOINED, None),
-                membership(discriminators::PLAYER_UNJOINED, Some(1)),
+                membership(discriminators::PLAYER_REFUNDED, Some(1)),
                 membership(discriminators::PLAYER_UNJOINED, Some(0)),
                 closed,
             ]),
@@ -227,9 +226,9 @@ mod tests {
         .unwrap();
         assert_eq!(events.membership.len(), 3);
         assert_eq!(events.membership[0].kind, MembershipKind::Joined);
-        assert_eq!(events.membership[1].kind, MembershipKind::Unjoined);
+        assert_eq!(events.membership[1].kind, MembershipKind::Refunded);
         assert!(events.membership[1].moved_participant.is_some());
-        assert_eq!(events.membership[2].kind, MembershipKind::Unjoined);
+        assert_eq!(events.membership[2].kind, MembershipKind::Refunded);
         assert_eq!(events.closed[0].timestamp, 9);
         assert!(!events.closed[0].operator);
         assert_eq!(events.closed[0].slot, 42);
@@ -294,7 +293,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             events.initialized,
-            vec![GameInitializedEvent {
+            vec![GameCreatedEvent {
                 game_key: b58(1),
                 creator: b58(2),
                 game_type: timba_protocol::contracts::GameType::Giveaway.name().into(),

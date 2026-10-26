@@ -16,7 +16,7 @@ use super::api::router_with_clock;
 use super::database::{IndexerDatabase, IndexerDatabaseOptions, LeaderboardPeriod, BACKFILL_NAME, DEFAULT_TOKEN_MINT};
 use super::pricing::TokenUsdPrices;
 use super::types::{
-    GameClosedEvent, GameCompletedEvent, GameInitializedEvent, IndexedEvents, IndexerCursor, MembershipKind,
+    GameClosedEvent, GameCompletedEvent, GameCreatedEvent, IndexedEvents, IndexerCursor, MembershipKind,
     PlayerMembershipEvent,
 };
 use crate::token::price::PriceFetcher;
@@ -53,8 +53,8 @@ struct Fixture {
     completed_signature: String,
 }
 
-fn initialized_event(game_key: &str, creator: &str, mint: &str, sig: &str, slot: u64) -> GameInitializedEvent {
-    GameInitializedEvent {
+fn initialized_event(game_key: &str, creator: &str, mint: &str, sig: &str, slot: u64) -> GameCreatedEvent {
+    GameCreatedEvent {
         game_key: game_key.into(),
         creator: creator.into(),
         game_type: "coinflip".into(),
@@ -407,7 +407,7 @@ fn closures_cancel_games_and_unjoins_update_ticket_counts() {
     f.db.apply(&events, &cursor("a", 11)).unwrap();
     assert_eq!(f.db.get_active_games(None).unwrap()[0]["current_tickets"], json!(1));
     events.initialized.clear();
-    events.membership[0].kind = MembershipKind::Unjoined;
+    events.membership[0].kind = MembershipKind::Refunded;
     events.membership[0].slot = 12;
     f.db.apply(&events, &cursor("b", 12)).unwrap();
     assert_eq!(f.db.get_active_games(None).unwrap()[0]["current_tickets"], json!(0));

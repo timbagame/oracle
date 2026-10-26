@@ -7,7 +7,7 @@ use std::sync::Arc;
 use alloy_consensus::transaction::SignerRecoverable;
 use alloy_consensus::TxEnvelope;
 use alloy_eips::eip2718::Decodable2718;
-use alloy_primitives::{keccak256, Bytes, B256, U256};
+use alloy_primitives::{aliases::U48, keccak256, Bytes, B256, U256};
 use alloy_sol_types::{SolCall, SolEvent, SolValue};
 use common::*;
 use serde_json::{json, Value};
@@ -599,7 +599,11 @@ mod tick_settlement {
         seed(&fake, GAME_A, SECRET_A, None);
         fake.chain.state().games.insert(
             GAME_A,
-            timba_protocol::evm::abi::Game { participants: vec![creator()], expiresAt: now + 60, ..fake_game() },
+            timba_protocol::evm::abi::Game {
+                participants: vec![creator()],
+                expiresAt: U48::from(now + 60),
+                ..fake_game()
+            },
         );
 
         fake.service.tick().await.unwrap();

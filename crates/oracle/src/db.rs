@@ -332,7 +332,7 @@ impl ToggleFailure {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayerMutation {
     Joined { player_address: String, ticket_index: i64 },
-    Unjoined { ticket_index: i64, moved_participant: Option<String> },
+    Refunded { ticket_index: i64, moved_participant: Option<String> },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1039,7 +1039,7 @@ impl OracleDatabase {
                             params![game, player_address, ticket_index, joined_at],
                         )?;
                     }
-                    PlayerMutation::Unjoined { ticket_index, moved_participant } => {
+                    PlayerMutation::Refunded { ticket_index, moved_participant } => {
                         run(
                             c,
                             sql::DELETE_GAME_PLAYER_BY_TICKET,
@@ -1324,7 +1324,7 @@ mod tests {
                 PlayerMutation::Joined { player_address: "a".into(), ticket_index: 0 },
                 PlayerMutation::Joined { player_address: "b".into(), ticket_index: 1 },
                 PlayerMutation::Joined { player_address: "c".into(), ticket_index: 2 },
-                PlayerMutation::Unjoined { ticket_index: 0, moved_participant: Some("c".into()) },
+                PlayerMutation::Refunded { ticket_index: 0, moved_participant: Some("c".into()) },
             ],
         )
         .unwrap();
@@ -1722,7 +1722,7 @@ mod tests {
     fn rolls_back_player_mutations_that_fail_part_way() {
         let joined =
             |player: &str, ticket_index| PlayerMutation::Joined { player_address: player.into(), ticket_index };
-        let unjoined = |ticket_index, moved: &str| PlayerMutation::Unjoined {
+        let unjoined = |ticket_index, moved: &str| PlayerMutation::Refunded {
             ticket_index,
             moved_participant: Some(moved.into()),
         };
@@ -1768,7 +1768,7 @@ mod tests {
         for moved_participant in [None, Some(String::new())] {
             let db = db();
             db.replace_game_players("g", &["a".into(), "b".into(), "c".into()]).unwrap();
-            let unjoin = PlayerMutation::Unjoined { ticket_index: 1, moved_participant };
+            let unjoin = PlayerMutation::Refunded { ticket_index: 1, moved_participant };
             db.apply_player_mutations("g", &[unjoin]).unwrap();
             assert_eq!(db.get_game_players("g"), vec!["a", "c"]);
         }

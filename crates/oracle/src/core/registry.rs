@@ -65,7 +65,7 @@ pub fn summarize_ticket_assignments(assignments: &BTreeMap<i64, String>) -> Regi
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistryEvent {
     Join { ticket_index: i64, player_address: String },
-    Unjoin { ticket_index: i64, moved_participant: Option<String> },
+    Refund { ticket_index: i64, moved_participant: Option<String> },
 }
 
 /// Replays join/unjoin events (oldest first) into ticket assignments.
@@ -73,7 +73,7 @@ pub fn replay_registry_events<'a>(events: impl IntoIterator<Item = &'a RegistryE
     let mut assignments: BTreeMap<i64, String> = BTreeMap::new();
     for event in events {
         match event {
-            RegistryEvent::Unjoin { ticket_index, moved_participant } => {
+            RegistryEvent::Refund { ticket_index, moved_participant } => {
                 assignments.remove(ticket_index);
                 if let Some(moved) = moved_participant {
                     let moved_index = assignments.iter().find(|(_, p)| *p == moved).map(|(i, _)| *i);
@@ -222,7 +222,7 @@ fn parse_registry_events(
             MembershipKind::Joined => {
                 RegistryEvent::Join { ticket_index: i64::from(event.ticket_index), player_address: event.player }
             }
-            MembershipKind::Unjoined => RegistryEvent::Unjoin {
+            MembershipKind::Refunded => RegistryEvent::Refund {
                 ticket_index: i64::from(event.ticket_index),
                 moved_participant: event.moved_participant,
             },
@@ -507,8 +507,8 @@ mod tests {
             RegistryEvent::Join { ticket_index: 0, player_address: "a".into() },
             RegistryEvent::Join { ticket_index: 1, player_address: "b".into() },
             RegistryEvent::Join { ticket_index: 2, player_address: "c".into() },
-            RegistryEvent::Unjoin { ticket_index: 0, moved_participant: Some("c".into()) },
-            RegistryEvent::Unjoin { ticket_index: 1, moved_participant: None },
+            RegistryEvent::Refund { ticket_index: 0, moved_participant: Some("c".into()) },
+            RegistryEvent::Refund { ticket_index: 1, moved_participant: None },
         ];
         let assignments = replay_registry_events(&events);
         assert_eq!(assignments.into_iter().collect::<Vec<_>>(), vec![(0, "c".to_string())]);

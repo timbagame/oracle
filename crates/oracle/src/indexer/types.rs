@@ -4,7 +4,7 @@
 use serde::Serialize;
 
 pub use crate::indexed_events::{
-    GameClosedEvent, GameCompletedEvent, GameInitializedEvent, IndexedEvents, MembershipKind, PlayerMembershipEvent,
+    GameClosedEvent, GameCompletedEvent, GameCreatedEvent, IndexedEvents, MembershipKind, PlayerMembershipEvent,
 };
 
 /// A SQLite row as returned by `bun:sqlite` (`SELECT *` shaped objects). The

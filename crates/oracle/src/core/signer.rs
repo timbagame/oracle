@@ -6,7 +6,8 @@ use timba_protocol::address::{
     ASSOCIATED_TOKEN_PROGRAM_ID, COMPUTE_BUDGET_PROGRAM_ID, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID,
 };
 use timba_protocol::contracts::{
-    ata, discriminators, find_game_pda, find_game_token_pda, find_game_vault_pda, find_oracle_pda, InitializeGameArgs,
+    ata, create_game_account_count, discriminators, find_game_pda, find_game_token_pda, find_game_vault_pda,
+    find_oracle_pda, join_game_account_count, CreateGameArgs,
 };
 use timba_protocol::transaction::{LegacyMessage, Transaction, TransactionError};
 use timba_protocol::{AccountMeta, Address, ContractVersion, Instruction};
@@ -146,31 +147,32 @@ pub async fn sign_game_transaction_with_policy(
 
     let initialize_index = program_indexes[0];
     let initialize = &instructions[initialize_index];
-    let legacy_game_token = options.contract_version == ContractVersion::V0_2_0;
-    let expected_accounts = if legacy_game_token { 12 } else { 11 };
-    if initialize.accounts.len() != expected_accounts || initialize.data.is_empty() {
+    let version = options.contract_version;
+    // v0.2 adds the game token account after the mint and the associated token program.
+    let legacy = version == ContractVersion::V0_2_0;
+    if initialize.accounts.len() != create_game_account_count(version) || initialize.data.is_empty() {
         return Err(policy("Invalid initialize-game account list"));
     }
-    if initialize.data.len() < 8 || initialize.data[..8] != discriminators::INITIALIZE_GAME {
+    if initialize.data.len() < 8 || initialize.data[..8] != discriminators::create_game(version) {
         return Err(policy("Invalid game instruction data"));
     }
     let initialize_data =
-        InitializeGameArgs::decode(&initialize.data).map_err(|_| policy("Invalid game instruction data"))?;
+        CreateGameArgs::decode(&initialize.data).map_err(|_| policy("Invalid game instruction data"))?;
 
-    let metas = &initialize.accounts;
-    let offset = usize::from(legacy_game_token);
-    let game = &metas[0];
-    let creator = &metas[1];
-    let oracle = &metas[2];
-    let operator = &metas[3];
-    let token_mint = &metas[4];
-    let game_token = legacy_game_token.then(|| &metas[5]);
-    let game_vault = &metas[5 + offset];
-    let game_vault_token_account = &metas[6 + offset];
-    let token_program = &metas[7 + offset];
-    let associated_token_program = &metas[8 + offset];
-    let creator_token_account = &metas[9 + offset];
-    let system_program = &metas[10 + offset];
+    let mut metas = initialize.accounts.iter();
+    let mut next = || metas.next().expect("account count checked");
+    let game = next();
+    let creator = next();
+    let oracle = next();
+    let operator = next();
+    let token_mint = next();
+    let game_token = legacy.then(&mut next);
+    let game_vault = next();
+    let game_vault_token_account = next();
+    let token_program = next();
+    let associated_token_program = legacy.then(&mut next);
+    let creator_token_account = next();
+    let system_program = next();
 
     assert_meta(Some(game), meta(None, false, true, "Invalid game account flags"))?;
     assert_meta(
@@ -203,10 +205,12 @@ pub async fn sign_game_transaction_with_policy(
         meta(Some(&expected_vault_ata), false, true, "Invalid game vault token account"),
     )?;
     assert_meta(Some(token_program), meta(Some(&TOKEN_PROGRAM_ID), false, false, "Invalid token program account"))?;
-    assert_meta(
-        Some(associated_token_program),
-        meta(Some(&ASSOCIATED_TOKEN_PROGRAM_ID), false, false, "Invalid associated token program account"),
-    )?;
+    if let Some(associated_token_program) = associated_token_program {
+        assert_meta(
+            Some(associated_token_program),
+            meta(Some(&ASSOCIATED_TOKEN_PROGRAM_ID), false, false, "Invalid associated token program account"),
+        )?;
+    }
     assert_meta(
         Some(creator_token_account),
         meta(Some(&expected_creator_ata), false, true, "Invalid creator token account"),
@@ -228,7 +232,7 @@ pub async fn sign_game_transaction_with_policy(
         validate_creator_join(
             &instructions[join_index],
             &JoinExpectations {
-                legacy_game_token,
+                version,
                 game: game.address,
                 creator: creator.address,
                 operator: operator_address,
@@ -267,7 +271,7 @@ pub async fn sign_game_transaction_with_policy(
             return Err(policy("Creator signature is missing or invalid"));
         }
     }
-    if !legacy_game_token {
+    if !legacy {
         options.hooks.assert_creation_policy(&token_mint.address, initialize_data.amount).await?;
     }
 
@@ -292,7 +296,7 @@ pub async fn sign_game_transaction_with_policy(
 }
 
 struct JoinExpectations {
-    legacy_game_token: bool,
+    version: ContractVersion,
     game: Address,
     creator: Address,
     operator: Address,
@@ -307,56 +311,63 @@ struct JoinExpectations {
 }
 
 fn validate_creator_join(join: &Instruction, v: &JoinExpectations) -> Result<(), SignError> {
-    let expected_accounts = if v.legacy_game_token { 11 } else { 10 };
-    if join.accounts.len() != expected_accounts || join.data.is_empty() {
+    if join.accounts.len() != join_game_account_count(v.version) || join.data.is_empty() {
         return Err(policy("Invalid creator join instruction"));
     }
     if join.data.len() < 8 || join.data[..8] != discriminators::JOIN_GAME {
         return Err(policy("Invalid creator join instruction"));
     }
-    let m = |i: usize| join.accounts.get(i);
-    let offset = usize::from(v.legacy_game_token);
-    assert_meta(m(0), meta(Some(&v.game), false, true, "Creator join uses an invalid game account"))?;
-    assert_meta(m(1), meta(Some(&v.creator), true, true, "Creator join uses an invalid creator account"))?;
+    let legacy = v.version == ContractVersion::V0_2_0;
+    let mut metas = join.accounts.iter();
+    let mut next = || metas.next();
+    assert_meta(next(), meta(Some(&v.game), false, true, "Creator join uses an invalid game account"))?;
+    // The creator pays the fee, so the compiled message always marks it writable.
+    assert_meta(next(), meta(Some(&v.creator), true, true, "Creator join uses an invalid creator account"))?;
     let optional_operator = if v.is_private { &v.operator } else { &v.program_id };
     assert_meta(
-        m(2),
+        next(),
         meta(Some(optional_operator), v.is_private, false, "Creator join uses an invalid optional oracle operator"),
     )?;
     assert_meta(
-        m(3),
+        next(),
         meta(Some(&v.token_mint), false, false, "Creator join token mint does not match initialization"),
     )?;
-    if v.legacy_game_token {
-        assert_meta(m(4), meta(Some(&v.game_token), false, true, "Creator join uses an invalid game token"))?;
+    if legacy {
+        assert_meta(next(), meta(Some(&v.game_token), false, true, "Creator join uses an invalid game token"))?;
     }
-    assert_meta(m(4 + offset), meta(Some(&v.game_vault), false, false, "Creator join uses an invalid game vault"))?;
+    assert_meta(next(), meta(Some(&v.game_vault), false, false, "Creator join uses an invalid game vault"))?;
     assert_meta(
-        m(5 + offset),
+        next(),
         meta(Some(&v.game_vault_token_account), false, true, "Creator join uses an invalid game vault token account"),
     )?;
+    assert_meta(next(), meta(Some(&TOKEN_PROGRAM_ID), false, false, "Creator join uses an invalid token program"))?;
+    if legacy {
+        assert_meta(
+            next(),
+            meta(
+                Some(&ASSOCIATED_TOKEN_PROGRAM_ID),
+                false,
+                false,
+                "Creator join uses an invalid associated token program",
+            ),
+        )?;
+    }
     assert_meta(
-        m(6 + offset),
-        meta(Some(&TOKEN_PROGRAM_ID), false, false, "Creator join uses an invalid token program"),
-    )?;
-    assert_meta(
-        m(7 + offset),
-        meta(Some(&ASSOCIATED_TOKEN_PROGRAM_ID), false, false, "Creator join uses an invalid associated token program"),
-    )?;
-    assert_meta(
-        m(8 + offset),
+        next(),
         meta(Some(&v.creator_token_account), false, true, "Creator join uses an invalid player token account"),
     )?;
-    assert_meta(m(9 + offset), meta(Some(&v.oracle), false, false, "Creator join uses an invalid oracle account"))?;
+    assert_meta(next(), meta(Some(&v.oracle), false, false, "Creator join uses an invalid oracle account"))?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::signer_scenarios::{compute_budget, signer, swap, Options, Scenario, RANDOM_HASH};
     use futures::FutureExt;
     use serde_json::Value;
     use std::sync::Mutex;
+    use timba_protocol::contracts::{PROGRAM_ID, SUPPORTED_CONTRACT_VERSIONS};
 
     #[derive(Default)]
     struct Recorder {
@@ -409,18 +420,288 @@ mod tests {
         (fixture, operator)
     }
 
-    /// Signs the fixture case `name` (a v0.3.0 transaction the TypeScript signer accepted) with `hooks`.
-    async fn sign_case(name: &str, hooks: &Recorder) -> Result<String, SignError> {
-        let (fixture, operator) = fixture();
-        let case = fixture["cases"].as_array().unwrap().iter().find(|c| c["name"] == name).unwrap();
-        assert!(case["expected"].get("ok").is_some(), "{name} must be a signable case");
-        let options = SignGameTransactionOptions {
-            contract_version: ContractVersion::V0_3_0,
-            program_id: timba_protocol::contracts::PROGRAM_ID,
-            operator: &operator,
-            hooks,
+    fn options<'a>(
+        version: ContractVersion,
+        operator: &'a Keypair,
+        hooks: &'a Recorder,
+    ) -> SignGameTransactionOptions<'a> {
+        SignGameTransactionOptions { contract_version: version, program_id: PROGRAM_ID, operator, hooks }
+    }
+
+    struct Case {
+        name: String,
+        tx: String,
+        /// Policy error, or `None` when the transaction is signed.
+        error: Option<String>,
+        /// Whether the commitment was checked before the rejection.
+        unused: bool,
+    }
+
+    /// Every creation the signer accepts or rejects, for one contract version.
+    fn cases(version: ContractVersion) -> Vec<Case> {
+        let legacy = version == ContractVersion::V0_2_0;
+        let at = |v2: usize, v3: usize| if legacy { v2 } else { v3 };
+        let mut cases = Vec::new();
+        let mut add = |label: &str, tx: String, error: Option<&str>, unused: bool| {
+            cases.push(Case { name: format!("{version} {label}"), tx, error: error.map(str::to_owned), unused });
         };
-        sign_game_transaction_with_policy(case["txBase64"].as_str().unwrap(), &options).await
+        let s = Scenario::new(version, Options::default());
+        let placeholder = Scenario::new(version, Options { placeholder: true, ..Default::default() });
+        let private = Scenario::new(version, Options { is_private: true, ..Default::default() });
+        let (init, join) = (&s.initialize, &s.join);
+
+        add(
+            "creator-signed join",
+            s.tx(&[compute_budget(), s.setup_ata(), init.clone(), join.clone()], true),
+            None,
+            true,
+        );
+        add(
+            "placeholder",
+            placeholder.tx(&[compute_budget(), placeholder.setup_ata(), placeholder.initialize.clone()], false),
+            None,
+            true,
+        );
+        add(
+            "placeholder join",
+            placeholder.tx(&[placeholder.initialize.clone(), placeholder.join.clone()], false),
+            Some("Atomic creator join requires the creator to sign first"),
+            true,
+        );
+        add("private join", private.tx(&[private.initialize.clone(), private.join.clone()], true), None, true);
+
+        add(
+            "missing creator signature",
+            s.tx(std::slice::from_ref(init), false),
+            Some("Creator signature is missing or invalid"),
+            true,
+        );
+        let stake = Address::from_static("Stake11111111111111111111111111111111111111");
+        add(
+            "foreign setup program",
+            s.tx(&[Instruction { program_id: stake, accounts: vec![], data: vec![1] }, init.clone()], true),
+            Some(&format!("Unsupported setup instruction in game transaction: {stake}")),
+            true,
+        );
+        let transfer = |operator: AccountMeta| Instruction {
+            program_id: SYSTEM_PROGRAM_ID,
+            accounts: vec![AccountMeta::writable_signer(s.creator_address), operator],
+            data: vec![2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+        };
+        // A writable reference merges into the operator's initialize meta and fails that check first.
+        add(
+            "setup marks operator writable",
+            s.tx(&[transfer(AccountMeta::writable(s.operator.address())), init.clone()], true),
+            Some("Invalid oracle operator account"),
+            false,
+        );
+        add(
+            "setup references operator",
+            s.tx(&[transfer(AccountMeta::readonly(s.operator.address())), init.clone()], true),
+            Some("Oracle operator cannot be referenced by setup instructions"),
+            true,
+        );
+        let nonce = Instruction {
+            program_id: SYSTEM_PROGRAM_ID,
+            accounts: vec![AccountMeta::writable_signer(s.creator_address)],
+            data: vec![4, 0, 0, 0],
+        };
+        add(
+            "durable nonce",
+            s.tx(&[nonce, init.clone()], true),
+            Some("Durable nonce transactions are not supported"),
+            false,
+        );
+        let shape = Some("Transaction must contain initialization and an optional creator join");
+        add("no game instruction", s.tx(&[compute_budget()], true), shape, false);
+        add("three game instructions", s.tx(&[init.clone(), join.clone(), join.clone()], true), shape, false);
+
+        let mut short_list = init.clone();
+        short_list.accounts.pop();
+        add("wrong account count", s.tx(&[short_list], true), Some("Invalid initialize-game account list"), false);
+        let mut foreign = init.clone();
+        foreign.data[..8].copy_from_slice(&discriminators::JOIN_GAME);
+        add("foreign discriminator", s.tx(&[foreign], true), Some("Invalid game instruction data"), false);
+        let mut short_data = init.clone();
+        short_data.data.truncate(20);
+        add("short data", s.tx(&[short_data], true), Some("Invalid game instruction data"), false);
+        let mut writable_operator = init.clone();
+        writable_operator.accounts[3].writable = true;
+        add("writable operator", s.tx(&[writable_operator], true), Some("Invalid oracle operator account"), false);
+        add(
+            "wrong vault",
+            s.tx(&[swap(init, at(6, 5), s.token_mint)], true),
+            Some("Invalid game vault account"),
+            false,
+        );
+        let other = if legacy { ContractVersion::V0_3_0 } else { ContractVersion::V0_2_0 };
+        let other = Scenario::new(other, Options::default());
+        add(
+            "version mismatch",
+            other.tx(std::slice::from_ref(&other.initialize), true),
+            Some("Invalid initialize-game account list"),
+            false,
+        );
+
+        let mut short_join = join.clone();
+        short_join.accounts.pop();
+        add("bad join count", s.tx(&[init.clone(), short_join], true), Some("Invalid creator join instruction"), true);
+        let mut foreign_join = join.clone();
+        foreign_join.data = init.data[..8].to_vec();
+        add(
+            "join foreign discriminator",
+            s.tx(&[init.clone(), foreign_join], true),
+            Some("Invalid creator join instruction"),
+            true,
+        );
+        add(
+            "fee payer differs",
+            s.finish(s.message(std::slice::from_ref(init), Some(s.operator.address())), false),
+            Some("Creator must be the transaction fee payer and signer"),
+            false,
+        );
+        add(
+            "versioned transaction",
+            s.versioned_tx(std::slice::from_ref(init)),
+            Some("Only legacy game transactions are supported"),
+            false,
+        );
+
+        // Every account the signer pins, swapped for an unrelated address.
+        let stranger = signer(20).address();
+        let mut pinned = vec![
+            (0, "game", "Game account does not match the committed random hash"),
+            (2, "oracle", "Invalid oracle account"),
+            (at(7, 6), "vault token account", "Invalid game vault token account"),
+            (at(8, 7), "token program", "Invalid token program account"),
+            (at(10, 8), "creator token account", "Invalid creator token account"),
+            (at(11, 9), "system program", "Invalid system program account"),
+        ];
+        if legacy {
+            pinned.push((5, "game token", "Invalid game token account"));
+            pinned.push((9, "associated token program", "Invalid associated token program account"));
+        }
+        for (index, label, error) in pinned {
+            add(
+                &format!("initialize with wrong {label}"),
+                s.tx(&[swap(init, index, stranger)], true),
+                Some(error),
+                false,
+            );
+        }
+        let mut pinned = vec![
+            (0, "game", "Creator join uses an invalid game account"),
+            (1, "creator", "Creator join uses an invalid creator account"),
+            (2, "optional operator", "Creator join uses an invalid optional oracle operator"),
+            (3, "mint", "Creator join token mint does not match initialization"),
+            (at(5, 4), "vault", "Creator join uses an invalid game vault"),
+            (at(6, 5), "vault token account", "Creator join uses an invalid game vault token account"),
+            (at(7, 6), "token program", "Creator join uses an invalid token program"),
+            (at(9, 7), "player token account", "Creator join uses an invalid player token account"),
+            (at(10, 8), "oracle", "Creator join uses an invalid oracle account"),
+        ];
+        if legacy {
+            pinned.push((4, "game token", "Creator join uses an invalid game token"));
+            pinned.push((8, "associated token program", "Creator join uses an invalid associated token program"));
+        }
+        for (index, label, error) in pinned {
+            add(
+                &format!("join with wrong {label}"),
+                s.tx(&[init.clone(), swap(join, index, stranger)], true),
+                Some(error),
+                true,
+            );
+        }
+        cases
+    }
+
+    #[tokio::test]
+    async fn enforces_the_creation_policy_for_each_version() {
+        for version in SUPPORTED_CONTRACT_VERSIONS {
+            let scenario = Scenario::new(version, Options::default());
+            for case in cases(version) {
+                let name = &case.name;
+                let hooks = Recorder::default();
+                let result =
+                    sign_game_transaction_with_policy(&case.tx, &options(version, &scenario.operator, &hooks)).await;
+                let signed = match (&result, &case.error) {
+                    (Ok(signed), None) => Some(signed),
+                    (Err(SignError::Policy(message)), Some(expected)) => {
+                        assert_eq!(message, expected, "{name}");
+                        None
+                    }
+                    (result, _) => panic!("{name}: unexpected {result:?}"),
+                };
+                let game = scenario.game.to_base58();
+                let unused = if case.unused { vec![(game.clone(), hex::encode(RANDOM_HASH))] } else { vec![] };
+                assert_eq!(*hooks.unused.lock().unwrap(), unused, "{name}");
+                let marks = if signed.is_some() { vec![game.clone(), game] } else { vec![] };
+                assert_eq!(*hooks.marks.lock().unwrap(), marks, "{name}");
+                // Only v0.3 enforces the oracle token policy.
+                let policy = if signed.is_some() && version == ContractVersion::V0_3_0 {
+                    vec![(scenario.token_mint.to_base58(), "250".to_string())]
+                } else {
+                    vec![]
+                };
+                assert_eq!(*hooks.policy.lock().unwrap(), policy, "{name}");
+                if let Some(signed) = signed {
+                    let signed = Transaction::from_base64(signed).unwrap();
+                    let message = LegacyMessage::deserialize(&signed.message_bytes).unwrap();
+                    let instructions = message.decompile().unwrap();
+                    let create = instructions.iter().find(|ix| ix.program_id == PROGRAM_ID).unwrap();
+                    assert_eq!(create.accounts[3].address, scenario.operator.address(), "{name}");
+                    let verifies = |key: Address| {
+                        signed.signature_of(&key).is_some_and(|sig| verify_signature(&key, &signed.message_bytes, sig))
+                    };
+                    assert!(verifies(scenario.operator.address()), "{name}");
+                    // Placeholder creations go back to the creator to sign last.
+                    let creator_signed = !name.ends_with(" placeholder");
+                    assert_eq!(verifies(scenario.creator.address()), creator_signed, "{name}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_creators_off_the_curve() {
+        for version in SUPPORTED_CONTRACT_VERSIONS {
+            let s =
+                Scenario::new(version, Options { creator_off_curve: true, placeholder: true, ..Default::default() });
+            let hooks = Recorder::default();
+            let err = sign_game_transaction_with_policy(
+                &s.tx(std::slice::from_ref(&s.initialize), false),
+                &options(version, &s.operator, &hooks),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, SignError::Other(_)), "{err:?}");
+            assert!(hooks.unused.lock().unwrap().is_empty());
+        }
+    }
+
+    /// The scenarios rebuild the TypeScript generator's v0.2 transactions byte for byte.
+    #[test]
+    fn scenarios_match_the_typescript_generator() {
+        let (fixture, _) = fixture();
+        let mut matched = 0;
+        for case in cases(ContractVersion::V0_2_0) {
+            let Some(expected) = fixture["cases"].as_array().unwrap().iter().find(|c| c["name"] == case.name) else {
+                continue;
+            };
+            assert_eq!(case.tx, expected["txBase64"].as_str().unwrap(), "{}", case.name);
+            matched += 1;
+        }
+        assert_eq!(matched, 6);
+    }
+
+    async fn sign_scenario(scenario: Options, join: bool, hooks: &Recorder) -> Result<String, SignError> {
+        let s = Scenario::new(ContractVersion::V0_3_0, scenario);
+        let mut instructions = vec![s.initialize.clone()];
+        if join {
+            instructions.push(s.join.clone());
+        }
+        let tx = s.tx(&instructions, !scenario.placeholder);
+        sign_game_transaction_with_policy(&tx, &options(ContractVersion::V0_3_0, &s.operator, hooks)).await
     }
 
     #[tokio::test]
@@ -434,7 +715,7 @@ mod tests {
         let hooks = Recorder::default();
         let options = SignGameTransactionOptions {
             contract_version: ContractVersion::V0_3_0,
-            program_id: timba_protocol::contracts::PROGRAM_ID,
+            program_id: PROGRAM_ID,
             operator: &operator,
             hooks: &hooks,
         };
@@ -445,20 +726,24 @@ mod tests {
 
     #[tokio::test]
     async fn hook_rejections_stop_signing() {
+        let placeholder = Options { placeholder: true, ..Default::default() };
         let reused = Recorder { reused: true, ..Default::default() };
-        let err = sign_case("0.3.0 placeholder", &reused).await.unwrap_err();
+        let err = sign_scenario(placeholder, false, &reused).await.unwrap_err();
         assert_eq!(err.to_string(), "Game commitment has already been used");
         assert!(reused.marks.lock().unwrap().is_empty() && reused.policy.lock().unwrap().is_empty());
 
         let rejected = Recorder { rejected: true, ..Default::default() };
-        let err = sign_case("0.3.0 placeholder", &rejected).await.unwrap_err();
+        let err = sign_scenario(placeholder, false, &rejected).await.unwrap_err();
         assert!(matches!(&err, SignError::Creation(e) if e.code == RejectionCode::AmountBelowMinimum), "{err:?}");
         assert!(rejected.marks.lock().unwrap().is_empty(), "nothing is reserved for a rejected game");
 
         for call in [1, 2] {
             let racing = Recorder { fail_mark: Some(call), ..Default::default() };
-            let err = sign_case("0.3.0 creator-signed join", &racing).await.unwrap_err();
-            assert!(matches!(&err, SignError::Other(e) if e.to_string() == "Game was finalized while signing"));
+            let err = sign_scenario(Options::default(), true, &racing).await.unwrap_err();
+            assert!(
+                matches!(&err, SignError::Other(e) if e.to_string() == "Game was finalized while signing"),
+                "{err:?}"
+            );
             assert_eq!(racing.marks.lock().unwrap().len(), call, "stops at the failing reservation");
         }
     }
@@ -472,16 +757,17 @@ mod tests {
             .collect()
     }
 
-    /// Differential cases generated by running the TypeScript signer.
+    /// Differential cases generated by running the TypeScript signer. Its v0.3
+    /// cases predate the v0.3 renames, so only v0.2 behavior is compared.
     #[tokio::test]
     async fn matches_typescript_signer() {
         let (fixture, operator) = fixture();
-        for case in fixture["cases"].as_array().unwrap() {
+        for case in fixture["cases"].as_array().unwrap().iter().filter(|c| c["version"] == "0.2.0") {
             let name = case["name"].as_str().unwrap();
             let hooks = Recorder::default();
             let options = SignGameTransactionOptions {
                 contract_version: case["version"].as_str().unwrap().parse().unwrap(),
-                program_id: timba_protocol::contracts::PROGRAM_ID,
+                program_id: PROGRAM_ID,
                 operator: &operator,
                 hooks: &hooks,
             };

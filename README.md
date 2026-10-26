@@ -253,7 +253,7 @@ curl http://localhost:3001/stats
    - The creator builds the transaction with itself as signer and fee payer
    - The oracle validates the unused commitment and transaction accounts, then partially signs through `/sign-game-transaction`
    - The creator adds its signature and submits the same transaction; neither private key leaves its device
-   - Oracle detects `GameInitialized` event and starts tracking
+   - Oracle detects `GameCreated` event and starts tracking
 
 3. **Player Joining**
 
@@ -272,9 +272,9 @@ curl http://localhost:3001/stats
 
 ### Event-Driven Architecture
 
-The Oracle listens for three key events:
+The Oracle listens for three key events (v0.2.0 emits `GameCreated` as `GameInitialized` and `PlayerRefunded` as `PlayerUnjoined`):
 
-- `GameInitialized` - Start tracking new games
+- `GameCreated` - Start tracking new games
 - `PlayerJoined` - Check if game ready for completion
 - `GameCompleted` - Cleanup completed games
 
@@ -411,14 +411,14 @@ The Oracle works with Solana programs supporting multiple game types:
 #### Oracle-Managed Games (Coinflip, Giveaway)
 
 1. Uses the provided hash for game creation
-2. Emits required events (`GameInitialized`, `PlayerJoined`, `GameCompleted`)
+2. Emits required events (`GameCreated`, `PlayerJoined`, `GameCompleted`)
 3. Oracle retains the secret key until winner determination
 4. Oracle handles automatic completion when conditions are met
 
 **Required Events for All Game Types:**
 
-- `GameInitialized` - Game creation tracking
-- `PlayerJoined`/`PlayerUnjoined` - Player state tracking
+- `GameCreated` - Game creation tracking
+- `PlayerJoined`/`PlayerRefunded` - Player state tracking
 - `GameCompleted` - Completion confirmation
 
 ## Cross-repository integration

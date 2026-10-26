@@ -137,7 +137,7 @@ impl ScanLoopRunner {
                     ReadinessResolution::Resolved { context, readiness, .. } => (context, readiness),
                 };
 
-                // Event subscriptions can miss GameInitialized across RPC
+                // Event subscriptions can miss GameCreated across RPC
                 // disconnects or restarts. A decoded on-chain game proves the
                 // commitment must survive abandoned-commitment cleanup.
                 options.db.mark_secret_key_committed(address)?;
