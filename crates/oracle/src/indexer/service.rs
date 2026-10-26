@@ -209,7 +209,7 @@ impl PublicIndexer {
 mod tests {
     use super::*;
     use crate::indexer::database::IndexerDatabaseOptions;
-    use crate::indexer::types::{GameInitializedEvent, IndexedEvents, IndexerCursor};
+    use crate::indexer::types::{GameCreatedEvent, IndexedEvents, IndexerCursor};
     use crate::solana::pool::testing::FakeTransport;
     use base64::Engine;
     use serde_json::{json, Value};
@@ -429,8 +429,8 @@ mod tests {
         (transport, db, indexer)
     }
 
-    fn initialized(game: &Address, signature: &str, slot: u64) -> GameInitializedEvent {
-        GameInitializedEvent {
+    fn initialized(game: &Address, signature: &str, slot: u64) -> GameCreatedEvent {
+        GameCreatedEvent {
             game_key: game.to_base58(),
             creator: address(20).to_base58(),
             game_type: "coinflip".into(),

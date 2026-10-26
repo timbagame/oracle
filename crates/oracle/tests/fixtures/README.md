@@ -7,8 +7,13 @@ shared `timba-protocol` crate in timbagame/protocol.
 
 | Fixture | Generator | Checked by |
 | --- | --- | --- |
-| `signer.json` | `generators/signer.mjs` | `crates/oracle/src/core/signer.rs` |
+| `signer.json` | `generators/signer.mjs` | `crates/oracle/src/core/signer.rs` (v0.2.0 cases) |
 | `TS_PREPARED_*` constants | `generators/web-prepare.mjs <checkout>` | `crates/oracle/src/web_api/tests.rs` |
+
+The TypeScript signer predates the v0.3.0 instruction renames, so its v0.3.0
+cases are no longer checked. `crates/oracle/src/core/signer_scenarios.rs` ports
+the generator to Rust: it rebuilds the v0.2.0 transactions byte for byte and
+builds the v0.3.0 cases the signer tests assert directly.
 
 To regenerate a fixture, run its generator against that commit:
 

@@ -15,7 +15,7 @@ use timba_common::warn;
 
 use super::schema::{js_number, js_string, normalize_number};
 use super::types::{
-    GameClosedEvent, GameCompletedEvent, GameInitializedEvent, HistoricalBackfillState, IndexedEvents, IndexerCursor,
+    GameClosedEvent, GameCompletedEvent, GameCreatedEvent, HistoricalBackfillState, IndexedEvents, IndexerCursor,
     MembershipKind, PlayerMembershipEvent, Row,
 };
 
@@ -512,7 +512,7 @@ impl IndexerDatabase {
         Ok(true)
     }
 
-    fn apply_initialized(&self, conn: &Connection, game: &GameInitializedEvent) -> Result<()> {
+    fn apply_initialized(&self, conn: &Connection, game: &GameCreatedEvent) -> Result<()> {
         let now = self.now_seconds();
         let is_private = i64::from(game.is_private);
         run(
@@ -1286,7 +1286,7 @@ mod tests {
     #[test]
     fn surfaces_a_failure_while_collecting_frequent_players() {
         let db = memory();
-        let initialized = GameInitializedEvent {
+        let initialized = GameCreatedEvent {
             game_key: "g".into(),
             creator: "me".into(),
             game_type: "coinflip".into(),

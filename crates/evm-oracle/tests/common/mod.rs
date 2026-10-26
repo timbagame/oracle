@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
+use alloy_primitives::{aliases::U48, keccak256, Address, Bytes, B256, U256};
 use alloy_sol_types::{SolCall, SolValue};
 use futures::future::BoxFuture;
 use serde_json::{json, Value};
@@ -73,11 +73,11 @@ pub fn fake_game() -> Game {
         isPrivate: false,
         minPlayers: 2,
         maxPlayers: 2,
-        expiresAt: 10_000,
+        expiresAt: U48::from(10_000),
         ticketAmount: U256::from(100),
         totalAmount: U256::from(200),
         commitment: B256::ZERO,
-        lastEntryBlock: U256::from(5),
+        lastEntryBlock: U48::from(5),
         participants: vec![creator(), player()],
     }
 }

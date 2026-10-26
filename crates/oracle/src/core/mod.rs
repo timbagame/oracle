@@ -8,5 +8,7 @@ pub mod scan;
 pub mod service;
 pub mod signer;
 #[cfg(test)]
+pub mod signer_scenarios;
+#[cfg(test)]
 pub mod testing;
 pub mod types;

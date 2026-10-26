@@ -23,6 +23,11 @@ impl Keypair {
         Self::from_signing(signing)
     }
 
+    #[cfg(test)]
+    pub fn from_seed(seed: [u8; 32]) -> Self {
+        Self::from_signing(SigningKey::from_bytes(&seed))
+    }
+
     fn from_signing(signing: SigningKey) -> Self {
         let address = Address(signing.verifying_key().to_bytes());
         Self { signing, address }

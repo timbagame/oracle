@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use timba_protocol::contracts::{discriminators::COMPLETE_GAME, find_game_pda, PROGRAM_ID};
 use timba_protocol::events::{
-    decode_program_event, get_trusted_program_data, GameCompleted, GameInitialized, ProgramEvent,
+    decode_program_event, get_trusted_program_data, GameCompleted, GameCreated, ProgramEvent,
 };
 use timba_protocol::http::web::FINALIZED_VERIFIED_GAME;
 use timba_protocol::randomness::calculate_winner;
@@ -50,10 +50,10 @@ pub fn replay_participants(events: &[ProgramEvent], game_key: &Address) -> Resul
                 participants.push(joined.player);
                 joined
             }
-            ProgramEvent::PlayerUnjoined(unjoined) => {
+            ProgramEvent::PlayerRefunded(unjoined) => {
                 let index = unjoined.ticket_index as usize;
                 if participants.get(index) != Some(&unjoined.player) {
-                    bail!("Incomplete unjoin history");
+                    bail!("Incomplete refund history");
                 }
                 let last = participants.pop().expect("non-empty");
                 if index < participants.len() {
@@ -200,7 +200,7 @@ async fn verify(rpc: &RpcPool, program_id: &Address, value: &str) -> Result<Valu
     let mut transactions: IndexMap<String, FinalizedTransaction> = IndexMap::new();
     transactions.insert(value.to_string(), completed_tx);
     let mut before: Option<String> = None;
-    let mut initialized: Option<GameInitialized> = None;
+    let mut initialized: Option<GameCreated> = None;
     // Bounded backfill. Refuse to invent a result if archived history exceeds the budget or is missing.
     for _ in 0..HISTORY_PAGES {
         if initialized.is_some() {
@@ -225,7 +225,7 @@ async fn verify(rpc: &RpcPool, program_id: &Address, value: &str) -> Result<Valu
                 .await?
                 .ok_or_else(|| anyhow!("Incomplete transaction history"))?;
             let init = decode_events(&tx.logs, &program)?.into_iter().find_map(|event| match event {
-                ProgramEvent::GameInitialized(init) if init.game_key == completed.game_key => Some(init),
+                ProgramEvent::GameCreated(init) if init.game_key == completed.game_key => Some(init),
                 _ => None,
             });
             transactions.insert(info.signature.clone(), tx);
@@ -279,7 +279,7 @@ async fn verify(rpc: &RpcPool, program_id: &Address, value: &str) -> Result<Valu
             if event.game_key() != Some(&completed.game_key) {
                 continue;
             }
-            if matches!(event, ProgramEvent::GameInitialized(_)) {
+            if matches!(event, ProgramEvent::GameCreated(_)) {
                 started = true;
             }
             if !started {
@@ -402,7 +402,7 @@ mod tests {
                 tickets_count: 2,
                 ..membership()
             }),
-            ProgramEvent::PlayerUnjoined(PlayerMembership {
+            ProgramEvent::PlayerRefunded(PlayerMembership {
                 tickets_count: 1,
                 moved_participant: Some(address(OTHER)),
                 last_slot: 11,
@@ -416,8 +416,8 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("Incomplete"));
-        let error = replay_participants(&[ProgramEvent::PlayerUnjoined(membership())], &address(GAME_KEY)).unwrap_err();
-        assert_eq!(error.to_string(), "Incomplete unjoin history");
+        let error = replay_participants(&[ProgramEvent::PlayerRefunded(membership())], &address(GAME_KEY)).unwrap_err();
+        assert_eq!(error.to_string(), "Incomplete refund history");
         let error = replay_participants(
             &[ProgramEvent::PlayerJoined(PlayerMembership { tickets_count: 2, ..membership() })],
             &address(GAME_KEY),

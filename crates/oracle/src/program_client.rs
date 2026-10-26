@@ -16,7 +16,7 @@ use timba_protocol::{Address, ContractVersion};
 use tokio::task::JoinHandle;
 
 use crate::indexed_events::{
-    parse_transaction_events, GameClosedEvent, GameCompletedEvent, GameInitializedEvent, MembershipKind,
+    parse_transaction_events, GameClosedEvent, GameCompletedEvent, GameCreatedEvent, MembershipKind,
     PlayerMembershipEvent,
 };
 use crate::solana::ws::{subscribe_logs, websocket_url, LogsSubscription};
@@ -26,17 +26,17 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventName {
-    GameInitialized,
+    GameCreated,
     GameCompleted,
     GameClosed,
     OperatorGameClosed,
     PlayerJoined,
-    PlayerUnjoined,
+    PlayerRefunded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProgramDispatch {
-    GameInitialized(GameInitializedEvent),
+    GameCreated(GameCreatedEvent),
     GameCompleted(GameCompletedEvent),
     GameClosed(GameClosedEvent),
     PlayerMembership(PlayerMembershipEvent),
@@ -45,12 +45,12 @@ pub enum ProgramDispatch {
 impl ProgramDispatch {
     pub fn name(&self) -> EventName {
         match self {
-            Self::GameInitialized(_) => EventName::GameInitialized,
+            Self::GameCreated(_) => EventName::GameCreated,
             Self::GameCompleted(_) => EventName::GameCompleted,
             Self::GameClosed(event) if event.operator => EventName::OperatorGameClosed,
             Self::GameClosed(_) => EventName::GameClosed,
             Self::PlayerMembership(event) if event.kind == MembershipKind::Joined => EventName::PlayerJoined,
-            Self::PlayerMembership(_) => EventName::PlayerUnjoined,
+            Self::PlayerMembership(_) => EventName::PlayerRefunded,
         }
     }
 }
@@ -255,7 +255,7 @@ impl ProgramClient {
             let dispatches = parsed
                 .initialized
                 .into_iter()
-                .map(ProgramDispatch::GameInitialized)
+                .map(ProgramDispatch::GameCreated)
                 .chain(parsed.completed.into_iter().map(ProgramDispatch::GameCompleted))
                 .chain(parsed.closed.into_iter().map(ProgramDispatch::GameClosed))
                 .chain(parsed.membership.into_iter().map(ProgramDispatch::PlayerMembership));
@@ -590,7 +590,7 @@ mod tests {
 
     #[tokio::test]
     async fn names_dispatches() {
-        let initialized = ProgramDispatch::GameInitialized(GameInitializedEvent {
+        let initialized = ProgramDispatch::GameCreated(GameCreatedEvent {
             game_key: "g".into(),
             creator: "c".into(),
             game_type: "coinflip".into(),
@@ -628,12 +628,12 @@ mod tests {
                 slot: 1,
             })
         };
-        assert_eq!(initialized.name(), EventName::GameInitialized);
+        assert_eq!(initialized.name(), EventName::GameCreated);
         assert_eq!(completed.name(), EventName::GameCompleted);
         assert_eq!(closed(false).name(), EventName::GameClosed);
         assert_eq!(closed(true).name(), EventName::OperatorGameClosed);
         assert_eq!(membership(MembershipKind::Joined).name(), EventName::PlayerJoined);
-        assert_eq!(membership(MembershipKind::Unjoined).name(), EventName::PlayerUnjoined);
+        assert_eq!(membership(MembershipKind::Refunded).name(), EventName::PlayerRefunded);
     }
 
     #[tokio::test]
