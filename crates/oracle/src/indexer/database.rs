@@ -172,7 +172,7 @@ fn sql_to_json(value: ValueRef<'_>) -> Value {
 
 fn query_all(conn: &Connection, sql: &str, params: impl Params) -> rusqlite::Result<Vec<Row>> {
     let mut statement = conn.prepare_cached(sql)?;
-    let names: Vec<String> = statement.column_names().into_iter().map(String::from).collect();
+    let names: Vec<String> = statement.column_names().map(String::from).collect();
     let mut rows = statement.query(params)?;
     let mut output = Vec::new();
     while let Some(row) = rows.next()? {
