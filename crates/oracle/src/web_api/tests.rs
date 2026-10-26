@@ -11,8 +11,10 @@ use axum::http::{HeaderMap, Request, StatusCode};
 use base64::Engine;
 use futures::future::{BoxFuture, FutureExt};
 use serde_json::{json, Value};
-use timba_protocol::address::TOKEN_PROGRAM_ID;
-use timba_protocol::contracts::{find_game_pda, find_game_token_pda, GameAccount, GameType, PROGRAM_ID};
+use timba_protocol::address::{ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID};
+use timba_protocol::contracts::{
+    discriminators, find_game_pda, find_game_token_pda, GameAccount, GameType, PROGRAM_ID,
+};
 use timba_protocol::transaction::{LegacyMessage, Transaction};
 use timba_protocol::{AccountMeta, Address, ContractVersion, Instruction};
 use tower::ServiceExt;
@@ -815,8 +817,25 @@ async fn preparation_with_oracle_token_policies_matches_the_typescript_transacti
     let reply = harness.send(prepare(prepare_body(USDC_MINT, "giveaway", "1000000", 1), Some("0.3.0"))).await;
 
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
-    assert_eq!(reply.body["txBase64"], TS_PREPARED_V030);
+    assert_eq!(reply.body["txBase64"], renamed_v030(TS_PREPARED_V030));
     assert_eq!(reply.body["gameAddress"], find_game_pda(&[7; 32], &PROGRAM_ID).to_base58());
+}
+
+/// The TypeScript fixture predates the v0.3 renames: apply them (the `create_game`
+/// discriminator, no associated token program in game instructions) and recompile.
+fn renamed_v030(tx_base64: &str) -> String {
+    let transaction = Transaction::from_base64(tx_base64).unwrap();
+    let message = LegacyMessage::deserialize(&transaction.message_bytes).unwrap();
+    let mut instructions = message.decompile().unwrap();
+    for instruction in instructions.iter_mut().filter(|ix| ix.program_id == PROGRAM_ID) {
+        if instruction.data[..8] == discriminators::INITIALIZE_GAME {
+            instruction.data[..8].copy_from_slice(&discriminators::CREATE_GAME);
+        }
+        instruction.accounts.retain(|meta| meta.address != ASSOCIATED_TOKEN_PROGRAM_ID);
+    }
+    let fee_payer = *message.fee_payer().unwrap();
+    let renamed = LegacyMessage::compile(&fee_payer, &message.recent_blockhash, &instructions).unwrap();
+    Transaction::from_message(&renamed).to_base64()
 }
 
 // ---------------------------------------------------------------------------
