@@ -1,10 +1,10 @@
-# Oracle — Service Deployment
+# Oracle service deployment
 
 This guide covers only the Oracle service. Cross-project production operations are documented in the private Operations repository.
 
 ## Configuration
 
-Copy `env.example` to `.env` and set the production values. `SOLANA_NETWORK` accepts a JSON array or comma-separated RPC list and fails over in order.
+Copy `.env.example` to `.env` and set the production values. `SOLANA_NETWORK` accepts a JSON array or comma-separated RPC list and fails over in order.
 
 Keep `CONTRACT_VERSION=0.2.0` while mainnet runs v0.2.0. After deploying the
 v0.3.0 program, set `CONTRACT_VERSION=0.3.0` before restarting the Oracle. The
@@ -35,38 +35,6 @@ price is unavailable. Enabling a mint also creates the Oracle operator's
 associated token account when needed, so ensure the operator has enough SOL for
 the one-time rent and transaction fee.
 
-## One-time D1 migration
-
-First confirm that the existing Worker's historical backfill reports `complete: true`:
-
-```bash
-curl --fail --silent --show-error \
-  -H "Authorization: Bearer $INDEXER_CRON_SECRET" \
-  https://<indexer-worker-url>/api/backfill
-```
-
-Do not continue with an incomplete backfill. The importer enforces this so player profiles and history cannot be silently truncated.
-
-Export the remote D1 database before switching Web traffic. From the old Web checkout:
-
-```bash
-bunx wrangler d1 export timba-games --remote \
-  --config workers/indexer/wrangler.toml \
-  --output timba-games.sql
-```
-
-Copy `timba-games.sql` to the VPS, stop the Oracle, and import it from the new Oracle checkout. The importer refuses to overwrite an existing target:
-
-```bash
-systemctl --user stop timba-oracle.service
-podman run --rm --volume "$PWD:/work:Z" --workdir /work ghcr.io/timbagame/oracle:main \
-  timba-oracle import-indexer /work/timba-games.sql /work/data/indexer.sqlite
-chmod 600 data/indexer.sqlite secrets/jupiter-api-key
-systemctl --user start timba-oracle.service
-```
-
-The imported Solana cursor lets the Oracle catch up every transaction after the export. Live program events wake a coalesced cursor catch-up; `INDEXER_POLL_INTERVAL_MS` remains a five-minute recovery path with full active-game reconciliation for missed WebSocket events. Wait until `/indexer/api/stats` is current, then deploy Web. Keep the old D1 Worker until the Web smoke checks pass; it is no longer used after the Web cutover.
-
 ## Rootless Podman Quadlet
 
 The production checkout is expected at `~/timba/oracle`. Install the shared network and Oracle service before the Bot:
@@ -94,61 +62,6 @@ journalctl --user -u timba-oracle.service -f
 ```
 
 Do not publish port 3001 on the VPS host, run another service copy against the same databases, or use `sudo` for rootless Podman. If the checkout path changes, update the `%h/timba/oracle` paths in the installed Quadlet.
-
-## Moving a host from the TypeScript image
-
-Hosts installed before the Rust rewrite run Quadlets that probe health with
-`bun`, start the EVM oracle with `bun run start:evm` and mount each database
-as a single file. The image ships a small `bun` compatibility script, so an
-automatic update does not break those hosts, but switch them to the current
-Quadlets in one maintenance window:
-
-```bash
-cd ~/timba/oracle
-# 1. Record the running image so it can be restored, then pause automatic updates.
-podman inspect oracle --format '{{.ImageDigest}}' | tee rollback-image-digest
-systemctl --user stop podman-auto-update.timer
-# 2. Stop cleanly; the shutdown checkpoints both databases.
-systemctl --user stop timba-oracle.service
-# 3. Back up and move the databases into the data directory.
-install -d -m 700 backups data
-tar -czf "backups/sqlite-$(date -u +%Y%m%dT%H%M%SZ).tgz" oracle.sqlite* indexer.sqlite*
-mv oracle.sqlite* indexer.sqlite* data/
-# 4. Install the current Quadlets (also timba-evm-oracle.container if it is installed).
-cp deploy/quadlet/timba-oracle.container ~/.config/containers/systemd/
-systemctl --user daemon-reload
-podman pull ghcr.io/timbagame/oracle:main
-systemctl --user start timba-oracle.service
-# 5. Wait past the health start period and three probe intervals, then check.
-sleep 120
-podman inspect oracle --format '{{.State.Health.Status}}'   # healthy
-podman exec oracle timba-oracle healthcheck && echo healthy
-journalctl --user -u timba-oracle.service --since -5min
-systemctl --user start podman-auto-update.timer
-```
-
-Resume automatic updates only after the health status reads `healthy`.
-
-### Rollback
-
-The Rust and TypeScript releases share the SQLite schemas, so either can open
-the other's databases. To return to the recorded image:
-
-```bash
-cd ~/timba/oracle
-systemctl --user stop podman-auto-update.timer   # keep it stopped until main is fixed
-systemctl --user stop timba-oracle.service
-mv data/oracle.sqlite* data/indexer.sqlite* .
-git show <previous-release-tag>:deploy/quadlet/timba-oracle.container \
-  > ~/.config/containers/systemd/timba-oracle.container
-podman pull "ghcr.io/timbagame/oracle@$(cat rollback-image-digest)"
-podman tag "ghcr.io/timbagame/oracle@$(cat rollback-image-digest)" ghcr.io/timbagame/oracle:main
-systemctl --user daemon-reload
-systemctl --user start timba-oracle.service
-```
-
-While the timer is stopped, nothing replaces the pinned image. Re-enable it
-only once `ghcr.io/timbagame/oracle:main` carries a release you want to run.
 
 ## Private web access
 

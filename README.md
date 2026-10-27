@@ -1,463 +1,157 @@
-# Oracle API 🔮
+# Timba oracle
 
-A robust Oracle service for Solana-based games that generates cryptographic secrets and automatically completes games using event-driven architecture.
+**The service that commits to each game's secret, approves game creation and settles Timba games.**
 
-## ✨ Features
+[Timba](https://timba.cc) is a platform for multiplayer coinflips and giveaways played on the web or in Telegram.
+Every game commits to a secret before anyone joins. This service makes that secret, keeps it until the game is ready, then reveals it on chain so the program can pick the winner.
+It also keeps the public game history that the website reads.
 
-- **🔑 Cryptographic Secret Generation**: Secure random secret generation for new games
-- **✍️ Initialization Approval**: Validates and partially signs creator-funded game transactions
-- **🪙 Creation Policy**: Stores enabled mints and enforces a live USD minimum
-- **🎯 Game Type Support**: Supports Coinflip and Giveaway games
-- **🎧 Event-Driven Completion**: Real-time game completion via Solana event listeners
-- **🔄 Fallback Scanning**: Periodic scanning as backup for missed events
-- **📊 Real-Time Monitoring**: Health checks and comprehensive statistics
-- **🛡️ Error Resilience**: Robust error handling and retry mechanisms
-- **💾 Persistent Storage**: SQLite database for secret and game tracking
-- **📈 Public Game Index**: VPS-hosted history, profiles, leaderboards, and cached statistics in a separate SQLite database
-- **⚡ Optimized Performance**: Cached game metadata to minimize blockchain calls
-- **🎲 Secure Secret Handling**: Secrets retained until game completion
+| Binary             | Chain  | Docs                                                       |
+| ------------------ | ------ | ---------------------------------------------------------- |
+| `timba-oracle`     | Solana | This README, [deployment](MAINNET_DEPLOYMENT.md)           |
+| `timba-evm-oracle` | EVM    | [crates/evm-oracle/README.md](crates/evm-oracle/README.md) |
 
-## 🚀 Architecture
+## Trust model
 
-The Oracle service uses a hybrid approach with performance optimizations:
+- **The oracle is trusted.** It knows each secret before settlement and can decline to reveal it. If it never settles a game, the contracts unlock the funds after a recovery buffer. See the [contracts security policy](https://github.com/timbagame/contracts/blob/main/SECURITY.md).
+- **Secrets stay private until settlement.** They live only in `oracle.sqlite`. The API returns the commitment, never the secret.
+- **Token policy is enforced here.** The oracle decides which tokens and minimum amounts it will sign for.
 
-1. **Primary**: Event listeners for immediate game completion
-2. **Fallback**: Periodic scanning every 5 minutes for missed events
-3. **Database**: Persistent tracking of secrets and game states
-4. **Caching**: Local game metadata cache to avoid unnecessary blockchain calls
-5. **Public index**: Independent `indexer.sqlite` cursor and materialized statistics caches, woken by the shared live subscription
+## How a game works
 
-### Performance Optimizations
+1. **Commit.** `/generate-hash` creates a random 32-byte secret, stores it and returns its SHA-256 hash and the game address.
+2. **Approve.** The creator builds the game transaction and sends it to `/sign-game-transaction`.
+   - The oracle checks that the commitment is unused, the accounts match and the token policy allows it.
+   - It adds its signature. The creator signs and sends the transaction, so neither key leaves its owner.
+3. **Track.** The oracle follows the program's events (`GameCreated`, `PlayerJoined`, `PlayerRefunded`, `GameCompleted`).
+   - Every 5 minutes it also scans pending games, in case it missed an event.
+4. **Settle.** When a game is ready, the oracle reveals the secret on chain. The program checks it and pays the winner.
+   - A failed attempt retries after 5, 15 and 30 seconds, then waits 5 minutes. The wait survives restarts.
+5. **Index.** A separate `indexer.sqlite` keeps the public history: games, profiles, tokens, leaderboards and stats.
 
-- **Cached Readiness Checks**: Game metadata (min/max players, timeout) is cached locally
-- **Local Player Tracking**: Player count incremented locally on `PlayerJoined` events
-- **Minimal Blockchain Calls**: Only fetch from blockchain when actually completing games
-- **Smart Fallbacks**: Blockchain queries only when cached data is unavailable
+## Token policy
 
-## 📡 API Endpoints
-
-| Endpoint                 | Method | Description                                           | Body Parameters       |
-| ------------------------ | ------ | ----------------------------------------------------- | --------------------- |
-| `/health`                | GET    | Service health                                        | None                  |
-| `/generate-hash`         | POST   | Generate and retain a secret; return commitment       | `gameType` (optional) |
-| `/sign-game-transaction` | POST   | Validate and partially sign game initialization       | `txBase64`            |
-| `/token-policies`        | GET    | Return the current token creation policies            | None                  |
-| `/stats`                 | GET    | Oracle statistics and metrics                         | None                  |
-| `/games/complete-now`    | POST   | Attempt immediate completion of one tracked game      | `gameAddress`         |
-| `/indexer/health`        | GET    | Public indexer health for authenticated callers       | None                  |
-| `/indexer/api/*`         | GET    | Games, profiles, tokens, statistics, and leaderboards | Query-specific        |
-| `/`                      | GET    | Generated API documentation                           | None                  |
-
-All endpoints except `/health` and `/` require bearer authentication. Rootless Podman reads the token from the permission-checked `secrets/oracle-api-token` file; local development may use `ORACLE_API_TOKEN`. Administrative requeue, auto-complete, and token-policy controls are intentionally CLI-only:
+Each token must be enabled before games can use it:
 
 ```bash
-timba-oracle admin requeue <game-address>
-timba-oracle admin auto-complete <game-address> <on|off>
+timba-oracle admin token-policy set <mint> on
 timba-oracle admin token-policy list
-timba-oracle admin token-policy set <mint> <on|off>
 ```
 
-The Oracle supports the Timba v0.2.0 and v0.3.0 IDLs. `CONTRACT_VERSION`
-defaults to `0.2.0`, so this branch can run before the program upgrade. Change it
-to `0.3.0` only after the v0.3.0 program is deployed. In v0.2.0 mode, the
-contract's `GameToken` account enforces token creation policy. In v0.3.0 mode,
-every initialization signature re-reads the durable Oracle policy for the
-transaction mint. For enabled mints, it converts a USD 0.10 target to raw tokens
-with the current Jupiter price. It accepts up to 5% below the recommendation so
-small price changes do not reject a recently quoted amount. Prices are cached
-for 60 seconds, and signing fails closed when a current price is unavailable.
-Missing, disabled, and below-minimum policies are rejected with typed Protocol
-errors.
+- **Minimum amount.** For each enabled mint, the oracle turns a USD 0.10 target into tokens using the live Jupiter price.
+- **Price moves.** It accepts amounts up to 5% below that minimum and caches prices for 60 seconds.
+- **Fails closed.** Without a current price, it refuses to sign.
+- **Setup cost.** Enabling a mint creates the operator's token account if needed. The operator pays that rent.
 
-Enabling a token reads its decimals from the initialized legacy SPL mint and
-creates the Oracle operator's associated token account when it is missing. The
-operator pays that one-time account rent and transaction fee.
+On contract v0.2.0, the program's `GameToken` accounts enforce token policy instead.
 
-### Game Types Supported
+## API
 
-- **`coinflip`**: Traditional coinflip games (Oracle keeps secret until completion)
-- **`giveaway`**: Giveaway games (Oracle keeps secret until completion)
+Every route except `/health` and `/` needs `Authorization: Bearer <token>`.
 
-## 🔧 Setup & Installation
-
-### Prerequisites
-
-- [Rust](https://rustup.rs/) 1.85 or newer (CI and the image use 1.99)
-- Solana operator keypair file
-- Access to a Solana RPC endpoint (mainnet-beta for production)
-
-### Installation
-
-1. **Clone and build**
-
-   ```bash
-   git clone <repository>
-   cd oracle
-   cargo build --release
-   ```
-
-2. **Configure environment**
-
-   ```bash
-   cp env.example .env
-   set -a; . ./.env; set +a
-   # Edit .env with your configuration
-   ```
-
-3. **Place operator keypair**
-
-   ```bash
-   # Place the shared bot/oracle operator keypair in the project root
-   cp /path/to/your/operator-keypair.json ./operator-keypair.json
-   ```
-
-4. **Start the Oracle**
-   ```bash
-   cargo run --release --bin timba-oracle -- serve
-   ```
-
-The binary does not read `.env` itself; export the variables (as above) or use
-the quadlet `EnvironmentFile=`. Other subcommands are listed by
-`timba-oracle --help`: `admin`, `attempt-completion`, `inspect-game`,
-`inspect-oracle`, `audit-random`, `manual-shutdown`, `import-indexer` and
-`healthcheck`. The opt-in EVM oracle is the separate `timba-evm-oracle` binary,
-configured by `EVM_CONFIG_FILE`; its API is documented in
-[`crates/evm-oracle/README.md`](crates/evm-oracle/README.md).
-
-## ⚙️ Configuration
-
-Configure via environment variables in `.env`:
-
-```bash
-# Required: Solana network endpoints (comma-separated list or JSON array); the oracle walks
-# the ordered set automatically when it encounters transient RPC failures. Single-quote a
-# JSON array ('["https://a","https://b"]'): `. ./.env` strips unquoted double quotes.
-SOLANA_NETWORK=https://api.mainnet-beta.solana.com,https://rpc-backup.example.com
-# Optional: add rebate-address to Helius sendTransaction requests on every endpoint.
-HELIUS_REBATE_ADDRESS=
-
-# Keep 0.2.0 until the program upgrade; switch to 0.3.0 during migration.
-CONTRACT_VERSION=0.2.0
-
-# Optional: API server port (default: 3001)
-ORACLE_PORT=3001
-ORACLE_API_TOKEN=<shared-random-secret>
-
-# Public history database and missed-event recovery interval. Live program events
-# wake a prompt, coalesced cursor catch-up.
-INDEXER_DATABASE_FILE=./indexer.sqlite
-INDEXER_POLL_INTERVAL_MS=300000
-
-# Required in production for USD prices and dynamic minimum amounts
-JUPITER_API_KEY=<jupiter-api-key>
-
-# Optional: allow the service to generate an ephemeral operator keypair when the
-# configured keypair file is missing. This is automatically enabled during tests
-# and CI runs to avoid checking sensitive keys into the repository.
-# USE_FAKE_KEYPAIR=true
-```
-
-## 📋 Usage Examples
-
-### Generate Game Secrets
-
-#### Traditional Games (Coinflip, Giveaway)
+| Route                    | Method    | What it does                                         |
+| ------------------------ | --------- | ---------------------------------------------------- |
+| `/health`                | GET       | Service health                                       |
+| `/`                      | GET       | Generated API documentation                          |
+| `/generate-hash`         | POST      | Create a secret and return its commitment            |
+| `/sign-game-transaction` | POST      | Validate and co-sign a game creation transaction     |
+| `/token-policies`        | GET       | Enabled tokens and their minimum amounts             |
+| `/stats`                 | GET       | Oracle statistics                                    |
+| `/games/complete-now`    | POST      | Try to settle one tracked game now                   |
+| `/indexer/*`             | GET       | Games, profiles, tokens, statistics and leaderboards |
+| `/web/*`                 | GET, POST | Blockchain API for the website                       |
 
 ```bash
 curl -X POST http://localhost:3001/generate-hash \
+  -H "Authorization: Bearer $ORACLE_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"gameType": "coinflip"}'
 ```
 
-**Response:**
+Requeue, auto-complete and token policy changes are only available from the CLI (`timba-oracle admin --help`).
 
-```json
-{
-  "success": true,
-  "randomHash": "abc123...",
-  "gameAddress": "def456..."
-}
-```
+### Website API
 
-#### Default (No Game Type)
+The website reaches the oracle over a private network and uses `/web/*` for its blockchain work:
 
-```bash
-curl -X POST http://localhost:3001/generate-hash
-```
+- `GET /web/config`: token configuration and prices.
+- `POST /web/games/prepare`: checks the game terms and returns an unsigned transaction. Requires `X-Timba-Contract-Version` to match `CONTRACT_VERSION`.
+- `POST /web/games/submit`: validates and co-signs the player's transaction, then broadcasts it.
+- `GET /web/games/:address?fresh=1`: reads an active game account.
+- `GET /web/verification/:signature`: the verified result of a finished game.
 
-**Response:**
+Verified results are rebuilt only from finalized, successful transactions, and the rebuilt winner must match. They contain only the secret already revealed on chain. If history is missing or too long, the route returns 503 and stores nothing.
 
-```json
-{
-  "success": true,
-  "randomHash": "abc123...",
-  "gameAddress": "def456..."
-}
-```
+## Configuration
 
-### Check System Health
+Copy [`.env.example`](.env.example) to `.env`. It lists every setting. The main ones:
 
-```bash
-curl http://localhost:3001/health
-```
+| Setting                 | What it does                                                   |
+| ----------------------- | -------------------------------------------------------------- |
+| `SOLANA_NETWORK`        | RPC endpoints, tried in order                                  |
+| `CONTRACT_VERSION`      | `0.2.0` or `0.3.0`, matching the deployed program              |
+| `OPERATOR_KEYPAIR_PATH` | The operator keypair stored on chain                           |
+| `ORACLE_API_TOKEN_FILE` | File with the API token (or `ORACLE_API_TOKEN` for local work) |
+| `JUPITER_API_KEY_FILE`  | File with the Jupiter API key, needed for prices               |
+| `DATABASE_FILE`         | Secrets and completion state (default `oracle.sqlite`)         |
+| `INDEXER_DATABASE_FILE` | Public history (default `indexer.sqlite`)                      |
 
-**Response:**
+The binary doesn't read `.env` itself. Export the variables first, or use the Quadlet's `EnvironmentFile=`.
 
-```json
-{
-  "status": "healthy",
-  "timestamp": "2024-01-15T10:30:00.000Z",
-  "pendingGames": 5,
-  "completedGames": 142,
-  "eventListening": true,
-  "activeListeners": 3
-}
-```
-
-### View Statistics
+## Run it locally
 
 ```bash
-curl http://localhost:3001/stats
+cp .env.example .env
+set -a; . ./.env; set +a
+cargo run --release --bin timba-oracle -- serve
 ```
 
-**Response:**
+With `USE_FAKE_KEYPAIR=true`, the oracle makes a throwaway operator keypair when the file is missing. `timba-oracle --help` lists the other commands, such as `inspect-game`, `audit-random` and `healthcheck`.
 
-```json
-{
-  "success": true,
-  "stats": {
-    "totalSecrets": 150,
-    "usedSecrets": 142,
-    "pendingGames": 5,
-    "completedGames": 142,
-    "eventListening": true,
-    "activeListeners": 3
-  }
-}
-```
+## Reporting a vulnerability
 
-## 🔍 How It Works
+- **Don't open a public issue** for security problems.
+- **Report privately** through this repository's [Security tab](https://github.com/timbagame/oracle/security/advisories/new).
+- **Never post** unrevealed secrets, API tokens or private keys.
 
-### Game Lifecycle
+## Related
 
-#### For Traditional Games (Coinflip, Giveaway)
+- **[timbagame/contracts](https://github.com/timbagame/contracts):** the Solana and EVM programs
+- **[timbagame/protocol](https://github.com/timbagame/protocol):** shared clients, API schemas and winner verification
+- **[timbagame/bot](https://github.com/timbagame/bot):** the Telegram bot
+- **[timba.cc](https://timba.cc):** play on the web and verify games
+- **[@playtimbabot](https://t.me/playtimbabot):** play in Telegram
 
-1. **Secret Generation**
+## Development
 
-   - Client calls `/generate-hash` with `gameType: "coinflip"` or `"giveaway"`
-   - Oracle generates cryptographic secret and hash
-   - Stores secret in database and returns only hash to client (keeps secret secure)
+<details>
+<summary>Toolchain, checks and code layout</summary>
 
-2. **Game Creation**
-
-   - The creator builds the transaction with itself as signer and fee payer
-   - The oracle validates the unused commitment and transaction accounts, then partially signs through `/sign-game-transaction`
-   - The creator adds its signature and submits the same transaction; neither private key leaves its device
-   - Oracle detects `GameCreated` event and starts tracking
-
-3. **Player Joining**
-
-   - Players join the game
-   - Oracle detects `PlayerJoined` events
-   - Checks if game is ready for completion
-
-4. **Game Completion**
-   - Oracle automatically completes game when conditions are met
-   - Uses stored secret to determine winner fairly
-   - Marks game as completed in database
-
-### Game Type Differences
-
-- **Coinflip/Giveaway**: Oracle-managed completion for security and fairness
-
-### Event-Driven Architecture
-
-The Oracle listens for three key events (v0.2.0 emits `GameCreated` as `GameInitialized` and `PlayerRefunded` as `PlayerUnjoined`):
-
-- `GameCreated` - Start tracking new games
-- `PlayerJoined` - Check if game ready for completion
-- `GameCompleted` - Cleanup completed games
-
-### Fallback Mechanism
-
-If events are missed due to network issues, the Oracle:
-
-- Scans pending games every 5 minutes
-- Attempts completion for ready games
-- Distinguishes between actual errors and games that are simply not ready yet
-- Skips games that have failed too many times
-- Retries transient failures at 5, 15, and 30 seconds, then pauses that game's automatic recovery for 5 minutes
-- Persists the cooldown deadline so a process restart cannot immediately reopen the same retry burst; the fallback scan resumes recovery after the deadline
-
-### Smart Error Handling
-
-The Oracle intelligently categorizes completion attempts:
-
-- **Completed**: Games successfully completed
-- **Not Ready**: Games that aren't ready yet (normal state)
-- **Errors**: Actual failures (network issues, invalid secrets, etc.)
-
-This prevents normal "not ready" states from being reported as errors in logs and statistics.
-
-## 🛠 Development
-
-### Code Structure
-
-```
-crates/
-├── common/      # timba-common: logging, env/secret helpers, shutdown signal
-├── oracle/      # timba-oracle: oracle service, HTTP API, indexer, web API, CLI
-│   └── src/
-│       ├── core/       # completion, events, scan loop, registry sync, signer, service
-│       ├── http/       # authenticated oracle API router
-│       ├── indexer/    # public history index and /indexer API
-│       ├── web_api/    # /web blockchain API
-│       ├── cli/        # operator subcommands
-│       └── server.rs   # `serve`: API, listeners and supervised background workers
-└── evm-oracle/  # timba-evm-oracle: opt-in EVM oracle
-```
-
-### Testing
+The Rust version is pinned in [`rust-toolchain.toml`](rust-toolchain.toml), and the extra cargo tools in [`mise.toml`](mise.toml).
 
 Run the same checks as CI:
 
 ```bash
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo llvm-cov --workspace --summary-only  # coverage (cargo install cargo-llvm-cov)
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo llvm-cov --workspace --locked --lcov --output-path coverage/lcov.info
+python3 scripts/check-coverage.py coverage/lcov.info coverage-scope.json
 ```
 
-The protocol codecs live in the shared `timba-protocol` crate in
-[timbagame/protocol](https://github.com/timbagame/protocol), checked byte for
-byte against the TypeScript package there. The oracle's own signer and web
-fixtures come from the previous TypeScript implementation; see
-`crates/oracle/tests/fixtures/README.md`.
-
-### Key Improvements
-
-- **Constants Extraction**: All magic numbers and strings are now constants
-- **Error Handling**: Comprehensive error handling with proper logging
-- **Type Safety**: Typed Rust structures for every account, request and response
-- **Method Organization**: Focused methods with single responsibilities
-- **Resource Management**: Proper cleanup and graceful shutdown
-
-### Database Schema
-
-**secret_keys table:**
-
-- `game_address` (PRIMARY KEY)
-- `secret_key` (encrypted secret)
-- `random_hash` (public hash)
-- `created_at` (timestamp)
-- `used` (boolean flag)
-
-**game_tracking table:**
-
-- `game_address` (PRIMARY KEY)
-- `status` (pending/completed)
-- `last_checked` (timestamp)
-- `completion_attempts` (retry counter)
-- `completion_failure_kind` and `completion_retry_after` (transient/permanent failure state and persisted recovery cooldown)
-- `completed_at` (completion timestamp)
-
-**game_metadata table:** _(Performance optimization)_
-
-- `game_address` (PRIMARY KEY)
-- `min_players` (minimum players required)
-- `max_players` (maximum players allowed)
-- `expires_at` (game expiration timestamp)
-- `current_players` (cached player count)
-
-## 🔒 Security Features
-
-- **Secret Isolation**: Secrets stored securely and marked as used after completion
-- **Retry Limits**: Games that fail completion multiple times are skipped
-- **Input Validation**: All inputs validated before processing
-- **Error Logging**: Comprehensive logging without exposing sensitive data
-
-## 📊 Monitoring
-
-The Oracle provides comprehensive monitoring through:
-
-- Health endpoint with real-time status
-- Statistics tracking for all operations
-- Detailed logging with emoji indicators
-- Event listener status monitoring
-
-## 🤝 Integration
-
-### Frontend Integration
-
-#### Traditional Games (Oracle-Managed)
-
-```javascript
-// Generate secrets for coinflip game
-const response = await fetch("http://localhost:3001/generate-hash", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ gameType: "coinflip" }),
-});
-const { randomHash, gameAddress } = await response.json();
-
-// Use randomHash in your game creation transaction
-// Oracle will automatically complete the game when ready
+```
+crates/
+├── common/      # logging, env and secret helpers, shutdown signal
+├── oracle/      # timba-oracle
+│   └── src/
+│       ├── core/       # completion, events, scan loop, signer, service
+│       ├── http/       # authenticated API router
+│       ├── indexer/    # public history and /indexer API
+│       ├── web_api/    # /web API
+│       ├── cli/        # operator commands
+│       └── server.rs   # `serve`: API, listeners and background workers
+└── evm-oracle/  # timba-evm-oracle
 ```
 
-### Smart Contract Integration
+The protocol codecs live in the shared `timba-protocol` crate in [timbagame/protocol](https://github.com/timbagame/protocol). Test fixtures from the earlier TypeScript oracle are described in [`crates/oracle/tests/fixtures/README.md`](crates/oracle/tests/fixtures/README.md).
 
-The Oracle works with Solana programs supporting multiple game types:
-
-#### Oracle-Managed Games (Coinflip, Giveaway)
-
-1. Uses the provided hash for game creation
-2. Emits required events (`GameCreated`, `PlayerJoined`, `GameCompleted`)
-3. Oracle retains the secret key until winner determination
-4. Oracle handles automatic completion when conditions are met
-
-**Required Events for All Game Types:**
-
-- `GameCreated` - Game creation tracking
-- `PlayerJoined`/`PlayerRefunded` - Player state tracking
-- `GameCompleted` - Completion confirmation
-
-## Cross-repository integration
-
-The shared local-validator suite lives in the sibling `operations/integration` directory. Run `bun run test:integration --web` from `operations`; see its README for pinned toolchains, candidate protocol packages and optional manual GitHub runs. Normal CI does not run the combined system suite or require a cross-repository credential.
-
-`SOLANA_WS_ENDPOINT` optionally selects a WebSocket endpoint separately from `SOLANA_NETWORK`. `JUPITER_PRICE_URL` overrides the price endpoint for both signing policies and indexer pricing. The integration runner supplies local endpoints.
-
-When `HELIUS_REBATE_ADDRESS` is set, Oracle applies it to Helius transaction submissions, including completion and token onboarding. Each configured endpoint gets the same handling when selected. Reads, WebSocket subscriptions, and non-Helius providers are unchanged.
-
-## Web blockchain API
-
-The authenticated `/web/*` routes move blockchain RPC, transaction construction,
-and history verification off the Cloudflare Worker:
-
-- `GET /web/config`: cached token configuration and prices.
-- `POST /web/games/prepare`: validates terms/policy and returns an unsigned transaction.
-  Requires `X-Timba-Contract-Version` matching `CONTRACT_VERSION`.
-- `POST /web/games/submit`: validates and co-signs the user's transaction using the
-  existing signing policy, then broadcasts the exact signed bytes.
-- `GET /web/games/:address?fresh=1`: reads and decodes an active account.
-- `GET /web/verification/:signature`: returns a persisted finalized verification record.
-
-Web retains the public endpoint URLs and the private VPC transport. Deploy this
-Oracle change before merging/deploying the dependent Web PR. Both repositories use
-Protocol 0.14.1 for shared Solana plans and finalized proof schemas. Publish the
-protocol release before updating the consumer pins; then deploy Oracle before Web.
-
-Verification records and background jobs live in `indexer.sqlite`. Newly indexed
-completions queue a backfill after one minute, with one background job at a time and
-exponential retry delays. Requests can backfill older records on demand. At most two
-reconstructions run concurrently across background and HTTP work; duplicate reads
-share the same work. No task is added to the critical payout/completion queue.
-
-Reconstruction requires finalized, successful transactions, trusted program events,
-initialization history, a valid commitment/game PDA, complete ticket replay, and a
-matching calculated winner. Transactions sharing a slot are ordered using the block's
-signature list, and events retain their log order. History is bounded to 2,000 signatures
-and a two-minute RPC deadline; missing/pruned history or an exceeded budget returns
-503 without storing an incomplete result. Failures and live account data are never
-stored as immutable results. Public records contain only the on-chain revealed secret,
-not unpublished oracle secrets, and include chain transaction references.
+</details>
