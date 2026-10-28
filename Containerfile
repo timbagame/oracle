@@ -1,3 +1,5 @@
+# Keep this on the runtime image's Debian release (trixie is Debian 13): the binaries link
+# against its glibc.
 FROM docker.io/library/rust:1.99-trixie@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc AS build
 
 WORKDIR /src
@@ -10,19 +12,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked --bin timba-oracle --bin timba-evm-oracle && \
     install -D -m 0755 -t /out target/release/timba-oracle target/release/timba-evm-oracle
 
-FROM docker.io/library/debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
-
-# RPC, Jupiter and EVM endpoints are reached over TLS with the system roots.
-RUN apt-get update && \
-    apt-get install --yes --no-install-recommends ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+# Distroless: glibc, libgcc, CA roots and tzdata only. No shell or package manager, so an
+# exploit gets no tools, and health checks must use the exec form.
+FROM gcr.io/distroless/cc-debian13@sha256:d74d144baa124dd9defd01d71872bb56c49d4441dba6153ccf790364f97e64b1
 
 # Relative defaults (oracle.sqlite, admin-keypair.json) resolve here.
 WORKDIR /app
 
 COPY --from=build /out/ /usr/local/bin/
-# Keeps hosts on the 0.2 Quadlets (bun health check and Exec) working; see the script.
-COPY --chmod=0755 deploy/compat/bun /usr/local/bin/bun
 
 # Expose default port (can be overridden by ORACLE_PORT)
 EXPOSE 3001

@@ -26,7 +26,8 @@ Volume=%h/timba/oracle/data:/app/data:Z
 NoNewPrivileges=true
 DropCapability=all
 PidsLimit=256
-HealthCmd=/usr/local/bin/timba-oracle healthcheck
+# Exec form: the image has no shell, and a plain command would run through /bin/sh.
+HealthCmd=["/usr/local/bin/timba-oracle","healthcheck"]
 HealthInterval=30s
 HealthTimeout=5s
 HealthRetries=3
