@@ -40,3 +40,7 @@ target/
 
 # local agent state
 .claude/
+
+# mutation testing (scripts/mutants.sh)
+/build/
+**/mutants.out*/

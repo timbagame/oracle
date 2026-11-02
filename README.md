@@ -138,6 +138,15 @@ cargo llvm-cov --workspace --locked --lcov --output-path coverage/lcov.info
 python3 scripts/check-coverage.py coverage/lcov.info coverage-scope.json
 ```
 
+Mutation testing checks that the tests would notice a change to the code. [cargo-mutants](https://mutants.rs) changes it in small ways, such as flipping a comparison or emptying a function, and runs the crate's tests for each change. A change no test notices is a missed mutant. It needs `cargo-mutants` 27.1.0:
+
+```bash
+scripts/mutants.sh diff origin/main   # the lines of crates/*/src this branch changed
+scripts/mutants.sh shard 3/64         # the 4th of 64 equal parts of every mutant
+```
+
+Results land in `build/mutants/mutants.out` (`missed.txt`, `caught.txt`, `timeout.txt` and a log per mutant). It never blocks a merge. On a pull request that changes the crates, the `Mutants` workflow mutates the changed lines and keeps one comment listing what no test caught; the comment goes away once everything is caught. Each one is a lead for a follow-up PR, unless the change doesn't alter behavior. A pull request that changes the mutation setup also runs part 0 of 64, so a broken setup shows before the weekly run. Every Saturday it runs a quarter of all mutants, 16 of the 64 parts, and lists what survived in the open "Missed mutants" issue.
+
 ```
 crates/
 ├── common/      # logging, env and secret helpers, shutdown signal
