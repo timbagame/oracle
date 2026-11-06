@@ -76,7 +76,7 @@ jobs:
             cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
       - name: Install Cargo tools
         # Installs the versions pinned in mise.toml, and caches them.
-        uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
+        uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
       - name: Audit dependencies
         run: cargo audit
       - name: Check formatting
@@ -139,7 +139,7 @@ jobs:
         run: rustup toolchain install "$NIGHTLY" --profile minimal --component llvm-tools-preview
       - name: Install cargo-llvm-cov
         # The version pinned in mise.toml, built with the nightly toolchain.
-        uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
+        uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
         with:
           install_args: cargo:cargo-llvm-cov
           cache_key_prefix: mise-nightly
