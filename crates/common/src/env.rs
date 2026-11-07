@@ -90,6 +90,8 @@ mod tests {
         assert_eq!(parse_integer(Some("1.5"), 5, None, None, "K"), 5);
         assert_eq!(parse_integer(Some("-1"), 5, Some(0), None, "K"), 5);
         assert_eq!(parse_integer(Some("70000"), 5, Some(0), Some(65535), "K"), 5);
+        assert_eq!(parse_integer(Some("0"), 5, Some(0), Some(65535), "K"), 0);
+        assert_eq!(parse_integer(Some("65535"), 5, Some(0), Some(65535), "K"), 65535);
         assert_eq!(parse_integer(Some("1e3"), 5, None, None, "K"), 1000);
         assert_eq!(parse_integer(Some("\u{feff}42 "), 5, None, None, "K"), 42);
     }

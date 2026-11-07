@@ -560,6 +560,12 @@ mod service_api {
         let (status, body, _) = call(&app, "POST", "/games/auto-complete", Some(&toggle), true).await;
         assert_eq!((status, body["autoCompleteDisabled"].clone()), (StatusCode::OK, json!(true)));
 
+        assert_eq!(service.db().is_auto_complete_disabled(&game), Some(true));
+        assert_eq!(
+            OracleApi::set_auto_complete_disabled(service.as_ref(), &game, true).expect("toggle"),
+            Err(ToggleFailure::Unchanged)
+        );
+
         // Disabled games are skipped by the background wake-up.
         let complete = format!(r#"{{"gameAddress":"{game}"}}"#);
         let (status, body, _) = call(&app, "POST", "/games/complete-now", Some(&complete), true).await;

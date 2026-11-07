@@ -1370,6 +1370,42 @@ mod tests {
     }
 
     #[test]
+    fn retention_keeps_recent_finished_rows_and_old_pending_rows() {
+        let db = db();
+        let now = now_ms();
+        for (game, age, finished) in [("recent", 47, true), ("old", 49, true), ("pending", 49, false)] {
+            db.save_secret_key(game, "fake-secret", "fake-hash").expect("secret");
+            db.track_game(game, None, false).expect("track");
+            db.add_player_to_game(game, "fake-player", 0).expect("player");
+            if finished {
+                db.mark_game_completed(game).expect("completed");
+            }
+            let timestamp = now - age * 3_600_000;
+            db.with_conn(|c| {
+                c.execute("UPDATE secret_keys SET created_at=? WHERE game_address=?", params![timestamp, game])?;
+                if finished {
+                    c.execute(
+                        "UPDATE game_tracking SET completed_at=? WHERE game_address=?",
+                        params![timestamp, game],
+                    )?;
+                }
+                Ok(())
+            })
+            .expect("age rows");
+        }
+        let counts = db.cleanup_old_records(48);
+        assert_eq!((counts.deleted_secrets, counts.deleted_games, counts.deleted_players), (1, 1, 1));
+        for game in ["recent", "pending"] {
+            assert!(db.get_secret_key(game).is_some(), "{game}");
+            assert!(db.get_game_status(game).is_some(), "{game}");
+            assert_eq!(db.get_game_players(game), vec!["fake-player"]);
+        }
+        assert!(db.get_secret_key("old").is_none());
+        assert!(db.get_game_status("old").is_none());
+        assert!(db.get_game_players("old").is_empty());
+    }
+
+    #[test]
     fn migrates_legacy_schema() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("legacy.sqlite");

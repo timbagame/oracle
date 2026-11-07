@@ -160,6 +160,18 @@ async fn reports_health_as_degraded_until_a_cycle_has_run_recently() {
 }
 
 #[tokio::test]
+async fn health_allows_three_long_poll_intervals() {
+    let fake = setup_with(timba_evm_oracle::config::EvmConfig { poll_ms: 20_000, ..evm_config() });
+    fake.service.last_cycle_at.store(fake.service.now_ms() - 45_000, std::sync::atomic::Ordering::SeqCst);
+    let app = router(&fake);
+    let response = send(&app, get("/evm/health")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body(response).await["status"], "healthy");
+    fake.service.last_cycle_at.store(fake.service.now_ms() - 60_001, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(send(&app, get("/evm/health")).await.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
 async fn reports_a_failed_cycle_as_degraded_with_retained_work() {
     let fake = setup();
     fake.service.last_cycle_at.store(timba_common::time::now_ms(), std::sync::atomic::Ordering::SeqCst);
