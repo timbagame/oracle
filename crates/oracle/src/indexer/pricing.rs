@@ -297,6 +297,26 @@ mod tests {
     }
 
     #[test]
+    fn uses_nonempty_environment_url_and_falls_back_for_empty_values() {
+        let _guard = crate::env_test_lock();
+        let saved = std::env::var_os("JUPITER_PRICE_URL");
+        let prices = TokenUsdPrices::new();
+        std::env::set_var("JUPITER_PRICE_URL", "https://prices.example/v9");
+        let override_url = prices.base_url();
+        std::env::set_var("JUPITER_PRICE_URL", "");
+        let empty_url = prices.base_url();
+        std::env::remove_var("JUPITER_PRICE_URL");
+        let absent_url = prices.base_url();
+        match saved {
+            Some(value) => std::env::set_var("JUPITER_PRICE_URL", value),
+            None => std::env::remove_var("JUPITER_PRICE_URL"),
+        }
+        assert_eq!(override_url, "https://prices.example/v9");
+        assert_eq!(empty_url, JUPITER_PRICE_URL);
+        assert_eq!(absent_url, JUPITER_PRICE_URL);
+    }
+
+    #[test]
     fn encodes_like_encode_uri_component() {
         assert_eq!(encode_uri_component("a,b c/é"), "a%2Cb%20c%2F%C3%A9");
         assert_eq!(encode_uri_component("A-z_0.!~*'()"), "A-z_0.!~*'()");

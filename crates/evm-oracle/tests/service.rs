@@ -384,6 +384,7 @@ mod tick_settlement {
         assert_eq!(simulation["from"], operator().to_checksum(None));
         let estimate = &fake.chain.calls("eth_estimateGas")[0][0];
         let data = complete_game_transaction(&fake.service.deployment, GAME_A, SECRET_A).unwrap().data;
+        assert_eq!(estimate["from"], operator().to_checksum(None));
         assert_eq!(estimate["to"], PROXY.to_checksum(None));
         assert_eq!(estimate["data"], data.to_string());
         assert_eq!(estimate["nonce"], "0x7");
@@ -571,6 +572,26 @@ mod tick_settlement {
     }
 
     #[tokio::test]
+    async fn keeps_polling_an_authorization_that_can_still_be_created() {
+        let fake = setup();
+        let now = fake.chain.state().now;
+        seed(&fake, GAME_A, SECRET_A, Some(now + 120));
+        fake.chain.state().games.insert(GAME_A, timba_protocol::evm::abi::Game { status: 0, ..fake_game() });
+        let before = timba_common::time::now_ms();
+        fake.service.tick().await.expect("tick");
+        let after = timba_common::time::now_ms();
+        let check: i64 = fake
+            .service
+            .store()
+            .db
+            .query_row("SELECT next_check FROM authorizations WHERE id=?", [GAME_A.to_string()], |row| row.get(0))
+            .expect("next check");
+        let poll = fake.service.config.poll_ms as i64;
+        assert!((before + poll..=after + poll).contains(&check));
+        assert!(simulations(&fake).is_empty());
+    }
+
+    #[tokio::test]
     async fn parks_finished_and_never_created_games_for_a_day_without_settling_them() {
         let fake = setup();
         let now = fake.chain.state().now;
@@ -673,6 +694,29 @@ mod tick_pending {
         fake.service.tick().await.unwrap();
 
         assert_eq!(fake.service.store().pending().unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn retries_a_still_settleable_game_after_a_confirmed_revert() {
+        let fake = setup();
+        let authorization = fake.service.authorize(&creation_intent(&fake, json!({}))).await.expect("authorize");
+        let game = authorization.game_id;
+        fake.chain.state().games.insert(game, fake_game());
+        let old = PendingTransaction { game: game.to_string(), ..pending() };
+        fake.service.store().submit(&old).expect("journal");
+        {
+            let mut state = fake.chain.state();
+            state.receipt = Some(json!({ "status": "0x0", "blockNumber": "0xa" }));
+            state.head = 12;
+        }
+        fake.service.tick().await.expect("follow confirmed revert");
+        assert_eq!(fake.service.store().pending().expect("pending"), None);
+        assert!(fake.service.store().game(&game.to_string()).expect("game").is_some());
+        fake.service.tick().await.expect("retry game");
+        let retried = fake.service.store().pending().expect("pending").expect("new transaction");
+        assert_eq!(retried.game, old.game);
+        assert_ne!(retried.hash, old.hash);
+        assert_eq!(fake.chain.calls("eth_sendRawTransaction").len(), 1);
     }
 
     #[tokio::test]

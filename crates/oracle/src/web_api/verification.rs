@@ -787,6 +787,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ignores_a_foreign_initialization_while_backfilling_this_game() {
+        let fixture = history_fixture();
+        {
+            let mut transactions = fixture.transactions.lock().expect("transactions");
+            let encoded = transactions[&fixture.init_sig]["meta"]["logMessages"][1]
+                .as_str()
+                .expect("event log")
+                .strip_prefix("Program data: ")
+                .expect("data prefix");
+            let mut foreign = base64::engine::general_purpose::STANDARD.decode(encoded).expect("event bytes");
+            foreign[8..40].copy_from_slice(&[9; 32]);
+            foreign[40..72].copy_from_slice(&[8; 32]);
+            let log = format!("Program data: {}", base64::engine::general_purpose::STANDARD.encode(foreign));
+            transactions.get_mut(&fixture.join_sig).expect("join")["meta"]["logMessages"]
+                .as_array_mut()
+                .expect("logs")
+                .insert(1, json!(log));
+        }
+        let result = verify_game_transaction(&fixture.rpc, &PROGRAM_ID, &fixture.complete_sig).await.expect("verified");
+        assert_eq!(result["gameKey"], fixture.game.to_base58());
+        assert_eq!(result["creator"], PLAYER);
+        assert_eq!(result["tokenMint"], PLAYER);
+        assert_eq!(result["ticketAmount"], 0.0000001);
+        assert_eq!(fixture.transport.calls_for("getSignaturesForAddress").len(), 2);
+        assert_eq!(result["transactionSignatures"][0], fixture.init_sig);
+    }
+
+    #[tokio::test]
     async fn rejects_a_submitted_winner_that_does_not_match_the_replay() {
         let fixture = history_fixture();
         {

@@ -1861,6 +1861,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn maintenance_sweeps_stale_unsigned_commitments_only_for_positive_retention() {
+        let h = harness();
+        let game = tracked_game(&h);
+        exec_sql(h._dir.path(), "UPDATE secret_keys SET created_at=0");
+        assert_eq!(h.service.cleanup_old_records(0), CleanupCounts::default());
+        assert!(h.service.db.get_secret_key(&game).is_some());
+        assert_eq!(h.service.cleanup_old_records(-1), CleanupCounts::default());
+        assert!(h.service.db.get_secret_key(&game).is_some());
+        let result = h.service.cleanup_old_records(24);
+        assert_eq!((result.deleted_secrets, result.deleted_games, result.deleted_players), (1, 0, 0));
+        assert!(h.service.db.get_secret_key(&game).is_none());
+        assert!(h.service.db.get_game_status(&game).is_none());
+    }
+
+    #[tokio::test]
     async fn completes_ready_games_and_notifies_the_bot() {
         let (url, mut bodies) = bot_server(200).await;
         let mut config = OracleConfig::for_tests();

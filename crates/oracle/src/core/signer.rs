@@ -369,6 +369,17 @@ mod tests {
     use std::sync::Mutex;
     use timba_protocol::contracts::{PROGRAM_ID, SUPPORTED_CONTRACT_VERSIONS};
 
+    #[test]
+    fn nonce_detection_checks_program_and_data_length() {
+        for length in 0..4 {
+            let ix = Instruction { program_id: SYSTEM_PROGRAM_ID, accounts: vec![], data: vec![4; length] };
+            assert!(!has_advance_nonce_instruction(Some(&ix)));
+        }
+        let ix = Instruction { program_id: Address([9; 32]), accounts: vec![], data: vec![4, 0, 0, 0] };
+        assert!(!has_advance_nonce_instruction(Some(&ix)));
+        assert!(!has_advance_nonce_instruction(None));
+    }
+
     #[derive(Default)]
     struct Recorder {
         marks: Mutex<Vec<String>>,
