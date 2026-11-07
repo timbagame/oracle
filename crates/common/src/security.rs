@@ -9,22 +9,22 @@ pub const MAX_REQUEST_BODY_BYTES: usize = 16 * 1024;
 const WINDOW_MS: i64 = 1_000;
 const INDEXER_ROUTE_LIMIT: u32 = 100;
 
-fn route_limit(path: &str) -> Option<u32> {
-    let limit = match path {
-        "/web/verification" => 10,
-        "/web/games/prepare" => 10,
-        "/web/games/submit" => 10,
-        "/web/games/read" => 100,
-        "/web/config" => 20,
-        "/generate-hash" => 20,
-        "/sign-game-transaction" => 20,
-        "/games/complete-now" => 50,
-        "/token-policies" => 10,
-        "/stats" => 10,
-        _ if path == "/indexer" || path.starts_with("/indexer/") => INDEXER_ROUTE_LIMIT,
+fn route_limit(path: &str) -> Option<(&'static str, u32)> {
+    Some(match path {
+        "/web/games/prepare" => ("/web/games/prepare", 10),
+        "/web/games/submit" => ("/web/games/submit", 10),
+        "/web/verification" => ("/web/verification", 10),
+        _ if path.starts_with("/web/verification/") => ("/web/verification", 10),
+        _ if path.starts_with("/web/games/") => ("/web/games/read", 100),
+        "/web/config" => ("/web/config", 20),
+        "/generate-hash" => ("/generate-hash", 20),
+        "/sign-game-transaction" => ("/sign-game-transaction", 20),
+        "/games/complete-now" => ("/games/complete-now", 50),
+        "/token-policies" => ("/token-policies", 10),
+        "/stats" => ("/stats", 10),
+        _ if path == "/indexer" || path.starts_with("/indexer/") => ("/indexer", INDEXER_ROUTE_LIMIT),
         _ => return None,
-    };
-    Some(limit)
+    })
 }
 
 /// Constant-time comparison of `Bearer <token>`.
@@ -47,7 +47,7 @@ pub struct RateLimitResult {
 }
 
 pub struct RouteRateLimiter {
-    windows: Mutex<HashMap<String, (i64, u32)>>,
+    windows: Mutex<HashMap<&'static str, (i64, u32)>>,
     now: Box<dyn Fn() -> i64 + Send + Sync>,
 }
 
@@ -63,14 +63,7 @@ impl RouteRateLimiter {
     }
 
     pub fn check(&self, path: &str) -> RateLimitResult {
-        let path = if path.starts_with("/web/verification/") {
-            "/web/verification"
-        } else if path.starts_with("/web/games/") && path != "/web/games/prepare" && path != "/web/games/submit" {
-            "/web/games/read"
-        } else {
-            path
-        };
-        let Some(limit) = route_limit(path) else {
+        let Some((path, limit)) = route_limit(path) else {
             return RateLimitResult { allowed: true, retry_after_seconds: None };
         };
         let now = (self.now)();
@@ -86,7 +79,7 @@ impl RouteRateLimiter {
                 RateLimitResult { allowed: false, retry_after_seconds: Some(retry) }
             }
             _ => {
-                windows.insert(path.to_string(), (now, 1));
+                windows.insert(path, (now, 1));
                 RateLimitResult { allowed: true, retry_after_seconds: None }
             }
         }
@@ -137,6 +130,63 @@ mod tests {
         assert!(!has_valid_bearer_token(Some("abc"), "abc"));
         assert!(!has_valid_bearer_token(None, "abc"));
         assert!(!has_valid_bearer_token(Some("Bearer "), ""));
+    }
+
+    #[test]
+    fn indexer_paths_share_one_window_and_unlimited_routes_store_nothing() {
+        let clock = Arc::new(AtomicI64::new(0));
+        let c = clock.clone();
+        let limiter = RouteRateLimiter::new(Box::new(move || c.load(Ordering::SeqCst)));
+        assert!(limiter.check("/indexer").allowed);
+        for id in 1..100 {
+            assert!(limiter.check(&format!("/indexer/{id}")).allowed);
+        }
+        assert!(!limiter.check("/indexer/another").allowed);
+        for id in 0..10_000 {
+            assert!(!limiter.check(&format!("/indexer/{id}")).allowed);
+            assert!(limiter.check(&format!("/unknown/{id}")).allowed);
+            assert!(limiter.check(&format!("/indexer-other/{id}")).allowed);
+        }
+        assert_eq!(limiter.windows.lock().expect("limiter lock").len(), 1);
+        clock.store(1000, Ordering::SeqCst);
+        assert!(limiter.check("/indexer/new").allowed);
+        assert_eq!(limiter.windows.lock().expect("limiter lock").len(), 1);
+    }
+
+    #[test]
+    fn every_limited_route_enforces_its_budget() {
+        let routes = [
+            ("/web/games/prepare", 10),
+            ("/web/games/submit", 10),
+            ("/web/games/read", 100),
+            ("/web/games/example", 100),
+            ("/web/verification", 10),
+            ("/web/verification/example", 10),
+            ("/web/config", 20),
+            ("/generate-hash", 20),
+            ("/sign-game-transaction", 20),
+            ("/games/complete-now", 50),
+            ("/token-policies", 10),
+            ("/stats", 10),
+            ("/indexer", 100),
+            ("/indexer/example", 100),
+        ];
+        for (route, limit) in routes {
+            let limiter = RouteRateLimiter::new(Box::new(|| 0));
+            for request in 0..limit {
+                assert!(limiter.check(route).allowed, "{route}: request {request}");
+            }
+            assert_eq!(
+                limiter.check(route),
+                RateLimitResult { allowed: false, retry_after_seconds: Some(1) },
+                "{route}"
+            );
+        }
+        let limiter = RouteRateLimiter::new(Box::new(|| 0));
+        for (route, _) in routes {
+            limiter.check(route);
+        }
+        assert_eq!(limiter.windows.lock().expect("limiter lock").len(), 11);
     }
 
     #[test]
