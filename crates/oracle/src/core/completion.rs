@@ -1342,6 +1342,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ordinary_attempts_refresh_cached_readiness_on_chain() {
+        for gone in [true, false] {
+            let h = harness(None);
+            let (address, _, _) = store_game(&h, [0x42; 32]);
+            h.cache.lock().expect("cache").insert(
+                address.clone(),
+                Readiness { ready: true, game_account: Some(game_account(2, 2, 2, 0, 60)), evaluated_at: Some(1) },
+            );
+            serve_game(&h, (!gone).then(|| game_account(1, 5, 2, BLOCK_TIME as u64, 600)));
+            let result = h.manager.attempt_game_completion(AttemptOptions::new(&address)).await.expect("attempt");
+            assert_eq!(result, if gone { None } else { Some(CompletionResult::not_ready()) });
+            assert_eq!(h.transport.calls_for("getAccountInfo").len(), 1);
+            assert!(h.transport.calls_for("sendTransaction").is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn attempts_record_not_ready_outcomes() {
         let h = harness(None);
         let (address, _, _) = store_game(&h, [0x2e; 32]);

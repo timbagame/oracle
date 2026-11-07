@@ -143,6 +143,27 @@ fn stores_lifecycle_data_and_serves_stats_without_duplicate_totals() {
 }
 
 #[test]
+fn completion_only_batches_dirty_then_refresh_materialized_stats() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let clock = now.clone();
+    let f = fixture(IndexerDatabaseOptions {
+        now: Some(Arc::new(move || clock.load(Ordering::SeqCst))),
+        cache_rebuild_interval_ms: Some(60_000),
+        ..Default::default()
+    });
+    f.db.rebuild_caches().expect("initial cache");
+    assert_eq!(f.db.get_stats(None).expect("stats").total_games, json!(0));
+    let completions = IndexedEvents { completed: f.events.completed.clone(), ..Default::default() };
+    assert_eq!(f.db.apply(&completions, &cursor(&f.completed_signature, 12)).expect("completion"), 1);
+    assert!(f.db.has_pending_cache_rebuild());
+    assert_eq!(f.db.get_stats(None).expect("stale stats").total_games, json!(0));
+    now.store(61_001, Ordering::SeqCst);
+    assert!(f.db.flush_caches(false).expect("flush"));
+    assert_eq!(f.db.get_stats(None).expect("fresh stats").total_games, json!(1));
+    assert!(!f.db.has_pending_cache_rebuild());
+}
+
+#[test]
 fn falls_back_to_the_newest_game_for_the_cursor() {
     let f = fixture(Default::default());
     assert_eq!(f.db.get_cursor().unwrap(), None);
