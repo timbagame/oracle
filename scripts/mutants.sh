@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Mutation testing: cargo-mutants changes the code in small ways, such as
 # flipping a comparison or emptying a function, and runs the crate's tests
-# for each change. A change no test notices is a missed mutant: code whose
+# and their dependents for each change. A change no test notices is a missed mutant: code whose
 # behavior nothing checks.
 # Usage: scripts/mutants.sh diff BASE   mutants in the lines of crates/*/src changed since BASE
 #        scripts/mutants.sh shard K/N   the Kth of N equal parts of every mutant
@@ -19,7 +19,7 @@ if [[ $(cargo mutants --version 2>/dev/null) != "cargo-mutants $version" ]]; the
 fi
 output=${MUTANTS_OUTPUT:-build/mutants}
 mkdir -p "$output"
-args=(--workspace --no-shuffle --output "$output"
+args=(--workspace --test-workspace true --no-shuffle --output "$output"
     --timeout "${MUTANTS_TIMEOUT:-300}"
     # CI tests the unchanged code in its own job.
     --baseline skip)

@@ -57,7 +57,7 @@ printf 'fn n() { 2; }\n' >"$repo/crates/oracle/src/nested/n.rs"
 printf 'fn c() { 3; }\n' >"$repo/crates/common/src/c.rs"
 git -C "$repo" -c user.name=t -c user.email=t@example.com commit -q -am core
 expect_code 0 mutants scripts/mutants.sh diff main
-grep -Fq 'mutants --workspace' "$work/calls" || fail 'not the whole workspace'
+grep -Fq 'mutants --workspace --test-workspace true' "$work/calls" || fail 'dependent tests not included'
 grep -Fq -- '--in-diff build/mutants/changes.diff' "$work/calls" || fail 'no --in-diff'
 grep -Fq -- '--baseline skip' "$work/calls" || fail 'baseline not skipped'
 grep -Fq -- '--in-place' "$work/calls" && fail 'in-place outside CI'
@@ -115,6 +115,13 @@ grep -q '^api -X PATCH repos/o/r/issues/comments/99 -f body=' "$work/calls" || f
 comment '' true
 [[ ! -s $work/calls ]] || fail 'a fork commented'
 grep -q 'a.rs:1:1: replace f with g' "$work/summary" || fail 'no run summary'
+# Long comments fit GitHub's byte limit, end between rows and balance fences.
+for i in $(seq 1 3000); do printf 'a.rs:%s:1: replace a long expression with another expression, repeated for a realistic report row\n' "$i"; done >"$results/missed.txt"
+comment ''
+[[ $(wc -c <"$work/calls") -lt 60000 ]] || fail 'comment exceeds byte limit'
+[[ $(( $(grep -c '^```' "$work/calls") % 2 )) == 0 ]] || fail 'comment fence unbalanced'
+grep -q 'Full report artifact.*https://run#artifacts' "$work/calls" || fail 'no artifact link'
+grep -Eq '^a.rs:[0-9]+:1: replace.*row$' "$work/calls" || fail 'first complete row lost'
 rm "$results/missed.txt"
 comment 99
 grep -q '^api -X DELETE repos/o/r/issues/comments/99$' "$work/calls" || fail 'comment kept after all caught'
