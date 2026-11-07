@@ -57,7 +57,7 @@ printf 'fn n() { 2; }\n' >"$repo/crates/oracle/src/nested/n.rs"
 printf 'fn c() { 3; }\n' >"$repo/crates/common/src/c.rs"
 git -C "$repo" -c user.name=t -c user.email=t@example.com commit -q -am core
 expect_code 0 mutants scripts/mutants.sh diff main
-grep -Fq 'mutants --workspace' "$work/calls" || fail 'not the whole workspace'
+grep -Fq 'mutants --workspace --test-workspace true' "$work/calls" || fail 'dependent tests not included'
 grep -Fq -- '--in-diff build/mutants/changes.diff' "$work/calls" || fail 'no --in-diff'
 grep -Fq -- '--baseline skip' "$work/calls" || fail 'baseline not skipped'
 grep -Fq -- '--in-place' "$work/calls" && fail 'in-place outside CI'
