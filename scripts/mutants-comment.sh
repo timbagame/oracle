@@ -19,6 +19,16 @@ $lived
 \`\`\`
 
 Each one is a change to the code no test noticed. Not a blocker: real gaps get their own PR. [Full report]($RUN)"
+# Leave room for a balanced fence and an artifact link before GitHub's body limit.
+if (( $(LC_ALL=C printf '%s' "$body" | wc -c) > 60000 )); then
+    body=$(LC_ALL=C printf '%s\n' "$body" | awk '
+        truncated { next }
+        size + length($0) + 1 > 58000 { if (fenced) print "```"; truncated = 1; next }
+        { print; size += length($0) + 1; if ($0 ~ /^```/) fenced = !fenced }
+    ')
+    body+=$'\n\n'
+    body+="Report truncated. [Full report artifact]($RUN#artifacts)"
+fi
 [[ -z $lived ]] || printf '%s\n' "$body" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 [[ ${FORK:-false} != true ]] || exit 0
 old=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \

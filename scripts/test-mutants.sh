@@ -115,6 +115,13 @@ grep -q '^api -X PATCH repos/o/r/issues/comments/99 -f body=' "$work/calls" || f
 comment '' true
 [[ ! -s $work/calls ]] || fail 'a fork commented'
 grep -q 'a.rs:1:1: replace f with g' "$work/summary" || fail 'no run summary'
+# Long comments fit GitHub's byte limit, end between rows and balance fences.
+for i in $(seq 1 3000); do printf 'a.rs:%s:1: replace a long expression with another expression, repeated for a realistic report row\n' "$i"; done >"$results/missed.txt"
+comment ''
+[[ $(wc -c <"$work/calls") -lt 60000 ]] || fail 'comment exceeds byte limit'
+[[ $(( $(grep -c '^```' "$work/calls") % 2 )) == 0 ]] || fail 'comment fence unbalanced'
+grep -q 'Full report artifact.*https://run#artifacts' "$work/calls" || fail 'no artifact link'
+grep -Eq '^a.rs:[0-9]+:1: replace.*row$' "$work/calls" || fail 'first complete row lost'
 rm "$results/missed.txt"
 comment 99
 grep -q '^api -X DELETE repos/o/r/issues/comments/99$' "$work/calls" || fail 'comment kept after all caught'
