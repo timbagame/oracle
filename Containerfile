@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Distroless: glibc, libgcc, CA roots and tzdata only. No shell or package manager, so an
 # exploit gets no tools, and health checks must use the exec form.
-FROM gcr.io/distroless/cc-debian13@sha256:e1f5543d45a2cd7c02a5b43dda5f0ff30729b4832113759d01ed39b0b152cddb
+FROM gcr.io/distroless/cc-debian13@sha256:809d04afa1be033c441f76bb0051878c342fb76d0ea236bc6dc94b655fa0fbd6
 
 # Relative defaults (oracle.sqlite, admin-keypair.json) resolve here.
 WORKDIR /app
