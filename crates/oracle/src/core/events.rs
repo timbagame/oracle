@@ -783,8 +783,8 @@ impl EventProcessor {
                         let mut entries = processor.registry.lock().unwrap();
                         let Some(current) = entries.get_mut(&address).filter(|e| e.id == id) else { return };
                         current.timer = None;
-                        // New requests merge into the waiting retry, so it is still here and
-                        // nothing else is queued or running.
+                        // New requests merge into the waiting retry, so it is still here. Requests
+                        // that waited behind the failed one can still be queued, so it goes first.
                         let retry = current.retry_pending.take().expect("a waiting retry keeps its request");
                         current.queue.push_front(retry);
                         if current.running {

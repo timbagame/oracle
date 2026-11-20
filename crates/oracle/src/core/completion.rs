@@ -1399,9 +1399,25 @@ mod tests {
 
     #[tokio::test]
     async fn attempts_log_success_and_failure_once() {
+        // Runs again in a child process to read what the attempts log. Only the loud success
+        // message is logged: quiet hooks return an empty message, which is not logged.
+        if std::env::var_os("TIMBA_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "core::completion::tests::attempts_log_success_and_failure_once", "--nocapture"])
+                .env("TIMBA_CHILD", "1")
+                .env("LOG_LEVEL", "info")
+                .env_remove("LOG_SILENT")
+                .output()
+                .unwrap();
+            let (stdout, stderr) = (String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(output.status.success(), "{output:?}");
+            let lines: Vec<_> = stdout.lines().chain(stderr.lines()).collect();
+            assert!(!lines.iter().any(|line| line.starts_with('[') && line.ends_with("] ")), "{stdout}{stderr}");
+            assert_eq!(lines.iter().filter(|line| line.contains("] success:")).count(), 1, "{stdout}");
+            return;
+        }
         let h = harness(None);
         let logged = Arc::new(Mutex::new(Vec::new()));
-        // A quiet hook returns an empty message, which is not logged.
         let with_logs = |address: &str, quiet: bool| {
             let (success, failure) = (logged.clone(), logged.clone());
             AttemptOptions::new(address).logs(
