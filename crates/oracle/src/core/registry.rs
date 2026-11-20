@@ -512,6 +512,9 @@ mod tests {
         ];
         let assignments = replay_registry_events(&events);
         assert_eq!(assignments.into_iter().collect::<Vec<_>>(), vec![(0, "c".to_string())]);
+        // History that starts after the moved player joined still records the move.
+        let partial = [RegistryEvent::Refund { ticket_index: 0, moved_participant: Some("c".into()) }];
+        assert_eq!(replay_registry_events(&partial).into_iter().collect::<Vec<_>>(), vec![(0, "c".to_string())]);
     }
 
     use crate::db::SecretKeyData;

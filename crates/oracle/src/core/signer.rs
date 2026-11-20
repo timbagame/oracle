@@ -32,7 +32,7 @@ const ALLOWED_SETUP_PROGRAMS: [Address; 6] = [
 pub struct CreationPolicyError {
     pub code: RejectionCode,
     pub message: String,
-    pub mint: Option<String>,
+    pub mint: String,
     pub minimum_amount_raw: Option<String>,
     pub accepted_minimum_amount_raw: Option<String>,
     pub revision: Option<i64>,
@@ -43,7 +43,7 @@ impl CreationPolicyError {
         Self {
             code,
             message: message.into(),
-            mint: Some(mint.into()),
+            mint: mint.into(),
             minimum_amount_raw: None,
             accepted_minimum_amount_raw: None,
             revision: None,
@@ -287,9 +287,7 @@ pub async fn sign_game_transaction_with_policy(
     // Reserve retention before signing; cleanup must not remove this secret.
     options.hooks.mark_commitment_signed(&expected_game)?;
     let signature = options.operator.sign(&to_sign.message_bytes);
-    to_sign
-        .set_signature(&operator_address, signature)
-        .map_err(|error| SignError::Other(anyhow::anyhow!("{error}")))?;
+    to_sign.set_signature(&operator_address, signature).expect("the operator is a required signer");
     // Recheck eligibility in case finalization raced with the signature.
     options.hooks.mark_commitment_signed(&expected_game)?;
     Ok(to_sign.to_base64())
@@ -713,6 +711,24 @@ mod tests {
         }
         let tx = s.tx(&instructions, !scenario.placeholder);
         sign_game_transaction_with_policy(&tx, &options(ContractVersion::V0_3_0, &s.operator, hooks)).await
+    }
+
+    #[tokio::test]
+    async fn rejects_a_placeholder_message_that_cannot_be_recompiled() {
+        // A hand-built message may write to a program it invokes; recompiling it with the
+        // operator then fails instead of signing a message the cluster would reject.
+        let s = Scenario::new(ContractVersion::V0_3_0, Options { placeholder: true, ..Default::default() });
+        let stand_in = Address([77; 32]);
+        let mut writes = compute_budget();
+        writes.accounts.push(AccountMeta::writable(stand_in));
+        let mut message = s.message(&[writes, s.initialize.clone()], None);
+        let slot = message.account_keys.iter().position(|key| *key == stand_in).unwrap();
+        message.account_keys[slot] = COMPUTE_BUDGET_PROGRAM_ID;
+        let hooks = Recorder::default();
+        let options = options(ContractVersion::V0_3_0, &s.operator, &hooks);
+        let err = sign_game_transaction_with_policy(&s.finish(message, false), &options).await.unwrap_err();
+        assert_eq!(err.to_string(), "Invoked programs must not be writable");
+        assert!(hooks.marks.lock().unwrap().is_empty(), "nothing is signed");
     }
 
     #[tokio::test]

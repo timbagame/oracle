@@ -189,9 +189,8 @@ impl ProgramClient {
             return;
         }
         state.task = None;
-        if self.listener_count() > 0 {
-            self.schedule_reconnect(&mut state);
-        }
+        // Reconnects only while someone listens.
+        self.schedule_reconnect(&mut state);
     }
 
     fn schedule_reconnect(self: &Arc<Self>, state: &mut SubscriptionState) {

@@ -79,9 +79,7 @@ pub async fn run(config_file: Option<String>, shutdown: Shutdown) -> anyhow::Res
     )
     .await;
     server.await??;
-    if let Ok(service) = Arc::try_unwrap(service) {
-        service.into_store().close();
-    }
+    // The database closes when the last reference to the service drops.
     Ok(())
 }
 

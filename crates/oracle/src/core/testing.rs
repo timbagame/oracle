@@ -50,6 +50,16 @@ pub fn harness() -> Harness {
 }
 
 pub fn harness_with(config: OracleConfig, operator: Keypair, endpoints: &[&str]) -> Harness {
+    let prices = Arc::new(FixedPrices(HashMap::from([(MINT_A.to_string(), 150.0)])));
+    harness_with_prices(config, operator, endpoints, prices)
+}
+
+pub fn harness_with_prices(
+    config: OracleConfig,
+    operator: Keypair,
+    endpoints: &[&str],
+    price_resolver: Arc<dyn TokenPriceResolver>,
+) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(OracleDatabase::open(dir.path().join("o.sqlite").to_str().unwrap()).unwrap());
     let transport = FakeTransport::new();
@@ -65,7 +75,7 @@ pub fn harness_with(config: OracleConfig, operator: Keypair, endpoints: &[&str])
         metrics: Arc::new(OracleMetrics::new(10)),
         rpc,
         operator,
-        price_resolver: Arc::new(FixedPrices(HashMap::from([(MINT_A.to_string(), 150.0)]))),
+        price_resolver,
     });
     Harness { _dir: dir, transport, service }
 }

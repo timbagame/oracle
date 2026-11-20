@@ -2,7 +2,6 @@
 //! game preparation and submission, game lookup and finalized verification.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Result};
@@ -144,8 +143,7 @@ pub struct WebGameApi {
     now: Clock,
     verifier: VerificationLoader,
     token_cache: Mutex<Option<(Value, i64)>>,
-    token_pending: Mutex<Option<(u64, TokenRefresh)>>,
-    token_generation: AtomicU64,
+    token_pending: Mutex<Option<TokenRefresh>>,
 }
 
 impl WebGameApi {
@@ -176,7 +174,6 @@ impl WebGameApi {
             oracle,
             token_cache: Mutex::new(None),
             token_pending: Mutex::new(None),
-            token_generation: AtomicU64::new(0),
         }
     }
 
@@ -306,7 +303,7 @@ impl WebGameApi {
                     token_amount: Some(input.amount),
                     authority: None,
                 })
-                .map_err(|error| anyhow!("{error}"))?;
+                .expect("the create plan already accepted this creator and a positive amount");
             instructions.extend(join.instructions.into_iter().skip(1));
         }
         let latest = rpc.get_latest_blockhash().await?;
@@ -372,24 +369,22 @@ impl WebGameApi {
     /// Starts (or joins) the single in-flight token configuration refresh.
     fn start_token_refresh(self: &Arc<Self>) -> TokenRefresh {
         let mut pending = self.token_pending.lock().unwrap();
-        if let Some((_, running)) = pending.as_ref() {
+        if let Some(running) = pending.as_ref() {
             return running.clone();
         }
-        let id = self.token_generation.fetch_add(1, Ordering::Relaxed);
         let api = self.clone();
         let handle = tokio::spawn(async move {
             let result = api.load_token_config().await.map_err(|error| format!("{error:#}"));
             if let Ok(value) = &result {
                 *api.token_cache.lock().unwrap() = Some((value.clone(), (api.now)() + TOKEN_CACHE_FRESH_MS));
             }
-            let mut pending = api.token_pending.lock().unwrap();
-            if pending.as_ref().is_some_and(|(owner, _)| *owner == id) {
-                *pending = None;
-            }
+            // The refresh was registered before this task could take the lock, and only
+            // this task clears it, so the registered refresh is this one.
+            *api.token_pending.lock().unwrap() = None;
             result
         });
         let refresh: TokenRefresh = async move { handle.await.map_err(|error| error.to_string())? }.boxed().shared();
-        *pending = Some((id, refresh.clone()));
+        *pending = Some(refresh.clone());
         refresh
     }
 
@@ -399,24 +394,19 @@ impl WebGameApi {
             get_game_token_configs(&rpc).await?
         } else {
             let policies = self.oracle.token_policies().await?;
-            validate_token_policies(&policies)?;
-            let mints = policies
-                .iter()
-                .map(|policy| Address::parse(&policy.mint))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| anyhow!("{error}"))?;
+            let mints = validate_token_policies(&policies)?;
             let metadata = get_game_token_metadata(&rpc, &mints).await?;
             format_game_token_policies(&policies, &HashMap::new(), &metadata)?
         };
         let mints: Vec<String> = configs.iter().map(|config| config.mint.clone()).collect();
         let prices = self.prices.get(&mints, self.jupiter_api_key.as_deref()).await;
-        let tokens = configs
+        let tokens: Vec<_> = configs
             .into_iter()
             .map(|mut config| {
                 config.price_usd = prices.get(&config.mint).copied();
-                serde_json::to_value(config)
+                config
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect();
         Ok(json!({ "tokens": tokens }))
     }
 }

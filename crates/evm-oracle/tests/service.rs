@@ -614,6 +614,22 @@ mod tick_settlement {
     }
 
     #[tokio::test]
+    async fn fails_the_cycle_when_an_uncreated_game_has_no_valid_stored_deadline() {
+        let fake = setup();
+        seed(&fake, GAME_A, SECRET_A, None);
+        {
+            let store = fake.service.store();
+            let request = json!({ "deadline": "soon" }).to_string();
+            store.db.execute("UPDATE authorizations SET request=?", [request]).unwrap();
+        }
+        fake.chain.state().games.insert(GAME_A, timba_protocol::evm::abi::Game { status: 0, ..fake_game() });
+
+        let error = error_of(fake.service.tick()).await;
+        assert!(error.contains("Cannot convert stored deadline to a BigInt"), "{error}");
+        assert!(simulations(&fake).is_empty());
+    }
+
+    #[tokio::test]
     async fn waits_for_games_that_cannot_be_settled_yet() {
         let fake = setup();
         let now = fake.chain.state().now;

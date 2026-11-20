@@ -70,4 +70,12 @@ mod tests {
         let err = sign_legacy_transaction(&payer, &[&stranger], &Address([9; 32]), &[instruction(&[])]).unwrap_err();
         assert!(err.to_string().starts_with("Failed to sign transaction:"), "{err}");
     }
+
+    #[test]
+    fn reports_messages_that_cannot_compile() {
+        let payer = Keypair::generate();
+        let pays_fees = Instruction { program_id: payer.address(), accounts: vec![], data: vec![] };
+        let err = sign_legacy_transaction(&payer, &[], &Address([9; 32]), &[pays_fees]).unwrap_err();
+        assert_eq!(err.to_string(), "Failed to compile transaction: Invoked programs cannot pay fees");
+    }
 }

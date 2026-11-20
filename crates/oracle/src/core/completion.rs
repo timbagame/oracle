@@ -330,8 +330,7 @@ impl CompletionManager {
         if secret.len() < SECRET_KEY_LENGTH {
             anyhow::bail!("Secret key buffer must be at least {SECRET_KEY_LENGTH} bytes");
         }
-        let selection = calculate_winner(&secret[..SECRET_KEY_LENGTH], last_slot, players)
-            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        let selection = calculate_winner(&secret[..SECRET_KEY_LENGTH], last_slot, players)?;
         Ok(selection.winner_index as u32)
     }
 
@@ -803,6 +802,10 @@ mod tests {
         );
         // Single-player games skip the draw entirely.
         assert_eq!(h.manager.calculate_winner_index(&[], 1, 1).unwrap(), 0);
+        assert_eq!(
+            h.manager.calculate_winner_index(&[0; 32], 1, 1 << 32).unwrap_err().to_string(),
+            "Ticket count must be a positive u32"
+        );
     }
 
     #[test]
@@ -1398,12 +1401,17 @@ mod tests {
     async fn attempts_log_success_and_failure_once() {
         let h = harness(None);
         let logged = Arc::new(Mutex::new(Vec::new()));
-        let with_logs = |address: &str| {
+        // A quiet hook returns an empty message, which is not logged.
+        let with_logs = |address: &str, quiet: bool| {
             let (success, failure) = (logged.clone(), logged.clone());
             AttemptOptions::new(address).logs(
                 move |address| {
                     success.lock().unwrap().push(format!("success:{address}"));
-                    format!("success:{address}")
+                    if quiet {
+                        String::new()
+                    } else {
+                        format!("success:{address}")
+                    }
                 },
                 move |address, error| {
                     failure.lock().unwrap().push(format!("failure:{address}:{}", error.unwrap_or("")));
@@ -1416,22 +1424,31 @@ mod tests {
         h.db.replace_game_players(&success_game, &players(1)).unwrap();
         serve_game(&h, Some(game_account(1, 1, 1, 0, 60)));
         serve_submission(&h);
-        let success = h.manager.attempt_game_completion(with_logs(&success_game)).await.unwrap().unwrap();
+        let success = h.manager.attempt_game_completion(with_logs(&success_game, false)).await.unwrap().unwrap();
         assert!(success.success);
+        let (quiet_game, _, _) = store_game(&h, [0x32; 32]);
+        h.db.replace_game_players(&quiet_game, &players(1)).unwrap();
+        let quiet = h.manager.attempt_game_completion(with_logs(&quiet_game, true)).await.unwrap().unwrap();
+        assert!(quiet.success);
 
         let (failure_game, _, _) = store_game(&h, [0x31; 32]);
         h.db.replace_game_players(&failure_game, &["bad".to_string()]).unwrap();
-        let failure = h.manager.attempt_game_completion(with_logs(&failure_game)).await.unwrap().unwrap();
+        let failure = h.manager.attempt_game_completion(with_logs(&failure_game, false)).await.unwrap().unwrap();
         assert_eq!(failure, CompletionResult::failure("Winner address is invalid"));
 
         assert_eq!(
             *logged.lock().unwrap(),
-            vec![format!("success:{success_game}"), format!("failure:{failure_game}:Winner address is invalid")]
+            vec![
+                format!("success:{success_game}"),
+                format!("success:{quiet_game}"),
+                format!("failure:{failure_game}:Winner address is invalid")
+            ]
         );
         let outcomes: Vec<_> = h.metrics.completion_records().into_iter().map(|r| (r.outcome, r.error)).collect();
         assert_eq!(
             outcomes,
             vec![
+                (CompletionOutcome::Success, None),
                 (CompletionOutcome::Success, None),
                 (CompletionOutcome::Error, Some("Winner address is invalid".to_string()))
             ]

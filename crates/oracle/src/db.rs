@@ -1430,6 +1430,9 @@ mod tests {
         db.track_game("g", None, false).unwrap();
         // committed_at was backfilled, so the old commitment can no longer be signed.
         assert!(db.mark_secret_key_signed("g").is_err());
+        // The added column stays nullable, so a NULL written later is reported, not read as 0.
+        sabotage(path.to_str().unwrap(), "UPDATE token_policies SET decimals = NULL");
+        assert_eq!(db.get_token_policies().unwrap_err().to_string(), "token decimals must be an integer from 0 to 15");
         db.close();
         assert!(!db.is_open());
     }
@@ -1671,6 +1674,35 @@ mod tests {
         assert!(db.reset_completion_attempts("g", false).unwrap().is_err());
         // Tracking proceeds past a failed status lookup and then reports the write failure.
         assert!(db.track_game("g", Some("coinflip"), true).is_err());
+    }
+
+    #[test]
+    fn returns_defaults_when_rows_have_the_wrong_type() {
+        let (_dir, path, db) = file_db();
+        db.save_secret_key("g", "s", "h").unwrap();
+        db.track_game("g", Some("coinflip"), false).unwrap();
+        db.track_game("q", None, false).unwrap();
+        db.add_player_to_game("g", "p", 0).unwrap();
+        // SQLite keeps a blob in a TEXT or INTEGER column, so the query runs and the row read fails.
+        sabotage(
+            &path,
+            "UPDATE secret_keys SET secret_key = x'ff';
+             UPDATE game_tracking SET status = x'ff', game_type = x'ff' WHERE game_address = 'g';
+             UPDATE game_tracking SET completion_attempts = x'ff' WHERE game_address = 'q';
+             UPDATE game_players SET player_address = x'ff';",
+        );
+        assert!(db.get_secret_key_info("g").is_none());
+        assert_eq!(db.get_game_type("g"), None);
+        assert_eq!(db.get_game_status("g"), None);
+        assert_eq!(db.get_game_players("g"), Vec::<String>::new());
+        assert!(db.get_pending_games(None).is_empty());
+        assert_eq!(db.get_completion_attempt_state("g"), None);
+        assert_eq!(db.is_auto_complete_disabled("g"), None);
+        assert!(db.set_auto_complete_disabled("g", true).unwrap().is_err());
+        assert!(db.reset_completion_attempts("g", false).unwrap().is_err());
+        // Tracking proceeds past an unreadable status and rewrites the row.
+        db.track_game("g", Some("coinflip"), true).unwrap();
+        assert_eq!(db.get_game_status("g").as_deref(), Some(DEFAULT_STATUS));
     }
 
     #[test]

@@ -15,6 +15,7 @@ use timba_protocol::Address;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+use super::cancel_timer;
 use super::registry::{analyze_registry_state, RegistryStats};
 use crate::config::normalize_game_type;
 use crate::db::{OracleDatabase, PlayerMutation};
@@ -111,16 +112,6 @@ struct ListenState {
 
 type Job = BoxFuture<'static, ()>;
 pub type ProgramEventObserver = Arc<dyn Fn() + Send + Sync>;
-
-/// Aborts a timer unless it is the task currently running (a fired timer
-/// clearing itself must not cancel its own continuation).
-fn cancel_timer(timer: Option<JoinHandle<()>>) {
-    if let Some(timer) = timer {
-        if tokio::task::try_id() != Some(timer.id()) {
-            timer.abort();
-        }
-    }
-}
 
 fn merge_requests(current: RegistrySyncRequest, incoming: RegistrySyncRequest) -> RegistrySyncRequest {
     RegistrySyncRequest {
@@ -393,11 +384,11 @@ impl EventProcessor {
                 moved_participant: event.moved_participant.clone(),
             },
         };
-        let expected = Some(i64::from(event.tickets_count));
+        let expected = i64::from(event.tickets_count);
         let processor = self.clone();
         let game = game_address.clone();
         self.run_event_mutation(event_type, &game_address, async move {
-            processor.enqueue_player_mutation(&game, mutation, expected, Some(game_key), action).await;
+            processor.enqueue_player_mutation(&game, mutation, expected, game_key, action).await;
             Ok(())
         })
         .await;
@@ -470,19 +461,17 @@ impl EventProcessor {
         self: &Arc<Self>,
         game: &str,
         mutation: PlayerMutation,
-        expected_tickets: Option<i64>,
-        game_key: Option<Address>,
+        expected_tickets: i64,
+        game_key: Address,
         trigger: &str,
     ) {
         let flush_now = {
             let mut buffers = self.buffers.lock().unwrap();
             let entry = buffers.entry(game.to_string()).or_default();
             entry.operations.push(mutation);
-            entry.last_game_key = game_key.or(entry.last_game_key);
+            entry.last_game_key = Some(game_key);
             entry.last_trigger = Some(trigger.to_string());
-            if expected_tickets.is_some() {
-                entry.expected_tickets = expected_tickets;
-            }
+            entry.expected_tickets = Some(expected_tickets);
             let flush_now =
                 self.player_flush_debounce_ms == 0 || entry.operations.len() >= self.player_flush_max_operations;
             if !flush_now && entry.timer.is_none() {
@@ -576,9 +565,8 @@ impl EventProcessor {
                 if !entry.operations.is_empty() {
                     Some(entry.last_game_key)
                 } else {
-                    if entry.timer.is_none() {
-                        buffers.remove(game);
-                    }
+                    // A debounce timer only runs while operations wait, so none runs now.
+                    buffers.remove(game);
                     None
                 }
             };
@@ -734,11 +722,8 @@ impl EventProcessor {
                     match entry.queue.pop_front() {
                         Some(next) => next,
                         None => {
-                            entry.running = false;
-                            // A waiting retry always has its timer, so the request alone tells.
-                            if entry.retry_pending.is_none() {
-                                entries.remove(&game);
-                            }
+                            // A retry only waits while no worker runs, so none waits now.
+                            entries.remove(&game);
                             return;
                         }
                     }
@@ -779,9 +764,9 @@ impl EventProcessor {
                         "Giving up registry sync for {game} after {} failures; completion will reconcile it",
                         entry.failures
                     );
-                    if let Some(entry) = entries.remove(&game) {
-                        cancel_timer(entry.timer);
-                    }
+                    let timer = entry.timer.take();
+                    entries.remove(&game);
+                    cancel_timer(timer);
                     return;
                 }
                 entry.running = false;
@@ -798,9 +783,10 @@ impl EventProcessor {
                         let mut entries = processor.registry.lock().unwrap();
                         let Some(current) = entries.get_mut(&address).filter(|e| e.id == id) else { return };
                         current.timer = None;
-                        if let Some(pending) = current.retry_pending.take() {
-                            current.queue.push_front(pending);
-                        }
+                        // New requests merge into the waiting retry, so it is still here and
+                        // nothing else is queued or running.
+                        let retry = current.retry_pending.take().expect("a waiting retry keeps its request");
+                        current.queue.push_front(retry);
                         if current.running {
                             return;
                         }
@@ -1025,6 +1011,17 @@ mod tests {
         })
         .await
         .expect("the status change runs after the earlier job");
+    }
+
+    #[tokio::test]
+    async fn status_changes_apply_after_the_hooks_are_gone() {
+        let Harness { _dir, db, hooks, processor } = harness(0);
+        db.save_secret_key(&game(), "secret", "hash").unwrap();
+        db.track_game(&game(), None, true).unwrap();
+        // The hooks belong to the service; when it shuts down first, nobody hears about the finalization.
+        drop(hooks);
+        processor.handle_game_status_change(GameStatus::Completed, &game()).await;
+        assert_eq!(db.get_game_status(&game()).as_deref(), Some("completed"));
     }
 
     #[tokio::test]

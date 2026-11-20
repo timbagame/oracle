@@ -214,12 +214,12 @@ async fn audit(oracle: &Arc<OracleService>, options: CliOptions, input: Input<'_
     let completion = oracle.completion_manager().clone();
     let interactive = options.game_address.is_none();
     let mut game_address = options.game_address.clone().unwrap_or_default().trim().to_string();
-    loop {
+    let secret = loop {
         if game_address.is_empty() {
             game_address = prompt_select_game(&db, &mut *input, &mut *out)?;
         }
-        if db.get_secret_key_info(&game_address).is_some() {
-            break;
+        if let Some(secret) = db.get_secret_key_info(&game_address) {
+            break secret;
         }
         let tracked = match db.get_game_status(&game_address) {
             Some(status) => format!("tracked(status={status})"),
@@ -236,11 +236,7 @@ async fn audit(oracle: &Arc<OracleService>, options: CliOptions, input: Input<'_
         }
         eprintln!("{hint}");
         game_address.clear();
-    }
-
-    let secret = db
-        .get_secret_key_info(&game_address)
-        .ok_or_else(|| anyhow::anyhow!("No secret key found in local DB for {game_address}"))?;
+    };
     let secret_key = hex::decode(&secret.secret_key)?;
     let game_pda = Address::parse(&game_address).map_err(|e| anyhow::anyhow!("{e}"))?;
     let state = Arc::new(Mutex::new(AuditState {
@@ -812,6 +808,9 @@ mod tests {
         assert_eq!(options.game_address.as_deref(), Some("GAME"));
         assert!(options.once && options.listen);
         assert_eq!((options.lookahead_slots, options.interval_ms), (10, 500));
+        let options = parse_args(&args(&["--no-listen", "--write-db", "--with-block-time", "--db-refresh"])).unwrap();
+        assert!(!options.listen && options.write_db && options.with_block_time && options.refresh_from_db_each_tick);
+        assert!(!parse_args(&args(&["--db-refresh", "--no-db-refresh"])).unwrap().refresh_from_db_each_tick);
         assert_eq!(
             parse_args(&args(&["--interval", "5"])).unwrap_err().to_string(),
             "--interval must be a number >= 100 (ms)"

@@ -678,6 +678,42 @@ async fn preparation_fails_closed_when_the_oracle_does_not_report_its_operator()
 }
 
 #[tokio::test]
+async fn preparation_fails_closed_when_the_oracle_commitment_is_not_32_bytes() {
+    let (rpc, transport) = rpc_for(&token_chain());
+    let short = |_: Option<&str>| Ok(GameSecrets { random_hash: "07".repeat(31), ..secrets(Some(OPERATOR)) });
+    let harness = Harness::new(FakeOracle { secrets: Arc::new(short), ..oracle(rpc) }, ContractVersion::V0_2_0);
+
+    let reply = harness.send(prepare(prepare_body(USDC_MINT, "giveaway", "1000000", 1), Some("0.2.0"))).await;
+
+    assert_eq!(reply.status, StatusCode::SERVICE_UNAVAILABLE, "{}", reply.text);
+    assert_eq!(method_calls(&transport, "getLatestBlockhash"), 0, "refused before building the transaction");
+}
+
+#[tokio::test]
+async fn preparation_fails_closed_when_the_creator_is_a_program_the_transaction_invokes() {
+    let accounts = empty_chain();
+    let sol = Address::parse(SOL_MINT).unwrap();
+    accounts.lock().unwrap().insert(
+        find_game_token_pda(&sol, &PROGRAM_ID).to_base58(),
+        encoded_account(&game_token_data(&sol, 1, true), &PROGRAM_ID),
+    );
+    let (rpc, transport) = rpc_for(&accounts);
+    with_blockhash(&transport);
+    let harness = Harness::new(
+        FakeOracle { secrets: Arc::new(|_| Ok(secrets(Some(OPERATOR)))), ..oracle(rpc) },
+        ContractVersion::V0_2_0,
+    );
+    // The system program funds wrapped SOL, so it cannot also pay the fees.
+    let mut body: Value = serde_json::from_str(&prepare_body(SOL_MINT, "coinflip", "1000000", 2)).unwrap();
+    body["creator"] = json!("11111111111111111111111111111111");
+
+    let reply = harness.send(prepare(body.to_string(), Some("0.2.0"))).await;
+
+    assert_eq!(reply.status, StatusCode::SERVICE_UNAVAILABLE, "{}", reply.text);
+    assert_eq!(method_calls(&transport, "getLatestBlockhash"), 1, "refused while compiling the transaction");
+}
+
+#[tokio::test]
 async fn preparation_applies_the_v0_2_token_account_minimum() {
     let accounts = token_chain();
     let usdc = Address::parse(USDC_MINT).unwrap();

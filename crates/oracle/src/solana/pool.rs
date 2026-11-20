@@ -535,6 +535,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_missing_block_on_the_only_endpoint_is_returned() {
+        let transport = FakeTransport::new();
+        transport.push("getBlockTime", Err(RpcError::json_rpc(BLOCK_NOT_AVAILABLE, "Block not available")));
+        let pool = RpcPool::with_transport(&["https://a".into()], transport).unwrap();
+        assert_eq!(pool.get_block_time(9).await.unwrap_err().code, Some(BLOCK_NOT_AVAILABLE));
+    }
+
+    #[tokio::test]
+    async fn rejects_malformed_responses() {
+        let transport = FakeTransport::new();
+        transport.push("getMultipleAccounts", Ok(json!({ "context": {} })));
+        transport.push("getLatestBlockhash", Ok(json!({ "value": { "blockhash": "not base58!" } })));
+        transport.push("getSignatureStatuses", Ok(json!({ "value": "nope" })));
+        let pool = RpcPool::with_transport(&["https://a".into()], transport).unwrap();
+        let error = pool.get_multiple_accounts(&[Address([1; 32])]).await.unwrap_err();
+        assert_eq!(error.to_string(), "getMultipleAccounts returned no value");
+        assert_eq!(pool.get_latest_blockhash().await.unwrap_err().to_string(), "Invalid blockhash");
+        let error = pool.get_signature_statuses(&["sig".into()]).await.unwrap_err();
+        assert!(error.to_string().starts_with("Invalid signature statuses: "), "{error}");
+    }
+
+    #[tokio::test]
+    async fn signature_queries_send_only_the_given_options() {
+        let transport = FakeTransport::new();
+        transport.push("getSignaturesForAddress", Ok(json!([])));
+        let pool = RpcPool::with_transport(&["https://a".into()], transport.clone()).unwrap();
+        let address = Address([2; 32]);
+        let options = SignaturesForAddressOptions { until: Some("u".into()), ..Default::default() };
+        assert!(pool.get_signatures_for_address(&address, &options).await.unwrap().is_empty());
+        let params = &transport.calls_for("getSignaturesForAddress")[0].1;
+        assert_eq!(*params, json!([address.to_base58(), { "commitment": "confirmed", "until": "u" }]));
+    }
+
+    #[tokio::test]
     async fn rate_limits_wait_before_next_endpoint() {
         let transport = FakeTransport::new();
         transport.push("getSlot", Err(RpcError::http(429, "Too Many Requests", Some(2_000))));
