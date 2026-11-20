@@ -177,10 +177,6 @@ impl EvmStore {
         let rows = statement.query_map(params![player, offset], |row| row.get::<_, Option<String>>(0))?;
         Ok(rows.map(|id| id.map(Option::unwrap_or_default)).collect::<rusqlite::Result<_>>()?)
     }
-
-    pub fn close(self) {
-        drop(self.db);
-    }
 }
 
 #[cfg(test)]
@@ -209,6 +205,13 @@ mod tests {
         };
         assert!(store.save(&game).unwrap_err().to_string().contains("no such table: authorizations"));
         assert!(store.events(None).unwrap_err().to_string().contains("no such table: events"));
+        // A row of the wrong type is an error, not a missing row.
+        store
+            .db
+            .execute_batch("INSERT INTO pending VALUES (1, 'g', x'ff', 'h'); INSERT INTO cursor VALUES (1, 5, x'ff');")
+            .unwrap();
+        assert!(store.pending().unwrap_err().to_string().contains("Invalid column type Blob at index: 1"));
+        assert!(store.cursor().unwrap_err().to_string().contains("Invalid column type Blob at index: 1"));
     }
 
     #[test]
@@ -228,7 +231,7 @@ mod tests {
         store.save(&game(format!("0x{}", "33".repeat(32)), "changed", "renewed", "0x34")).unwrap();
         let pending = PendingTransaction { game: id(), raw: "0xab".into(), hash: id() };
         store.submit(&pending).unwrap();
-        store.close();
+        drop(store);
 
         let error = EvmStore::open(path, "1:proxy").err().unwrap();
         assert!(error.to_string().contains("different deployment"));

@@ -201,25 +201,27 @@ fn iso_datetime_re() -> &'static Regex {
     })
 }
 
-/// `TokenPoliciesResponseSchema.shape.policies.parse`.
-pub fn validate_token_policies(policies: &[TokenPolicy]) -> Result<()> {
+/// `TokenPoliciesResponseSchema.shape.policies.parse`. Returns the mints in policy order.
+pub fn validate_token_policies(policies: &[TokenPolicy]) -> Result<Vec<Address>> {
+    let mut mints = Vec::with_capacity(policies.len());
     for (index, policy) in policies.iter().enumerate() {
-        let valid = is_solana_address(&policy.mint)
-            && is_u64_string(&policy.minimum_amount_raw)
+        let mint = Address::parse(&policy.mint).ok().filter(|_| is_solana_address(&policy.mint));
+        let valid = is_u64_string(&policy.minimum_amount_raw)
             && is_u64_string(&policy.accepted_minimum_amount_raw)
             && policy.revision >= 0
             && policy.revision as f64 <= MAX_SAFE_INTEGER
             && iso_datetime_re().is_match(&policy.effective_at);
-        if !valid {
+        let (Some(mint), true) = (mint, valid) else {
             bail!("Invalid token policy at index {index}");
-        }
+        };
         let minimum: u64 = policy.minimum_amount_raw.parse()?;
         let accepted: u64 = policy.accepted_minimum_amount_raw.parse()?;
         if accepted > minimum {
             bail!("Invalid token policy at index {index}: accepted minimum must not exceed the recommended minimum");
         }
+        mints.push(mint);
     }
-    Ok(())
+    Ok(mints)
 }
 
 #[cfg(test)]
@@ -338,7 +340,7 @@ mod tests {
 
     #[test]
     fn validates_token_policies_like_the_protocol_schema() {
-        assert!(validate_token_policies(&[policy()]).is_ok());
+        assert_eq!(validate_token_policies(&[policy()]).unwrap(), [Address::parse(&policy().mint).unwrap()]);
         for broken in [
             TokenPolicy { accepted_minimum_amount_raw: "25034000002".into(), ..policy() },
             TokenPolicy { mint: "nope".into(), ..policy() },

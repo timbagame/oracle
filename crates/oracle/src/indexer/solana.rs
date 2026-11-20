@@ -262,6 +262,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fails_on_a_malformed_program_event() {
+        let program = address(1);
+        let mut truncated = closed_event(&address(2), 9);
+        truncated.pop();
+        let transport = FakeTransport::new();
+        transport.push("getSignaturesForAddress", Ok(json!([{ "signature": "bad", "slot": 5, "err": null }])));
+        transport.push(
+            "getTransaction",
+            Ok(json!({ "slot": 5, "meta": { "err": null, "logMessages": program_logs(&program, &[truncated]) } })),
+        );
+        let cursor = IndexerCursor { signature: "1".repeat(64), slot: 1 };
+        let error = get_events_since(&pool(transport), &program, &cursor).await.unwrap_err();
+        assert_eq!(error.to_string(), "Invalid Timba event in bad: Invalid Timba event length");
+    }
+
+    #[tokio::test]
     async fn treats_a_transaction_without_log_messages_as_empty() {
         let transport = FakeTransport::new();
         transport.push("getSignaturesForAddress", Ok(json!([{ "signature": "quiet", "slot": 5, "err": null }])));

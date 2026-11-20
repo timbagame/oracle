@@ -348,6 +348,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn decodes_accounts_and_rejects_malformed_ones() {
+        let owner = Address([4; 32]).to_base58();
+        let account = AccountInfo::from_value(&json!({ "data": ["AQI=", "base64"], "owner": owner })).unwrap().unwrap();
+        assert_eq!((account.data, account.lamports, account.executable), (vec![1, 2], 0, false));
+        assert_eq!(AccountInfo::from_value(&Value::Null).unwrap(), None);
+        for (value, message) in [
+            (json!({ "data": "AQI=", "owner": owner }), "Account data is not base64 encoded"),
+            (json!({ "data": ["not base64!", "base64"], "owner": owner }), "Account data is not valid base64"),
+            (json!({ "data": ["AQI=", "base64"], "owner": "not base58!" }), "Account owner is invalid"),
+        ] {
+            assert_eq!(AccountInfo::from_value(&value).unwrap_err().to_string(), message);
+        }
+    }
+
+    #[test]
     fn retryable_classification() {
         assert!(RpcError::http(429, "Too Many Requests", None).is_rate_limit());
         assert!(RpcError::http(503, "Service Unavailable", None).is_retryable());

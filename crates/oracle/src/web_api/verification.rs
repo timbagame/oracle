@@ -303,8 +303,7 @@ async fn verify(rpc: &RpcPool, program_id: &Address, value: &str) -> Result<Valu
     if participants.len() != completed.tickets_count as usize || participants.is_empty() {
         bail!("Ticket count mismatch");
     }
-    let result = calculate_winner(&secret, last_slot, u64::from(completed.tickets_count))
-        .map_err(|error| anyhow!("{}", error.0))?;
+    let result = calculate_winner(&secret, last_slot, u64::from(completed.tickets_count))?;
     if result.winner_index != submitted_winner
         || participants.get(result.winner_index as usize) != Some(&completed.winner)
     {
@@ -424,6 +423,23 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.to_string(), "Incomplete ticket history");
+        // Refunding the last ticket moves nobody.
+        let events = [
+            ProgramEvent::PlayerJoined(membership()),
+            ProgramEvent::PlayerJoined(PlayerMembership {
+                player: address(OTHER),
+                ticket_index: 1,
+                tickets_count: 2,
+                ..membership()
+            }),
+            ProgramEvent::PlayerRefunded(PlayerMembership {
+                player: address(OTHER),
+                ticket_index: 1,
+                last_slot: 12,
+                ..membership()
+            }),
+        ];
+        assert_eq!(replay_participants(&events, &address(GAME_KEY)).unwrap(), (vec![address(PLAYER)], 12));
         let other_game = PlayerMembership { game_key: address(PLAYER), ticket_index: 5, ..membership() };
         assert_eq!(
             replay_participants(&[ProgramEvent::PlayerJoined(other_game)], &address(GAME_KEY)).unwrap(),
@@ -812,6 +828,50 @@ mod tests {
         assert_eq!(result["ticketAmount"], 0.0000001);
         assert_eq!(fixture.transport.calls_for("getSignaturesForAddress").len(), 2);
         assert_eq!(result["transactionSignatures"][0], fixture.init_sig);
+    }
+
+    #[tokio::test]
+    async fn skips_program_data_that_is_not_a_known_event() {
+        let fixture = history_fixture();
+        {
+            let mut store = fixture.transactions.lock().unwrap();
+            let logs = store.get_mut(&fixture.complete_sig).unwrap()["meta"]["logMessages"].as_array_mut().unwrap();
+            let unknown = base64::engine::general_purpose::STANDARD.encode([0u8; 16]);
+            logs.insert(1, json!(format!("Program data: {unknown}")));
+        }
+        let result = verify_game_transaction(&fixture.rpc, &PROGRAM_ID, &fixture.complete_sig).await.unwrap();
+        assert_eq!(result["winner"], PLAYER);
+    }
+
+    #[tokio::test]
+    async fn refuses_a_game_whose_token_mint_is_missing() {
+        let fixture = history_fixture();
+        fixture.transport.push("getMultipleAccounts", Ok(json!({ "context": { "slot": 3 }, "value": [null] })));
+        let error = verify_game_transaction(&fixture.rpc, &PROGRAM_ID, &fixture.complete_sig).await.unwrap_err();
+        assert_eq!(error.to_string(), "Token metadata unavailable");
+    }
+
+    /// A node that never answers.
+    struct Stalled;
+
+    impl crate::solana::rpc::RpcTransport for Stalled {
+        fn send<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: Value,
+        ) -> futures::future::BoxFuture<'a, Result<Value, crate::solana::rpc::RpcError>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn gives_up_after_the_time_budget() {
+        let rpc = RpcPool::with_transport(&["https://rpc.test".into()], Arc::new(Stalled)).unwrap();
+        let started = tokio::time::Instant::now();
+        let error = verify_game_transaction(&rpc, &PROGRAM_ID, &sig(3)).await.unwrap_err();
+        assert_eq!(error.to_string(), "The operation was aborted due to timeout");
+        assert_eq!(started.elapsed(), TIMEOUT);
     }
 
     #[tokio::test]

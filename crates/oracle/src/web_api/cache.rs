@@ -2,7 +2,6 @@
 //! (port of `web-api/cache.ts`). Failures are never cached.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Result};
@@ -35,8 +34,7 @@ pub struct VerificationLoader {
     load: LoadRecord,
     namespace: String,
     concurrency: usize,
-    pending: Arc<Mutex<HashMap<String, (u64, PendingLoad)>>>,
-    next_id: AtomicU64,
+    pending: Arc<Mutex<HashMap<String, PendingLoad>>>,
 }
 
 impl VerificationLoader {
@@ -48,7 +46,6 @@ impl VerificationLoader {
             namespace: options.namespace,
             concurrency: options.concurrency.unwrap_or(DEFAULT_CONCURRENCY),
             pending: Arc::default(),
-            next_id: AtomicU64::new(0),
         }
     }
 
@@ -65,13 +62,12 @@ impl VerificationLoader {
         }
         let task = {
             let mut pending = self.pending.lock().unwrap();
-            if let Some((_, running)) = pending.get(&key) {
+            if let Some(running) = pending.get(&key) {
                 running.clone()
             } else {
                 if pending.len() >= self.concurrency {
                     return Err(anyhow!("Verification capacity reached"));
                 }
-                let id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let load = (self.load)(signature.to_string());
                 let write = self.write.clone();
                 let registry = self.pending.clone();
@@ -85,15 +81,14 @@ impl VerificationLoader {
                     }
                     .await
                     .map_err(|error| format!("{error:#}"));
-                    let mut pending = registry.lock().unwrap();
-                    if pending.get(&record_key).is_some_and(|(owner, _)| *owner == id) {
-                        pending.remove(&record_key);
-                    }
+                    // The load was registered before this task could take the lock, and only
+                    // this task removes it, so the registered load is this one.
+                    registry.lock().unwrap().remove(&record_key);
                     result
                 });
                 let task: PendingLoad =
                     async move { handle.await.map_err(|error| error.to_string())? }.boxed().shared();
-                pending.insert(key, (id, task.clone()));
+                pending.insert(key, task.clone());
                 task
             }
         };
@@ -106,7 +101,7 @@ mod tests {
     use super::*;
     use crate::indexer::IndexerDatabase;
     use serde_json::json;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::oneshot;
 
     fn database_options(db: Arc<IndexerDatabase>, load: LoadRecord, namespace: &str) -> VerificationLoaderOptions {

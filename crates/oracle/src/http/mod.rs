@@ -365,11 +365,9 @@ async fn handle_sign_game_transaction(api: &dyn OracleApi, request: Request) -> 
                         "success": false,
                         "error": rejection.message,
                         "code": rejection.code.as_str(),
+                        "mint": rejection.mint,
                     });
                     let map = fields.as_object_mut().unwrap();
-                    if let Some(mint) = rejection.mint {
-                        map.insert("mint".into(), mint.into());
-                    }
                     if let Some(minimum) = rejection.minimum_amount_raw {
                         map.insert("minimumAmountRaw".into(), minimum.into());
                     }

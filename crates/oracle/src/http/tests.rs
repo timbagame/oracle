@@ -181,6 +181,18 @@ async fn sign_maps_errors() {
     let keys: Vec<_> = body.as_object().unwrap().keys().cloned().collect();
     assert_eq!(keys, ["timestamp", "service", "success", "error", "code", "mint", "revision"]);
     assert_eq!(body["code"], "token_disabled");
+
+    // A mint without a stored policy has no revision to report.
+    *oracle.sign_error.lock().unwrap() = Some(GameTransactionError::CreationPolicy(CreationPolicyError::new(
+        RejectionCode::UnsupportedMint,
+        "Token mint is not supported",
+        GAME,
+    )));
+    let (status, body, _) = call(&app, "POST", "/sign-game-transaction", Some(r#"{"txBase64":"AAAA"}"#), true).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let keys: Vec<_> = body.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(keys, ["timestamp", "service", "success", "error", "code", "mint"]);
+    assert_eq!((body["code"].clone(), body["mint"].clone()), (json!("unsupported_mint"), json!(GAME)));
 }
 
 #[tokio::test]

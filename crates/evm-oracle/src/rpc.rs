@@ -628,6 +628,32 @@ mod tests {
         assert_eq!(error.to_string(), "The contract function \"creationNonces(address)\" returned no data (\"0x\")");
     }
 
+    #[tokio::test]
+    async fn rejects_malformed_logs() {
+        let log = json!({
+            "address": format!("0x{}", "aa".repeat(20)),
+            "topics": [format!("0x{}", "11".repeat(32))],
+            "blockHash": "0xb1",
+            "blockNumber": "0x7",
+            "data": "0x0102",
+            "logIndex": "0x0",
+            "transactionHash": "0xt1",
+        });
+        let logs = answering(json!([log])).get_logs(Address::ZERO, 0, 7).await.unwrap();
+        assert_eq!((logs[0].block_number, logs[0].data.to_vec(), logs[0].removed), (7, vec![1, 2], false));
+        let reason = |field: &str, value: Value| {
+            let mut broken = log.clone();
+            broken[field] = value;
+            parse_log(&broken).unwrap_err().to_string()
+        };
+        assert_eq!(reason("address", json!("0x12")), "Invalid RPC response: log address is invalid");
+        assert_eq!(reason("topics", Value::Null), "Invalid RPC response: log topics are missing");
+        assert_eq!(reason("topics", json!(["0x12"])), "Invalid RPC response: log topic is invalid");
+        assert_eq!(reason("data", json!("0xzz")), "Invalid RPC response: log data is not hex");
+        let error = answering(json!({})).get_logs(Address::ZERO, 0, 7).await.unwrap_err();
+        assert_eq!(error.to_string(), "Invalid RPC response: logs are not an array");
+    }
+
     #[test]
     fn formats_quantities_without_padding() {
         assert_eq!(quantity(0u64), "0x0");

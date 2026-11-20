@@ -165,11 +165,6 @@ impl EvmService {
         self.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Closes the database; the service must not be used afterwards.
-    pub fn into_store(self) -> EvmStore {
-        self.store.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
     async fn oracle_limits(&self) -> anyhow::Result<configReturn> {
         self.public_client.read_contract(self.config.address, &configCall {}).await
     }

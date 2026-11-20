@@ -136,13 +136,9 @@ enum Admission {
     Denied,
 }
 
-/// Aborts a timer unless it is the task currently running.
+/// Aborts a retry timer unless it is the task currently running.
 fn cancel_timer(timer: Option<(u64, JoinHandle<()>)>) {
-    if let Some((_, handle)) = timer {
-        if tokio::task::try_id() != Some(handle.id()) {
-            handle.abort();
-        }
-    }
+    super::cancel_timer(timer.map(|(_, handle)| handle));
 }
 
 fn is_fallback_scan_trigger(trigger: &str) -> bool {
@@ -216,6 +212,14 @@ impl Drop for RunGuard {
 struct ScanAdapter {
     service: Weak<OracleService>,
     completion: Arc<CompletionManager>,
+}
+
+/// The scanner's cleanup hook; a scan that outlives the service does nothing.
+fn cleanup_old_records_of(service: &Weak<OracleService>, hours: i64) -> anyhow::Result<()> {
+    if let Some(service) = service.upgrade() {
+        service.cleanup_old_records(hours);
+    }
+    Ok(())
 }
 
 impl ScanCompletion for ScanAdapter {
@@ -326,12 +330,7 @@ impl OracleService {
                 completion: Arc::new(ScanAdapter { service: weak.clone(), completion: completion.clone() }),
                 inter_game_delay_ms: config.scan_throttle_ms,
                 max_completion_attempts: MAX_COMPLETION_ATTEMPTS,
-                cleanup_old_records: Arc::new(move |hours| {
-                    if let Some(service) = cleanup_target.upgrade() {
-                        service.cleanup_old_records(hours);
-                    }
-                    Ok(())
-                }),
+                cleanup_old_records: Arc::new(move |hours| cleanup_old_records_of(&cleanup_target, hours)),
             }));
             OracleService {
                 config,
@@ -892,9 +891,9 @@ impl OracleService {
                     if let Some(next) = existing.next_eligible_at.filter(|next| now < *next) {
                         return Admission::Cooldown(Some(next));
                     }
-                    if let Some(entry) = retries.remove(game_address) {
-                        cancel_timer(entry.timer);
-                    }
+                    let timer = existing.timer.take();
+                    retries.remove(game_address);
+                    cancel_timer(timer);
                     log_db_error(self.db.clear_completion_retry_after(game_address), "Failed to clear retry-after");
                 } else {
                     // A fresh bot/event wake-up can consume a pending readiness
@@ -1470,7 +1469,9 @@ impl WebGameOracle for OracleService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::testing::{count_rows, exec_sql, harness, harness_with, Harness, MINT_A, MINT_B};
+    use crate::core::testing::{
+        count_rows, exec_sql, harness, harness_with, harness_with_prices, Harness, MINT_A, MINT_B,
+    };
     use crate::solana::rpc::RpcError;
 
     fn tracked_game(h: &Harness) -> String {
@@ -1623,6 +1624,52 @@ mod tests {
         h.service.close().await;
         assert_eq!(h.service.automatic_completion_stop_reason(&game, "x").as_deref(), Some("service shutting down"));
         assert_eq!(h.service.complete_game_now(&game).await, None);
+        // Closing again is harmless.
+        h.service.close().await;
+    }
+
+    #[test]
+    fn scans_outliving_the_service_skip_the_cleanup() {
+        cleanup_old_records_of(&Weak::new(), 24).unwrap();
+    }
+
+    /// Answers every price request with the same result, whatever it asked for.
+    struct CannedPrices(Result<HashMap<String, f64>, String>);
+
+    impl TokenPriceResolver for CannedPrices {
+        fn get_token_usd_prices<'a>(
+            &'a self,
+            _mints: &'a [String],
+            _allow_partial: bool,
+        ) -> BoxFuture<'a, anyhow::Result<HashMap<String, f64>>> {
+            futures::future::ready(self.0.clone().map_err(anyhow::Error::msg)).boxed()
+        }
+    }
+
+    fn priced_harness(prices: Result<HashMap<String, f64>, String>) -> Harness {
+        let h = harness_with_prices(
+            OracleConfig::for_tests(),
+            Keypair::generate(),
+            &["https://a"],
+            Arc::new(CannedPrices(prices)),
+        );
+        h.service.db.set_token_policy(MINT_A, true, 9).unwrap();
+        h
+    }
+
+    #[tokio::test]
+    async fn token_policies_need_a_price_for_their_mint() {
+        // A resolver that leaves the mint out counts as having no price.
+        let h = priced_harness(Ok(HashMap::new()));
+        let policy = h.service.db.get_token_policy(MINT_A).unwrap().unwrap();
+        let err = h.service.resolve_token_policy(&policy).await.unwrap_err();
+        assert_eq!(err.to_string(), format!("Token price is unavailable for {MINT_A}"));
+        let err = h.service.check_creation_policy(&Address::parse(MINT_A).unwrap(), 1).await.unwrap_err();
+        assert_eq!(err.code, RejectionCode::PolicyUnavailable);
+
+        let h = priced_harness(Err("Jupiter is down".into()));
+        let err = h.service.get_token_policies().await.unwrap_err();
+        assert_eq!(format!("{err:#}"), "Token prices are unavailable: Jupiter is down");
     }
 
     #[test]
@@ -2120,6 +2167,19 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis((COMPLETION_RECOVERY_COOLDOWN_MS + 60_000) as u64)).await;
         assert!(h.service.retries.lock().unwrap().is_empty(), "cooldown ended");
+    }
+
+    #[tokio::test]
+    async fn a_cooldown_can_start_without_an_earlier_retry() {
+        let h = harness();
+        let game = tracked_game(&h);
+        h.service.enter_completion_cooldown(&game, None, "manual", 4);
+        let next = retry_entry(&h, &game, |entry| {
+            assert_eq!(entry.phase, RetryPhase::Cooldown);
+            entry.next_eligible_at.unwrap()
+        });
+        assert_eq!(h.service.db.get_completion_attempt_state(&game).unwrap().completion_retry_after, Some(next));
+        h.service.clear_completion_retries();
     }
 
     #[tokio::test]

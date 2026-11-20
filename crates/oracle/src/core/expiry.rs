@@ -179,6 +179,22 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn a_timer_replaced_after_its_sleep_does_not_fire() {
+        let (timers, mut fired) = recorder();
+        let now = timba_common::time::now_secs();
+        timers.schedule("game", Address([1; 32]), now + 5);
+        // A replacement that lands after the sleep cannot abort it; the timer checks
+        // that it is still the scheduled one. Dropping a handle leaves its task running.
+        let stale = timers.timers.lock().unwrap().remove("game").unwrap();
+        let replacement = tokio::spawn(async {});
+        timers.timers.lock().unwrap().insert("game".into(), Timer { expires_at: now + 500, handle: replacement });
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        assert!(stale.handle.is_finished());
+        assert!(fired.try_recv().is_err());
+        assert_eq!(timers.scheduled("game"), Some(now + 500), "the stale timer leaves the replacement in place");
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn timers_without_a_callback_or_owner_do_nothing() {
         let timers = ExpiryTimers::new();
         timers.schedule("a", Address([1; 32]), 0);

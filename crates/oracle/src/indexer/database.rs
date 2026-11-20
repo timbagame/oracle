@@ -1089,7 +1089,7 @@ impl IndexerDatabase {
         self.with_conn(|conn| {
             // An aggregate without GROUP BY always yields exactly one row.
             let summary = query_one(conn, &summary_sql, params![player, player, player, player, player, player])?
-                .ok_or_else(|| anyhow!("Player summary query returned no row"))?;
+                .expect("an aggregate without GROUP BY yields one row");
             let tokens = query_all(
                 conn,
                 "SELECT l.token_mint, COUNT(*) games_played,
@@ -1281,6 +1281,28 @@ mod tests {
         db.close();
         assert!(!db.is_open());
         assert_eq!(kept_after_reopening(&path).as_deref(), Some("payload"));
+    }
+
+    #[test]
+    fn reports_rows_it_cannot_read() {
+        let db = memory();
+        let unreadable = |result: Result<String>| {
+            let message = result.unwrap_err().to_string();
+            assert!(message.contains("Invalid column type Blob"), "{message}");
+        };
+        let insert = |sql: &str| db.with_conn(|conn| Ok(conn.execute_batch(sql)?)).unwrap();
+        // SQLite keeps a blob in a TEXT column, so each query runs and its row read fails.
+        insert(
+            "INSERT INTO verification_jobs VALUES (x'ff', 0, 0);
+             INSERT INTO verified_games VALUES ('k', x'ff');
+             INSERT INTO games VALUES (x'ff', 'g', 'w', 1, 1, 1, 'm', 1, 1, 1);",
+        );
+        unreadable(db.next_verification_job().map(|job| format!("{job:?}")));
+        unreadable(db.get_verified_game("k").map(|payload| format!("{payload:?}")));
+        // Without a stored cursor, the newest game is the fallback, and it is unreadable too.
+        unreadable(db.get_cursor().map(|cursor| format!("{cursor:?}")));
+        insert(&format!("INSERT INTO indexer_state VALUES ('{PROGRAM_CURSOR}', x'ff', 1, 1);"));
+        unreadable(db.get_cursor().map(|cursor| format!("{cursor:?}")));
     }
 
     #[test]
