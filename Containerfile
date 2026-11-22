@@ -1,6 +1,6 @@
 # Keep this on the runtime image's Debian release (trixie is Debian 13): the binaries link
 # against its glibc.
-FROM docker.io/library/rust:1.99-trixie@sha256:8a4e90c7946b74626488b1446f712c0fe0ed1a596cbd3d871684bc9c5433ae07 AS build
+FROM docker.io/library/rust:1.100-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8 AS build
 
 WORKDIR /src
 
