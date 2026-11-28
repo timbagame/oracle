@@ -1,6 +1,6 @@
 # Keep this on the runtime image's Debian release (trixie is Debian 13): the binaries link
 # against its glibc.
-FROM docker.io/library/rust:1.100-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8 AS build
+FROM docker.io/library/rust:1.100-trixie@sha256:e84068000361bf3d4a5ba2b7647f62893528b1eb9f847d7a23b493f5ce8ea254 AS build
 
 WORKDIR /src
 
@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Distroless: glibc, libgcc, CA roots and tzdata only. No shell or package manager, so an
 # exploit gets no tools, and health checks must use the exec form.
-FROM gcr.io/distroless/cc-debian13@sha256:809d04afa1be033c441f76bb0051878c342fb76d0ea236bc6dc94b655fa0fbd6
+FROM gcr.io/distroless/cc-debian13@sha256:e8343d4a7da8bb210df0c3ea29de38bbadbba6c773bed0cd8bde506fca3a5c44
 
 # Relative defaults (oracle.sqlite, admin-keypair.json) resolve here.
 WORKDIR /app
